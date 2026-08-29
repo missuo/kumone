@@ -51,6 +51,16 @@ fi
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 cp -a "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
+# MLX's Metal kernels, for AutoMix stem transitions. MLX loads `mlx.metallib`
+# from beside the running binary, and a Command Line Tools-only build cannot
+# produce one — Scripts/fetch-mlx-metallib.sh installs it into .build. Copy it
+# in when it is there; without it the app simply never pre-renders stem
+# hand-overs (StemKit.ResidentStemSeparator.isRunnable says no).
+METALLIB="$(find "$ROOT/.build" -name 'mlx.metallib' -print -quit 2>/dev/null || true)"
+if [ -n "$METALLIB" ]; then
+  cp "$METALLIB" "$APP_BUNDLE/Contents/MacOS/mlx.metallib"
+fi
+
 # Localization tables → Bundle.main
 for lproj in "$ROOT"/Sources/Kumone/Resources/*.lproj; do
   [ -d "$lproj" ] && cp -R "$lproj" "$APP_BUNDLE/Contents/Resources/"

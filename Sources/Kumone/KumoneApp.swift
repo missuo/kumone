@@ -8,6 +8,7 @@ public struct KumoneApp: App {
     @StateObject private var account = AccountStore.shared
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var toasts = ToastCenter.shared
+    @Environment(\.openWindow) private var openWindow
 
     public init() {}
 
@@ -48,6 +49,9 @@ public struct KumoneApp: App {
 
                 Button("随机播放") { player.toggleShuffle() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("AutoMix 顺序") { player.toggleAutoMixOrder() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                    .disabled(!player.autoMixOrderAvailable)
                 Button("循环模式") { player.cycleRepeatMode() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
 
@@ -71,7 +75,27 @@ public struct KumoneApp: App {
                 }
                 .keyboardShortcut("u", modifiers: .command)
             }
+
+            // Developer tooling, shipped in every macOS build: the listening
+            // machine runs whatever `Scripts/build-app.sh` produced, and a panel
+            // that only exists in some configurations is one nobody reaches for.
+            // Inert until opened — see `AutoMixDebugModel`.
+            CommandMenu(AutoMixDebugPanel.menuTitle) {
+                Button {
+                    openWindow(id: AutoMixDebugPanel.windowID)
+                } label: {
+                    Text(verbatim: "AutoMix Debug")
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
         }
+
+        Window(AutoMixDebugPanel.windowTitle, id: AutoMixDebugPanel.windowID) {
+            AutoMixDebugPanel()
+                .preferredColorScheme(settings.appearance.colorScheme)
+        }
+        .defaultSize(width: 460, height: 620)
+        .windowResizability(.contentMinSize)
 
         Settings {
             SettingsView()

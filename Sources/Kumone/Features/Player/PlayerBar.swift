@@ -87,6 +87,19 @@ struct PlayerBar: View {
                         player.toggleShuffle()
                     }
                     .help("随机播放")
+                    // The third queue state, next to the one it is mutually
+                    // exclusive with. Hidden rather than disabled where it
+                    // could do nothing — it picks by planning, and planning
+                    // needs the analyses an AutoMix-off player never computes.
+                    if player.autoMixOrderAvailable {
+                        PlayerIconButton(
+                            icon: "wand.and.stars", size: 12,
+                            isActive: player.queueOrder == .autoMix
+                        ) {
+                            player.toggleAutoMixOrder()
+                        }
+                        .help("AutoMix 顺序")
+                    }
                 }
 
                 PlayerIconButton(icon: "backward.fill", size: 14, disabled: player.isFMMode) {

@@ -593,6 +593,18 @@ struct NowPlayingView: View {
                     player.toggleShuffle()
                 }
                 .frame(maxWidth: .infinity)
+                // The third queue state. `autoMixOrderAvailable` is false on
+                // iOS and with AutoMix off, so the row keeps its present
+                // width everywhere the mode could not do anything anyway.
+                if player.autoMixOrderAvailable {
+                    circleButton(
+                        icon: "wand.and.stars", size: 14,
+                        tint: player.queueOrder == .autoMix ? Theme.accent : nil
+                    ) {
+                        player.toggleAutoMixOrder()
+                    }
+                    .frame(maxWidth: .infinity)
+                }
                 circleButton(icon: "backward.fill", size: 16) {
                     player.previous()
                 }

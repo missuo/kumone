@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
     @State private var cacheSize: String = String(localized: "计算中…")
+    @State private var audioCacheSize: String = String(localized: "计算中…")
 
     var body: some View {
         Form {
@@ -20,6 +21,17 @@ struct SettingsView: View {
                 Text("无版权 / 下架歌曲自动从第三方音源（酷我、酷狗等）匹配播放")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                #if os(macOS)
+                Toggle("AutoMix 自动过渡", isOn: $settings.automixEnabled)
+                Text("歌曲之间自动衔接：节拍相近时对拍混音，否则平滑淡入淡出；关闭后仍保持无缝播放")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("统一歌曲响度", isOn: $settings.loudnessCompensationEnabled)
+                    .disabled(!settings.automixEnabled)
+                Text("按每首歌的母带响度调整播放增益，下一首不会突然变响；需要开启 AutoMix")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                #endif
             }
 
             Section("外观") {
@@ -53,6 +65,23 @@ struct SettingsView: View {
                 LabeledContent("图片缓存", value: cacheSize)
                 Button("清除缓存") {
                     clearCache()
+                }
+                LabeledContent("歌曲缓存", value: audioCacheSize)
+                Picker("歌曲缓存上限", selection: $settings.audioCacheLimit) {
+                    Text("512 MB").tag(Int64(512) << 20)
+                    Text("2 GB").tag(Int64(2) << 30)
+                    Text("8 GB").tag(Int64(8) << 30)
+                    Text("不限").tag(Int64(0))
+                }
+                .onChange(of: settings.audioCacheLimit) { _, _ in
+                    updateAudioCacheSize()
+                }
+                Button("清除歌曲缓存") {
+                    Task {
+                        await AudioCache.shared.removeAll()
+                        updateAudioCacheSize()
+                        ToastCenter.shared.show(String(localized: "歌曲缓存已清除"))
+                    }
                 }
             }
 
@@ -96,7 +125,17 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(width: 440, height: 480)
         #endif
-        .task { updateCacheSize() }
+        .task {
+            updateCacheSize()
+            updateAudioCacheSize()
+        }
+    }
+
+    private func updateAudioCacheSize() {
+        Task {
+            let bytes = await AudioCache.shared.totalUsageBytes()
+            audioCacheSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
     }
 
     private var appVersion: String {

@@ -35,6 +35,12 @@ final class DockMenu: NSObject, NSMenuDelegate {
                           action: #selector(toggleShuffle), enabled: true)
         shuffle.state = player.shuffleEnabled ? .on : .off
 
+        if player.autoMixOrderAvailable {
+            let autoMix = add(to: menu, title: String(localized: "AutoMix 顺序"),
+                              action: #selector(toggleAutoMixOrder), enabled: true)
+            autoMix.state = player.queueOrder == .autoMix ? .on : .off
+        }
+
         // Three-way repeat reads better as a submenu than as one checkmark.
         let repeatItem = NSMenuItem(title: String(localized: "循环模式"),
                                     action: nil, keyEquivalent: "")
@@ -82,6 +88,7 @@ final class DockMenu: NSObject, NSMenuDelegate {
     @objc private func next() { player.next() }
     @objc private func previous() { player.previous() }
     @objc private func toggleShuffle() { player.toggleShuffle() }
+    @objc private func toggleAutoMixOrder() { player.toggleAutoMixOrder() }
 
     @objc private func setRepeatMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,

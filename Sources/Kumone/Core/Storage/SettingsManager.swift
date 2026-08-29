@@ -88,6 +88,9 @@ final class SettingsManager: ObservableObject {
         static let unblock = "settings.enableUnblock"
         static let autoCheckUpdates = "settings.autoCheckUpdates"
         static let desktopLyrics = "settings.showDesktopLyrics"
+        static let automix = "settings.automixEnabled"
+        static let loudnessCompensation = "settings.loudnessCompensation"
+        static let audioCacheLimit = "settings.audioCacheLimit"
     }
 
     @Published var audioQuality: AudioQuality {
@@ -140,6 +143,31 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(showDesktopLyrics, forKey: Keys.desktopLyrics) }
     }
 
+    /// AutoMix transitions between queue tracks (crossfade / beat-matched).
+    /// Off still gives gapless playback. macOS-only for now (spec §7).
+    @Published var automixEnabled: Bool {
+        didSet { UserDefaults.standard.set(automixEnabled, forKey: Keys.automix) }
+    }
+
+    /// Even out mastering loudness differences between songs, so the next
+    /// track does not arrive several dB louder. Needs AutoMix's per-track
+    /// analysis, so it is inert while AutoMix is off.
+    @Published var loudnessCompensationEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(loudnessCompensationEnabled,
+                                      forKey: Keys.loudnessCompensation)
+        }
+    }
+
+    /// Audio cache LRU limit in bytes; 0 = unlimited. AudioCache reads the
+    /// same defaults key at startup and receives changes from here.
+    @Published var audioCacheLimit: Int64 {
+        didSet {
+            UserDefaults.standard.set(audioCacheLimit, forKey: Keys.audioCacheLimit)
+            Task { await AudioCache.shared.setLimitBytes(audioCacheLimit) }
+        }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
@@ -153,5 +181,9 @@ final class SettingsManager: ObservableObject {
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? true
         autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
+        automixEnabled = defaults.object(forKey: Keys.automix) as? Bool ?? true
+        loudnessCompensationEnabled =
+            defaults.object(forKey: Keys.loudnessCompensation) as? Bool ?? true
+        audioCacheLimit = (defaults.object(forKey: Keys.audioCacheLimit) as? Int64) ?? 2_147_483_648
     }
 }
