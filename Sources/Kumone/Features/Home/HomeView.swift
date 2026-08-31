@@ -298,6 +298,10 @@ struct HomeView: View {
             }
         }
         .buttonStyle(.plain)
+        // Prevent NavigationLink from stretching to the LazyHStack's full
+        // proposed row height (226 pt); let the card use its natural height
+        // so LazyHStack(alignment: .top) can pin all cards at the same top edge.
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func albumCard(_ album: AlbumSummary) -> some View {
@@ -467,7 +471,7 @@ struct CoverCardBody: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
-                .frame(maxWidth: flexibleWidth ? .infinity : size, alignment: .leading)
+                .frame(maxWidth: flexibleWidth ? .infinity : size, minHeight: 36, alignment: .topLeading)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.system(size: 11))

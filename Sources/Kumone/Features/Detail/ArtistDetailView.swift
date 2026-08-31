@@ -297,17 +297,18 @@ struct ArtistDetailView: View {
     }
 
     private var loadingHeader: some View {
-        HStack(spacing: 24) {
-            Circle()
-                .fill(.primary.opacity(0.05))
+        HStack(alignment: .center, spacing: isCompact ? 14 : 24) {
+            SkeletonView(cornerRadius: isCompact ? 50 : 90)
+                .clipShape(Circle())
                 .frame(width: isCompact ? 100 : 180, height: isCompact ? 100 : 180)
+
             VStack(alignment: .leading, spacing: 10) {
-                RoundedRectangle(cornerRadius: 6).fill(.primary.opacity(0.1)).frame(width: 160, height: 26)
-                RoundedRectangle(cornerRadius: 4).fill(.primary.opacity(0.06)).frame(width: 110, height: 14)
+                SkeletonView(cornerRadius: 4).frame(maxWidth: isCompact ? 150 : 180, minHeight: 14, maxHeight: 14)
+                SkeletonView(cornerRadius: 4).frame(width: 100, height: 14)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-        .padding(.top, 16)
+        .padding(.top, isCompact ? 12 : 16)
     }
 }

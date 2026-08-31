@@ -34,6 +34,33 @@ enum Theme {
         static let playerBarBottomMargin: CGFloat = 10
         /// Bottom inset pages need so scrolled content clears the floating bar.
         static var playerChromeClearance: CGFloat { playerBarHeight + playerBarBottomMargin }
+        /// Extra breathing margin for scrollable content clearing chrome.
+        static let scrollBreathingMargin: CGFloat = 8
+
+        #if os(iOS)
+        enum FloatingChrome {
+            /// Total height of GlassTabBar: 56pt content + 2 * 4pt inset.
+            static let tabBarHeight: CGFloat = 64
+            /// Total height of legacy mini player bar: 44pt button + 2 * 4pt vertical padding.
+            static let miniPlayerHeight: CGFloat = 52
+            /// Spacing between mini player and tab bar in customTabInterface.
+            static let barSpacing: CGFloat = 8
+            /// Bottom padding under the tab bar.
+            static let bottomMargin: CGFloat = 6
+            /// Breathing margin ensuring content clears above the floating bars.
+            static let extraPadding: CGFloat = 12
+
+            /// Clearance needed when only the tab bar is visible.
+            static var tabBarClearance: CGFloat {
+                tabBarHeight + bottomMargin + extraPadding
+            }
+
+            /// Clearance needed when both mini player and tab bar are visible.
+            static var fullChromeClearance: CGFloat {
+                miniPlayerHeight + barSpacing + tabBarHeight + bottomMargin + extraPadding
+            }
+        }
+        #endif
         static let minWindowWidth: CGFloat = 1020
         /// Width the split view's divider occupies between the two columns.
         static let splitDividerWidth: CGFloat = 8

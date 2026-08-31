@@ -41,6 +41,7 @@ struct CoverCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(.primary)
+                    .frame(maxWidth: size, minHeight: 36, alignment: .topLeading)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.system(size: 11))

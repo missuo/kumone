@@ -7,6 +7,14 @@ struct FMView: View {
     @Environment(\.openLogin) private var openLogin
     @Environment(\.colorScheme) private var colorScheme
 
+    private var isPhone: Bool {
+        #if os(iOS)
+        return UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         ZStack {
             backdrop
@@ -48,66 +56,83 @@ struct FMView: View {
     // MARK: - Content
 
     private var content: some View {
-        VStack(spacing: 28) {
-            Spacer()
+        GeometryReader { geo in
+            let maxDim: CGFloat = isPhone ? 240 : 300
+            let coverDimension = max(110, min(maxDim, min(geo.size.width - 48, geo.size.height * 0.38)))
+            let spacing: CGFloat = isPhone ? (geo.size.height < 520 ? 12 : 20) : 28
 
-            ZStack {
-                if let cover = track?.album.picUrl?.resizedImageURL(768) {
-                    CachedAsyncImage(url: cover)
-                        .frame(width: 300, height: 300)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
-                } else {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(.quaternary.opacity(0.4))
-                        .frame(width: 300, height: 300)
-                        .overlay(
-                            Image(systemName: "wave.3.right.circle")
-                                .font(.system(size: 56, weight: .light))
-                                .foregroundStyle(.tertiary)
-                        )
-                }
-            }
-            .scaleEffect(player.isPlaying && player.isFMMode ? 1 : 0.94)
-            .animation(AppAnimation.bouncy, value: player.isPlaying && player.isFMMode)
+            VStack(spacing: spacing) {
+                Spacer()
 
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(track?.name ?? String(localized: "私人漫游"))
-                        .font(.system(size: 22, weight: .bold))
-                        .lineLimit(1)
-                    if track?.fee == 1 {
-                        VIPBadge()
+                ZStack {
+                    if let cover = track?.album.picUrl?.resizedImageURL(768) {
+                        CachedAsyncImage(url: cover)
+                            .frame(width: coverDimension, height: coverDimension)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
+                    } else {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(.quaternary.opacity(0.4))
+                            .frame(width: coverDimension, height: coverDimension)
+                            .overlay(
+                                Image(systemName: "wave.3.right.circle")
+                                    .font(
+                                        .system(
+                                            size: max(32, coverDimension * 0.25),
+                                            weight: .light
+                                        )
+                                    )
+                                    .foregroundStyle(.tertiary)
+                            )
                     }
                 }
-                Text(track?.artistNames ?? String(localized: "根据你的口味漫游好音乐"))
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: 420)
+                .scaleEffect(player.isPlaying && player.isFMMode ? 1 : 0.94)
+                .animation(AppAnimation.bouncy, value: player.isPlaying && player.isFMMode)
 
-            if player.isFMMode {
-                controls
-            } else {
-                Button {
-                    player.startFM()
-                } label: {
-                    Label("开始漫游", systemImage: "wave.3.right")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 28)
-                        .padding(.vertical, 12)
-                        .background(Theme.accentGradient, in: Capsule())
-                        .shadow(color: Theme.accent.opacity(0.35), radius: 10, y: 3)
+                VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(track?.name ?? String(localized: "私人漫游"))
+                            .font(
+                                .system(
+                                    size: isPhone && geo.size.height < 520 ? 18 : 22,
+                                    weight: .bold
+                                )
+                            )
+                            .lineLimit(1)
+                        if track?.fee == 1 {
+                            VIPBadge()
+                        }
+                    }
+                    Text(track?.artistNames ?? String(localized: "根据你的口味漫游好音乐"))
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.pressable)
-            }
+                .frame(maxWidth: 420)
 
-            Spacer()
-            Spacer()
+                if player.isFMMode {
+                    controls
+                } else {
+                    Button {
+                        player.startFM()
+                    } label: {
+                        Label("开始漫游", systemImage: "wave.3.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 12)
+                            .background(Theme.accentGradient, in: Capsule())
+                            .shadow(color: Theme.accent.opacity(0.35), radius: 10, y: 3)
+                    }
+                    .buttonStyle(.pressable)
+                }
+
+                Spacer()
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 40)
         }
-        .padding(.horizontal, 40)
     }
 
     private var controls: some View {

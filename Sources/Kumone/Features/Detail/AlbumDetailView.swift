@@ -318,18 +318,18 @@ struct AlbumDetailView: View {
     }
 
     private var loadingHeader: some View {
-        HStack(spacing: 24) {
-            RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
-                .fill(.primary.opacity(0.05))
+        HStack(alignment: .top, spacing: isCompact ? 14 : 24) {
+            SkeletonView(cornerRadius: isCompact ? Theme.Radius.standard : Theme.Radius.large)
                 .frame(width: isCompact ? 120 : 200, height: isCompact ? 120 : 200)
+
             VStack(alignment: .leading, spacing: 10) {
-                RoundedRectangle(cornerRadius: 4).fill(.primary.opacity(0.08)).frame(width: 60, height: 14)
-                RoundedRectangle(cornerRadius: 6).fill(.primary.opacity(0.1)).frame(width: 180, height: 24)
-                RoundedRectangle(cornerRadius: 4).fill(.primary.opacity(0.06)).frame(width: 120, height: 14)
+                SkeletonView(cornerRadius: 4).frame(width: 80, height: 14)
+                SkeletonView(cornerRadius: 4).frame(maxWidth: isCompact ? 160 : 200, minHeight: 14, maxHeight: 14)
+                SkeletonView(cornerRadius: 4).frame(width: 120, height: 14)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-        .padding(.top, 16)
+        .padding(.top, isCompact ? 12 : 16)
     }
 }
