@@ -35,6 +35,7 @@ public struct IOSMainWindow: View {
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
             .environment(\.openLogin, { showLogin = true })
+            .environment(\.openDestination, openDestination)
             .task {
                 await account.bootstrap()
                 if settings.autoCheckUpdates {
@@ -151,7 +152,7 @@ public struct IOSMainWindow: View {
             usesSystemInteractiveDismissal: usesSystemInteractiveDismissal,
             dismissAnimation: dismissAnimation
         ) {
-            NowPlayingView()
+            NowPlayingView(onOpenDestination: openDestination)
                 .environmentObject(player)
                 .environmentObject(account)
                 .environmentObject(settings)
@@ -251,6 +252,11 @@ public struct IOSMainWindow: View {
         case .search: searchPath = NavigationPath()
         case .library: libraryPath = NavigationPath()
         }
+    }
+
+    private func openDestination(_ destination: Destination) {
+        player.showNowPlaying = false
+        binding(for: selectedTab).wrappedValue.append(destination)
     }
 
     @ViewBuilder

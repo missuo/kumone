@@ -82,6 +82,7 @@ struct MainWindow: View {
         #endif
         .playerChrome(detailWidth: detailWidth)
         .environment(\.openLogin, { showLogin = true })
+        .environment(\.openDestination, openDestination)
         #if os(macOS)
         .environmentObject(artworkStore)
         #endif
@@ -125,14 +126,14 @@ struct MainWindow: View {
         .overlay {
             if player.showNowPlaying {
                 #if os(macOS)
-                NowPlayingView()
+                NowPlayingView(onOpenDestination: openDestination)
                     .environmentObject(artworkStore)
                     // Resolve the slide at the page boundary, including artwork
                     // inserted asynchronously while the transition is running.
                     .geometryGroup()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 #else
-                NowPlayingView()
+                NowPlayingView(onOpenDestination: openDestination)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 #endif
             }
@@ -157,6 +158,11 @@ struct MainWindow: View {
         .onChange(of: selection) { _ in
             path = NavigationPath()
         }
+    }
+
+    private func openDestination(_ destination: Destination) {
+        player.showNowPlaying = false
+        path.append(destination)
     }
 
     @ViewBuilder

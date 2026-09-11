@@ -3,6 +3,8 @@ import SwiftUI
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
+    var onOpenDestination: (Destination) -> Void = { _ in }
+
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var account: AccountStore
@@ -94,6 +96,7 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(.dark)
+        .environment(\.openDestination, onOpenDestination)
         #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
@@ -654,6 +657,22 @@ struct NowPlayingView: View {
 
     private func artworkView(size: CGFloat) -> some View {
         Group {
+            if let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
+                Button {
+                    onOpenDestination(.album(album.id))
+                } label: {
+                    artworkSurface(size: size)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("打开专辑：\(album.name)")
+            } else {
+                artworkSurface(size: size)
+            }
+        }
+    }
+
+    private func artworkSurface(size: CGFloat) -> some View {
+        Group {
             if let artworkImage {
                 Image(platformImage: artworkImage)
                     .resizable()
@@ -686,10 +705,13 @@ struct NowPlayingView: View {
                     VIPBadge()
                 }
             }
-            Text("\(player.currentTrack?.artistNames ?? "") — \(player.currentTrack?.album.name ?? "")")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .system(size: 13.5),
+                    color: .white.opacity(0.65)
+                )
+            }
         }
         .frame(maxWidth: 400)
     }
@@ -1209,10 +1231,13 @@ private struct CompactTrackHeader: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
+                if let track = player.currentTrack {
+                    NowPlayingTrackDestinationLinks(
+                        track: track,
+                        font: .subheadline,
+                        color: .white.opacity(0.62)
+                    )
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(
@@ -1954,10 +1979,13 @@ private struct MinimalTrackInfoRow: View {
                     VIPBadge()
                 }
             }
-            Text(player.currentTrack?.artistNames ?? "")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(1)
+            if let track = player.currentTrack {
+                NowPlayingTrackDestinationLinks(
+                    track: track,
+                    font: .footnote,
+                    color: .white.opacity(0.62)
+                )
+            }
         }
         .multilineTextAlignment(textAlignment)
         .accessibilityElement(children: .contain)

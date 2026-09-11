@@ -31,6 +31,7 @@ struct TrackRow: View {
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
+    @Environment(\.openDestination) private var openDestination
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
@@ -85,22 +86,30 @@ struct TrackRow: View {
                         VIPBadge()
                     }
                 }
-                Text(track.artistNames)
-                    .font(isCompact ? .footnote : .system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                artistLinks
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if style == .full && !isCompact {
-                NavigationLink(value: Destination.album(track.album.id)) {
+                if track.album.id > 0, !track.album.name.isEmpty {
+                    Button {
+                        openDestination(.album(track.album.id))
+                    } label: {
+                        Text(track.album.name)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开专辑：\(track.album.name)")
+                    .frame(maxWidth: 220, alignment: .leading)
+                } else {
                     Text(track.album.name)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .frame(maxWidth: 220, alignment: .leading)
                 }
-                .buttonStyle(.plain)
-                .frame(maxWidth: 220, alignment: .leading)
             }
 
             if let reason = playability.reason {
@@ -151,6 +160,21 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artwork: some View {
+        if track.album.id > 0, !track.album.name.isEmpty {
+            Button {
+                openDestination(.album(track.album.id))
+            } label: {
+                artworkImage
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("打开专辑：\(track.album.name)")
+        } else {
+            artworkImage
+        }
+    }
+
+    @ViewBuilder
+    private var artworkImage: some View {
         if isCompact {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(160), animated: false)
                 .frame(width: compactArtworkSize, height: compactArtworkSize)
@@ -171,6 +195,35 @@ struct TrackRow: View {
             CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
                 .frame(width: 42, height: 42)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var artistLinks: some View {
+        let artists = track.artists.filter { $0.id > 0 && !$0.name.isEmpty }
+        if artists.isEmpty {
+            Text(track.artistNames)
+                .font(isCompact ? .footnote : .system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Array(artists.enumerated()), id: \.offset) { index, artist in
+                    if index > 0 {
+                        Text(" / ")
+                    }
+                    Button {
+                        openDestination(.artist(artist.id))
+                    } label: {
+                        Text(artist.name)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开歌手：\(artist.name)")
+                }
+            }
+            .font(isCompact ? .footnote : .system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
     }
 
