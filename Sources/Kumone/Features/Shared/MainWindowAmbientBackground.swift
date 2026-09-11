@@ -70,6 +70,7 @@ struct MainWindowAmbientConfiguration {
     let colors: ArtworkColors
     let mainColumnWidth: CGFloat
     let intensity: Double
+    let isDark: Bool
 }
 
 /// Owns the AppKit state required to extend the artwork tint through the main
@@ -81,7 +82,8 @@ final class MainWindowAmbientAppearanceController {
         showsTitlebarAmbientBackground: false,
         colors: .fallback,
         mainColumnWidth: 0,
-        intensity: 1
+        intensity: 1,
+        isDark: false
     )
     private var titlebarWasTransparent: Bool?
     private var hadFullSizeContentView = false
@@ -168,8 +170,8 @@ final class MainWindowAmbientAppearanceController {
         }
         mask.update(
             colors: configuration.colors,
-            appearance: window.effectiveAppearance,
-            intensity: configuration.intensity
+            intensity: configuration.intensity,
+            isDark: configuration.isDark
         )
     }
 }
@@ -177,8 +179,8 @@ final class MainWindowAmbientAppearanceController {
 private final class TitlebarMaskView: NSView {
     private let gradientLayer = CAGradientLayer()
     private var appliedColors: ArtworkColors?
-    private var appliedAppearanceName: NSAppearance.Name?
     private var appliedIntensity: Double?
+    private var appliedIsDark: Bool?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -196,21 +198,26 @@ private final class TitlebarMaskView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func update(colors: ArtworkColors, appearance: NSAppearance, intensity: Double) {
+    func update(colors: ArtworkColors, intensity: Double, isDark: Bool) {
         guard appliedColors != colors
-                || appliedAppearanceName != appearance.name
-                || appliedIntensity != intensity else {
+                || appliedIntensity != intensity
+                || appliedIsDark != isDark else {
             return
         }
         appliedColors = colors
-        appliedAppearanceName = appearance.name
         appliedIntensity = intensity
+        appliedIsDark = isDark
 
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         let opacity = CGFloat(
             MainWindowAmbientOpacity.gradient(isDark: isDark, intensity: intensity)
         )
-        let base = NSColor.windowBackgroundColor
+        let appearanceName: NSAppearance.Name = isDark ? .darkAqua : .aqua
+        var base = NSColor.windowBackgroundColor.usingColorSpace(.extendedSRGB)
+            ?? NSColor.windowBackgroundColor
+        NSAppearance(named: appearanceName)?.performAsCurrentDrawingAppearance {
+            base = NSColor.windowBackgroundColor.usingColorSpace(.extendedSRGB)
+                ?? NSColor.windowBackgroundColor
+        }
         let primary = blended(NSColor(colors.primary), over: base, opacity: opacity)
         let secondary = blended(NSColor(colors.secondary), over: base, opacity: opacity)
 
