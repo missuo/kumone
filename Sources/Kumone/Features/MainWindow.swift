@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MainWindow: View {
+    private let externalPath: Binding<[Destination]>?
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
 #endif
@@ -13,11 +14,30 @@ struct MainWindow: View {
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     #endif
     @State private var selection: SidebarItem = .home
-    @State private var path = NavigationPath()
+    @State private var localPath: [Destination] = []
     @State private var showLogin = false
     @State private var detailWidth: CGFloat = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var visibilityBeforeNowPlaying: NavigationSplitViewVisibility?
+
+    init(path: Binding<[Destination]>? = nil) {
+        externalPath = path
+    }
+
+    private var path: [Destination] {
+        get { externalPath?.wrappedValue ?? localPath }
+        nonmutating set {
+            if let externalPath {
+                externalPath.wrappedValue = newValue
+            } else {
+                localPath = newValue
+            }
+        }
+    }
+
+    private var pathBinding: Binding<[Destination]> {
+        externalPath ?? $localPath
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -82,6 +102,7 @@ struct MainWindow: View {
         #endif
         .playerChrome(detailWidth: detailWidth)
         .environment(\.openLogin, { showLogin = true })
+        .environment(\.openDestination, openDestination)
         #if os(macOS)
         .environmentObject(artworkStore)
         #endif
@@ -125,14 +146,14 @@ struct MainWindow: View {
         .overlay {
             if player.showNowPlaying {
                 #if os(macOS)
-                NowPlayingView()
+                NowPlayingView(onOpenDestination: openDestination)
                     .environmentObject(artworkStore)
                     // Resolve the slide at the page boundary, including artwork
                     // inserted asynchronously while the transition is running.
                     .geometryGroup()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 #else
-                NowPlayingView()
+                NowPlayingView(onOpenDestination: openDestination)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 #endif
             }
@@ -149,14 +170,32 @@ struct MainWindow: View {
     }
 
     private var detailStack: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: pathBinding) {
             rootView
                 .playerContentInset()
                 .appDestinations()
         }
         .onChange(of: selection) { _ in
-            path = NavigationPath()
+            path = []
         }
+    }
+
+    private func openDestination(_ destination: Destination) {
+        #if os(macOS)
+        guard player.showNowPlaying else {
+            path.appendIfNotCurrent(destination)
+            return
+        }
+
+        withAnimation(AppAnimation.smooth, completionCriteria: .removed) {
+            player.showNowPlaying = false
+        } completion: {
+            path.appendIfNotCurrent(destination)
+        }
+        #else
+        player.showNowPlaying = false
+        path.appendIfNotCurrent(destination)
+        #endif
     }
 
     @ViewBuilder
