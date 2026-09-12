@@ -323,13 +323,13 @@ struct TrackRow: View {
         #endif
         Divider()
         if track.album.id > 0 {
-            NavigationLink(value: Destination.album(track.album.id)) {
-                Text("查看专辑")
+            Button("查看专辑") {
+                openDestination(.album(track.album.id))
             }
         }
-        ForEach(track.artists.prefix(3)) { artist in
-            NavigationLink(value: Destination.artist(artist.id)) {
-                Text("查看歌手：\(artist.name)")
+        ForEach(track.artists.filter { $0.id > 0 && !$0.name.isEmpty }.prefix(3)) { artist in
+            Button("查看歌手：\(artist.name)") {
+                openDestination(.artist(artist.id))
             }
         }
         Divider()

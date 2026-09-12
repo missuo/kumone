@@ -81,6 +81,13 @@ enum Destination: Hashable {
     case search(String)
 }
 
+extension Array where Element == Destination {
+    mutating func appendIfNotCurrent(_ destination: Destination) {
+        guard last != destination else { return }
+        append(destination)
+    }
+}
+
 /// Registers all shared navigation destinations on a stack.
 struct DestinationsModifier: ViewModifier {
     func body(content: Content) -> some View {

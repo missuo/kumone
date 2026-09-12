@@ -3,7 +3,7 @@ import SwiftUI
 /// Immersive full-window now-playing page: artwork-tinted gradient backdrop,
 /// large artwork on the left, big synced lyrics on the right.
 struct NowPlayingView: View {
-    var onOpenDestination: (Destination) -> Void = { _ in }
+    let onOpenDestination: (Destination) -> Void
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
@@ -96,7 +96,6 @@ struct NowPlayingView: View {
         .ignoresSafeArea()
         #endif
         .preferredColorScheme(.dark)
-        .environment(\.openDestination, onOpenDestination)
         #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
@@ -275,7 +274,10 @@ struct NowPlayingView: View {
                 height: NowPlayingPresentationMetrics.immersiveHeaderTopInset
             )
 
-            CompactTrackHeader(showsExpandedArtwork: showsVinyl)
+            CompactTrackHeader(
+                showsExpandedArtwork: showsVinyl,
+                onOpenDestination: onOpenDestination
+            )
                 .padding(.bottom, 10)
             #else
             Spacer().frame(height: 30)
@@ -407,6 +409,7 @@ struct NowPlayingView: View {
 
             CompactTrackHeader(
                 showsExpandedArtwork: showsExpandedArtwork,
+                onOpenDestination: onOpenDestination,
                 onTapArtwork: collapseImmersiveArtwork
             )
             .padding(.bottom, 14)
@@ -557,7 +560,10 @@ struct NowPlayingView: View {
         return VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 Color.clear
-                MinimalTrackInfoRow(metadataOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    metadataOnly: true
+                )
                     .padding(.top, NowPlayingPresentationMetrics.immersiveHeaderTopInset)
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -604,11 +610,14 @@ struct NowPlayingView: View {
     private var minimalControls: some View {
         VStack(spacing: 22) {
             ZStack {
-                MinimalTrackInfoRow()
+                MinimalTrackInfoRow(onOpenDestination: onOpenDestination)
                     .opacity(showLyricsOnMobile ? 0 : 1)
                     .allowsHitTesting(!showLyricsOnMobile)
                     .accessibilityHidden(showLyricsOnMobile)
-                MinimalTrackInfoRow(actionsOnly: true)
+                MinimalTrackInfoRow(
+                    onOpenDestination: onOpenDestination,
+                    actionsOnly: true
+                )
                     .opacity(showLyricsOnMobile ? 1 : 0)
                     .allowsHitTesting(showLyricsOnMobile)
                     .accessibilityHidden(!showLyricsOnMobile)
@@ -709,7 +718,8 @@ struct NowPlayingView: View {
                 NowPlayingTrackDestinationLinks(
                     track: track,
                     font: .system(size: 13.5),
-                    color: .white.opacity(0.65)
+                    color: .white.opacity(0.65),
+                    onOpenDestination: onOpenDestination
                 )
             }
         }
@@ -1202,6 +1212,7 @@ private struct CompactTrackHeader: View {
     @State private var showAddToPlaylist = false
 
     let showsExpandedArtwork: Bool
+    let onOpenDestination: (Destination) -> Void
     /// Tap handler for the compact cover (used to collapse lyrics back to
     /// artwork). The real image floats above this placeholder with hit-testing
     /// disabled, so taps land here.
@@ -1235,7 +1246,8 @@ private struct CompactTrackHeader: View {
                     NowPlayingTrackDestinationLinks(
                         track: track,
                         font: .subheadline,
-                        color: .white.opacity(0.62)
+                        color: .white.opacity(0.62),
+                        onOpenDestination: onOpenDestination
                     )
                 }
             }
@@ -1930,6 +1942,7 @@ private struct MinimalTrackInfoRow: View {
     @EnvironmentObject private var account: AccountStore
     @State private var showAddToPlaylist = false
     @State private var airPlayRequest = 0
+    let onOpenDestination: (Destination) -> Void
     var metadataOnly = false
     var actionsOnly = false
 
@@ -1983,7 +1996,8 @@ private struct MinimalTrackInfoRow: View {
                 NowPlayingTrackDestinationLinks(
                     track: track,
                     font: .footnote,
-                    color: .white.opacity(0.62)
+                    color: .white.opacity(0.62),
+                    onOpenDestination: onOpenDestination
                 )
             }
         }

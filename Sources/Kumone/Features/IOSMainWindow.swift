@@ -18,11 +18,12 @@ public struct IOSMainWindow: View {
 
     @State private var selectedTab: IOSTab = .home
     @State private var showLogin = false
-    @State private var homePath = NavigationPath()
-    @State private var explorePath = NavigationPath()
-    @State private var fmPath = NavigationPath()
-    @State private var searchPath = NavigationPath()
-    @State private var libraryPath = NavigationPath()
+    @State private var homePath: [Destination] = []
+    @State private var explorePath: [Destination] = []
+    @State private var fmPath: [Destination] = []
+    @State private var searchPath: [Destination] = []
+    @State private var libraryPath: [Destination] = []
+    @State private var iPadPath: [Destination] = []
 
     public init() {}
 
@@ -136,7 +137,7 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private var appContent: some View {
         if UIDevice.current.userInterfaceIdiom == .pad {
-            MainWindow()
+            MainWindow(path: $iPadPath)
         } else {
             tabInterface
         }
@@ -246,17 +247,25 @@ public struct IOSMainWindow: View {
 
     private func popToRoot(_ tab: IOSTab) {
         switch tab {
-        case .home: homePath = NavigationPath()
-        case .explore: explorePath = NavigationPath()
-        case .fm: fmPath = NavigationPath()
-        case .search: searchPath = NavigationPath()
-        case .library: libraryPath = NavigationPath()
+        case .home: homePath = []
+        case .explore: explorePath = []
+        case .fm: fmPath = []
+        case .search: searchPath = []
+        case .library: libraryPath = []
         }
     }
 
     private func openDestination(_ destination: Destination) {
         player.showNowPlaying = false
-        binding(for: selectedTab).wrappedValue.append(destination)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            iPadPath.appendIfNotCurrent(destination)
+            return
+        }
+
+        let path = binding(for: selectedTab)
+        var destinations = path.wrappedValue
+        destinations.appendIfNotCurrent(destination)
+        path.wrappedValue = destinations
     }
 
     @ViewBuilder
@@ -280,7 +289,7 @@ public struct IOSMainWindow: View {
             .zIndex(selectedTab == tab ? 1 : 0)
     }
 
-    private func binding(for tab: IOSTab) -> Binding<NavigationPath> {
+    private func binding(for tab: IOSTab) -> Binding<[Destination]> {
         switch tab {
         case .home: return $homePath
         case .explore: return $explorePath

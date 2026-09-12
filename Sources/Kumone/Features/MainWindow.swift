@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MainWindow: View {
+    private let externalPath: Binding<[Destination]>?
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
 #endif
@@ -13,11 +14,30 @@ struct MainWindow: View {
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     #endif
     @State private var selection: SidebarItem = .home
-    @State private var path = NavigationPath()
+    @State private var localPath: [Destination] = []
     @State private var showLogin = false
     @State private var detailWidth: CGFloat = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var visibilityBeforeNowPlaying: NavigationSplitViewVisibility?
+
+    init(path: Binding<[Destination]>? = nil) {
+        externalPath = path
+    }
+
+    private var path: [Destination] {
+        get { externalPath?.wrappedValue ?? localPath }
+        nonmutating set {
+            if let externalPath {
+                externalPath.wrappedValue = newValue
+            } else {
+                localPath = newValue
+            }
+        }
+    }
+
+    private var pathBinding: Binding<[Destination]> {
+        externalPath ?? $localPath
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -150,19 +170,32 @@ struct MainWindow: View {
     }
 
     private var detailStack: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: pathBinding) {
             rootView
                 .playerContentInset()
                 .appDestinations()
         }
         .onChange(of: selection) { _ in
-            path = NavigationPath()
+            path = []
         }
     }
 
     private func openDestination(_ destination: Destination) {
+        #if os(macOS)
+        guard player.showNowPlaying else {
+            path.appendIfNotCurrent(destination)
+            return
+        }
+
+        withAnimation(AppAnimation.smooth, completionCriteria: .removed) {
+            player.showNowPlaying = false
+        } completion: {
+            path.appendIfNotCurrent(destination)
+        }
+        #else
         player.showNowPlaying = false
-        path.append(destination)
+        path.appendIfNotCurrent(destination)
+        #endif
     }
 
     @ViewBuilder
