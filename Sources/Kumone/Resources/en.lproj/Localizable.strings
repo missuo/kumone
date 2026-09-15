@@ -373,3 +373,8 @@
 "音乐缓存已清理，正在使用的音频已保留" = "Music cache cleared. Audio currently in use was kept.";
 "音乐缓存已清理" = "Music cache cleared";
 "缓存清理失败，请稍后重试" = "Could not clear the cache. Please try again.";
+"自动" = "Automatic";
+"不缓存" = "Off";
+"缓存上限" = "Cache Limit";
+"当前自动上限" = "Current Automatic Limit";
+"缓存完整的歌曲可离线播放。Wi-Fi 下补齐当前歌曲；蜂窝、低数据或低电量状态只随播放缓存。超限时自动清理，优先保留喜欢的歌曲；下载和播放中的文件会保留。关闭后已有缓存不会删除。" = "Fully cached songs play offline. The current song is completed on Wi-Fi; cellular, Low Data Mode and Low Power Mode save only playback data. Older caches are removed at the limit, keeping liked songs longer. Downloads and audio in use are protected. Turning caching off keeps existing files.";

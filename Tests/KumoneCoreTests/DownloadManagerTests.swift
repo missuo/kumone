@@ -101,6 +101,32 @@ private func waitForDownload(_ condition: () -> Bool) async throws {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func downloadingCurrentStreamSharesItsTransfer() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        let server = try await AudioFixtureServer(fixture: h.fixture, delay: 0.01)
+        defer { server.stop() }
+        let resource = h.fixture.resource(url: server.url)
+        let source = AudioTransferCoordinator(resource: resource, store: h.store, cacheContext: .init(policy: .automatic))
+        _ = try await source.read(at: 0, maximum: 1_024)
+        let manager = DownloadManager(store: h.store, metadata: h.metadata, persistence: h.persistence,
+            transport: h.transport, accountScope: "test-account", resolver: { _, _, _ in resource }, metadataFetcher: { _, _ in },
+            cacheCompletion: { requested, owner, allowsMetered in
+                #expect(requested.descriptor == resource.descriptor)
+                try await source.download(allowsMetered: allowsMetered)
+                try await h.store.retain(id: resource.descriptor.identity.id, owner: owner)
+                return resource.descriptor
+            })
+        defer { manager.shutdown() }
+        manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        await manager.enqueue(tracks: [h.track], owner: "single:1", name: nil, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { manager.jobs.first?.status == .complete }
+        #expect(h.transport.started.isEmpty)
+        #expect(await source.receivedByteCount == h.fixture.descriptor.byteCount)
+        #expect(try await h.store.record(id: resource.descriptor.identity.id)?.retainedBy.isEmpty == false)
+        await source.close()
+    }
+
     @Test func promotesCachedAudioWithoutNetwork() async throws {
         let h = try DownloadHarness(online: false)
         defer { h.close() }

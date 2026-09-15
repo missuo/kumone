@@ -13,7 +13,8 @@ final class DownloadManager: ObservableObject {
         let root = OfflineStore.shared.directory.appendingPathComponent("downloads", isDirectory: true)
         let manager = DownloadManager(store: .shared, metadata: .shared, persistence: DownloadCatalogStore(directory: root),
                                       transport: BackgroundDownloadTransport(inbox: root.appendingPathComponent("inbox")),
-                                      accountScope: AccountStore.shared.offlineScope)
+                                      accountScope: AccountStore.shared.offlineScope,
+                                      cacheCompletion: { try await PlaybackCacheController.shared.completeForDownload(resource: $0, owner: $1, allowsMetered: $2) })
         manager.monitorNetwork()
         Task { await manager.start() }
         return manager
@@ -21,6 +22,7 @@ final class DownloadManager: ObservableObject {
 
     typealias Resolver = (Track, String, String) async throws -> OfflineAudioResource
     typealias MetadataFetcher = (Track, String) async -> Void
+    typealias CacheCompletion = (OfflineAudioResource, String, Bool) async throws -> OfflineAudioDescriptor?
     @Published private(set) var jobs: [DownloadJob] = []
     @Published private(set) var collections: [DownloadCollection] = []
     @Published private(set) var offlineTracks: [OfflineLibraryTrack] = []
@@ -51,6 +53,7 @@ final class DownloadManager: ObservableObject {
     private let transport: any DownloadTransport
     private let resolver: Resolver
     private let metadataFetcher: MetadataFetcher
+    private let cacheCompletion: CacheCompletion
     private var catalog = DownloadCatalog()
     private var workers: [UUID: Task<Void, Never>] = [:]
     private var displayWorkers: [UUID: Task<Void, Never>] = [:]
@@ -63,13 +66,15 @@ final class DownloadManager: ObservableObject {
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
          resolver: @escaping Resolver = { try await NeteaseAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
-         metadataFetcher: MetadataFetcher? = nil) {
+         metadataFetcher: MetadataFetcher? = nil,
+         cacheCompletion: @escaping CacheCompletion = { _, _, _ in nil }) {
         self.store = store
         self.metadata = metadata
         self.persistence = persistence
         self.transport = transport
         self.accountScope = accountScope
         self.resolver = resolver
+        self.cacheCompletion = cacheCompletion
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
     }
 
@@ -272,11 +277,17 @@ final class DownloadManager: ObservableObject {
     func setNetwork(_ value: DownloadNetworkState) {
         network = value
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == accountScope && !catalog.jobs[i].owners.isEmpty {
+            if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .resolving {
+                workers.removeValue(forKey: catalog.jobs[i].id)?.cancel()
+                catalog.jobs[i].attempt = nil
+                catalog.jobs[i].status = .waitingNetwork
+            }
             if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .queued { catalog.jobs[i].status = .waitingNetwork }
             else if value.permits(catalog.jobs[i]), catalog.jobs[i].status == .waitingNetwork,
                     catalog.jobs[i].attempt == nil { catalog.jobs[i].status = .queued }
         }
         publish()
+        if isReady { Task { try? await persist() } }
         if isReady {
             for job in catalog.jobs where job.status == .complete && job.metadataPending { fetchMetadata(job) }
         }
@@ -342,6 +353,15 @@ final class DownloadManager: ObservableObject {
                 try await persist()
                 return
             }
+            if let local = try await cacheCompletion(resource, job.retentionOwner, catalog.jobs[i].allowsMetered) {
+                guard current(job) else {
+                    try? await store.removeRetention(id: local.identity.id, owner: job.retentionOwner)
+                    return
+                }
+                await complete(job: job, descriptor: local)
+                return
+            }
+            guard current(job) else { return }
             var resumeData = await persistence.resumeData(jobID: job.id)
             guard current(job) else { return }
             if catalog.jobs[i].descriptor != resource.descriptor { resumeData = nil }

@@ -9,9 +9,12 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
     private let queue = DispatchQueue(label: "im.missuo.Kumone.audio-resource-loader")
     private var requests: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var closed = false
+    private let onFailure: @Sendable () -> Void
+    private var reportedFailure = false
 
-    init(transfer: AudioTransferCoordinator) {
+    init(transfer: AudioTransferCoordinator, onFailure: @escaping @Sendable () -> Void = {}) {
         self.transfer = transfer
+        self.onFailure = onFailure
         let identity = transfer.resource.descriptor.identity
         // The identity is a hex digest, so URL construction cannot incorporate
         // arbitrary server paths or account text.
@@ -68,7 +71,7 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
         requests.removeValue(forKey: ObjectIdentifier(request))?.cancel()
     }
 
-    func close() async {
+    func close(closeTransfer: Bool = true) async {
         await withCheckedContinuation { continuation in
             queue.async {
                 self.closed = true
@@ -78,7 +81,7 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
             }
         }
         asset.cancelLoading()
-        await transfer.close()
+        if closeTransfer { await transfer.close() }
     }
 
     private func deliver(_ data: Data, to request: AVAssetResourceLoadingRequest) async -> Bool {
@@ -97,7 +100,13 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
     private func finish(_ request: AVAssetResourceLoadingRequest, error: Error?) {
         queue.async {
             guard self.requests.removeValue(forKey: ObjectIdentifier(request)) != nil, !request.isCancelled else { return }
-            if let error { request.finishLoading(with: error) } else { request.finishLoading() }
+            if let error {
+                request.finishLoading(with: error)
+                if !self.closed, !self.reportedFailure, !(error is CancellationError) {
+                    self.reportedFailure = true
+                    self.onFailure()
+                }
+            } else { request.finishLoading() }
         }
     }
 }

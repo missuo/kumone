@@ -59,6 +59,13 @@ actor OfflineMetadataStore {
         if let (url, data) = await cover { try? saveArtwork(data, url: url, scope: scope) }
     }
 
+    func fetchPlaybackArtwork(track: Track, scope: String) async {
+        guard let url = track.album.picUrl.flatMap(URL.init(string:)), artwork(url: url, scope: scope) == nil else { return }
+        if let (url, data) = await fetchArtwork(track: track), !Task.isCancelled {
+            try? saveArtwork(data, url: url, scope: scope)
+        }
+    }
+
     private func fetchArtwork(track: Track) async -> (URL, Data)? {
         guard let original = track.album.picUrl.flatMap(URL.init(string:)),
               let url = track.album.picUrl?.resizedImageURL(640),

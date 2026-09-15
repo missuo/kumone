@@ -169,6 +169,8 @@ final class PlayerService: ObservableObject {
 
     private let engine = AVPlayer()
     private var offlinePlaybackLease: OfflinePlaybackLease?
+    private var playbackCacheSession: PlaybackCacheSession?
+    private var cacheArtworkTask: Task<Void, Never>?
     private var stateScope: String?
     private var sessionID = UUID()
     private var persistenceRevision: UInt64 = 0
@@ -573,6 +575,10 @@ final class PlayerService: ObservableObject {
     private func startPlaying(_ track: Track, indexUnchanged: Bool = false, resumeAt: TimeInterval = 0) {
         scrobbleIfNeeded(completed: false)
         engine.replaceCurrentItem(with: nil)
+        playbackCacheSession = nil
+        cacheArtworkTask?.cancel()
+        PlaybackCacheController.shared.protect(trackID: track.id, scope: offlineAccountScope)
+        let cacheStopped = PlaybackCacheController.shared.stop()
         if let lease = offlinePlaybackLease {
             offlinePlaybackLease = nil
             Task { try? await OfflineStore.shared.release(lease) }
@@ -599,6 +605,8 @@ final class PlayerService: ObservableObject {
         persistState()
 
         Task {
+            await cacheStopped.value
+            guard generation == resolveGeneration else { return }
             await resolveAndLoad(track, generation: generation, resumeAt: resumeAt)
         }
         Task {
@@ -669,8 +677,76 @@ final class PlayerService: ObservableObject {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
 
+        if let data, let accountScope, SettingsManager.shared.musicCachePolicy != .disabled,
+           !DownloadManager.shared.pendingJobs.contains(where: { $0.accountScope == accountScope && $0.track.id == track.id }),
+           let resource = await Self.resolveCacheResource(data: data, track: track, scope: accountScope) {
+            guard generation == resolveGeneration, accountScope == offlineAccountScope else { return }
+            let session = await PlaybackCacheController.shared.begin(resource: resource, fallbackURL: url) { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.resolveGeneration == generation else { return }
+                    self.stopAutomaticCaching()
+                }
+            }
+            guard generation == resolveGeneration, accountScope == offlineAccountScope else {
+                await session?.close()
+                return
+            }
+            if let session {
+                playbackCacheSession = session
+                try? await OfflineMetadataStore.shared.save(track: track, scope: accountScope)
+                guard generation == resolveGeneration, accountScope == offlineAccountScope else { return }
+                cacheArtworkTask = Task { await OfflineMetadataStore.shared.fetchPlaybackArtwork(track: track, scope: accountScope) }
+                await loadPlaybackAsset(session.loader.asset, track: track, generation: generation,
+                                        resolvedDuration: resource.descriptor.duration, resumeAt: resumeAt)
+                if generation == resolveGeneration { PlaybackCacheController.shared.startCompletion(for: session) }
+                return
+            }
+        }
+
+        guard generation == resolveGeneration, accountScope == offlineAccountScope else { return }
+
         await loadPlaybackAsset(AVURLAsset(url: url), track: track, generation: generation,
                                 resolvedDuration: data.flatMap { $0.time > 0 ? Double($0.time) / 1000 : nil }, resumeAt: resumeAt)
+    }
+
+    private static func resolveCacheResource(data: SongURLData, track: Track, scope: String) async -> OfflineAudioResource? {
+        await withTaskGroup(of: OfflineAudioResource?.self) { group in
+            group.addTask { try? await PlaybackCacheResolver.resolve(data: data, track: track, scope: scope) }
+            group.addTask { try? await Task.sleep(for: .seconds(2)); return nil }
+            let resource = await group.next() ?? nil
+            group.cancelAll()
+            return resource
+        }
+    }
+
+    /// Cache failures and disabling caching preserve the current queue,
+    /// position and paused state while returning to the ordinary stream.
+    func stopAutomaticCaching() {
+        guard let session = playbackCacheSession, let track = currentTrack else { return }
+        let position = engine.currentItem == nil ? progress : livePlaybackTime
+        playbackCacheSession = nil
+        resolveGeneration += 1
+        let generation = resolveGeneration
+        engine.replaceCurrentItem(with: nil)
+        let stopped = PlaybackCacheController.shared.stop()
+        Task {
+            await stopped.value
+            guard generation == resolveGeneration else { return }
+            if let scope = offlineAccountScope,
+               let local = try? await OfflineStore.shared.acquire(accountScope: scope, trackID: track.id,
+                                                                  preferredQuality: SettingsManager.shared.audioQuality.rawValue) {
+                guard generation == resolveGeneration, scope == offlineAccountScope else {
+                    try? await OfflineStore.shared.release(local)
+                    return
+                }
+                await loadPlaybackAsset(AVURLAsset(url: local.url), track: track, generation: generation,
+                                        resolvedDuration: local.descriptor.duration, offlineLease: local, resumeAt: position)
+                return
+            }
+            guard generation == resolveGeneration else { return }
+            await loadPlaybackAsset(AVURLAsset(url: session.fallbackURL), track: track, generation: generation,
+                                    resolvedDuration: duration, resumeAt: position)
+        }
     }
 
     private func loadPlaybackAsset(_ asset: AVURLAsset, track: Track, generation: Int,
@@ -880,6 +956,7 @@ final class PlayerService: ObservableObject {
         repeatMode = RepeatMode(rawValue: state.repeatMode) ?? .off
         currentIndex = activeQueue.indices.contains(state.currentIndex) ? state.currentIndex : -1
         currentTrack = state.currentTrack
+        PlaybackCacheController.shared.protect(trackID: currentTrack?.id, scope: stateScope)
         progress = state.progress
         lastCheckpoint = progress
         isPlaying = false
@@ -906,6 +983,10 @@ final class PlayerService: ObservableObject {
         persistState()
         resolveGeneration += 1
         engine.replaceCurrentItem(with: nil)
+        playbackCacheSession = nil
+        cacheArtworkTask?.cancel()
+        PlaybackCacheController.shared.protect(trackID: nil, scope: nil)
+        PlaybackCacheController.shared.stop()
         if let lease = offlinePlaybackLease {
             offlinePlaybackLease = nil
             Task { try? await OfflineStore.shared.release(lease) }

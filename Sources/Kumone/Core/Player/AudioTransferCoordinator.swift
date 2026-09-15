@@ -2,43 +2,75 @@ import Foundation
 
 /// One coordinator owns one resource. All AVFoundation range consumers share
 /// its transfer; OfflineStore rejects a second concurrent writer for that asset.
-/// Download queues, background sessions and prefetch policies are later phases.
+/// Playback and current-track completion read from the same byte ranges.
 actor AudioTransferCoordinator {
     nonisolated let resource: OfflineAudioResource
     private let store: OfflineStore
     private let session: URLSession
     private let writer = UUID()
     private var started = false
+    private var preparation: Task<Void, Error>?
+    private let cacheContext: MusicCacheContext?
     private var closed = false
     private var active: Task<Void, Error>?
+    private var activeIsCompletion = false
+    private var completionAllowed = true
     private var failure: Error?
     private var etag: String?
     private var progressVersion = 0
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private(set) var receivedByteCount: Int64 = 0
 
-    init(resource: OfflineAudioResource, store: OfflineStore, session: URLSession = .shared) {
+    init(resource: OfflineAudioResource, store: OfflineStore, session: URLSession = .shared, cacheContext: MusicCacheContext? = nil) {
         self.resource = resource
         self.store = store
         self.session = session
+        self.cacheContext = cacheContext
+    }
+
+    func prepare() async throws {
+        guard !closed else { throw CancellationError() }
+        if started { return }
+        if preparation == nil {
+            preparation = Task { [store, resource, writer, cacheContext] in
+                if let cacheContext {
+                    try await store.beginCaching(resource.descriptor, writer: writer, context: cacheContext)
+                    try await store.protectPlaybackRead(id: resource.descriptor.identity.id, token: writer)
+                }
+                else { try await store.begin(resource.descriptor, writer: writer) }
+            }
+        }
+        try await preparation?.value
+        guard !closed else {
+            await store.releaseWriter(id: resource.descriptor.identity.id, writer: writer)
+            throw CancellationError()
+        }
+        started = true
+    }
+
+    func setCompletionAllowed(_ allowed: Bool) {
+        completionAllowed = allowed
+        if !allowed, activeIsCompletion { active?.cancel() }
+        wakeWaiters()
     }
 
     /// Returns a contiguous available prefix, never sparse/unreceived bytes.
-    func read(at offset: Int64, maximum: Int) async throws -> Data {
+    func read(at offset: Int64, maximum: Int, forCompletion: Bool = false, allowsMetered: Bool = true) async throws -> Data {
         try Task.checkCancellation()
         guard !closed, offset >= 0, offset < resource.descriptor.byteCount, maximum > 0 else {
             throw OfflineAudioError.unavailable
         }
-        if !started {
-            try await store.begin(resource.descriptor, writer: writer)
-            started = true
-        }
+        try await prepare()
         let maximum = min(maximum, 256 * 1024, Int(resource.descriptor.byteCount - offset))
         while true {
             try Task.checkCancellation()
             guard !closed else { throw CancellationError() }
+            if forCompletion, !completionAllowed { throw CancellationError() }
             let observedVersion = progressVersion
-            if let data = try await store.read(id: resource.descriptor.identity.id, at: offset, maximum: maximum) { return data }
+            if let data = try await store.read(id: resource.descriptor.identity.id, at: offset, maximum: maximum) {
+                guard !closed else { throw CancellationError() }
+                return data
+            }
             if progressVersion != observedVersion { continue }
             if let failure { throw failure }
             // Check again after the actor hop; close or another request may
@@ -46,20 +78,23 @@ actor AudioTransferCoordinator {
             guard !closed else { throw CancellationError() }
             if active == nil {
                 let record = try await store.record(id: resource.descriptor.identity.id)
+                guard !closed else { throw CancellationError() }
                 if progressVersion != observedVersion || active != nil { continue }
                 let nextReceivedOffset = record?.ranges.ranges.first(where: { $0.lowerBound > offset })?.lowerBound
                     ?? resource.descriptor.byteCount
                 let end = min(nextReceivedOffset, offset + 256 * 1024)
-                active = Task { try await self.fetch(offset..<end) }
+                let restrictedNetwork = forCompletion || !allowsMetered
+                activeIsCompletion = restrictedNetwork
+                active = Task { try await self.fetch(offset..<end, restrictedNetwork: restrictedNetwork) }
             }
             try await waitForProgress()
         }
     }
 
-    func download() async throws {
+    func download(forCompletion: Bool = false, allowsMetered: Bool = true) async throws {
         var offset: Int64 = 0
         while offset < resource.descriptor.byteCount {
-            offset += Int64(try await read(at: offset, maximum: 256 * 1024).count)
+            offset += Int64(try await read(at: offset, maximum: 256 * 1024, forCompletion: forCompletion, allowsMetered: allowsMetered).count)
         }
         if let active { try await active.value }
         if let failure { throw failure }
@@ -68,17 +103,27 @@ actor AudioTransferCoordinator {
 
     func close() async {
         closed = true
+        preparation?.cancel()
+        _ = try? await preparation?.value
         let task = active
         task?.cancel()
         wakeWaiters(error: CancellationError())
         // Release ownership only after the old task has stopped writing.
         _ = try? await task?.value
         await store.releaseWriter(id: resource.descriptor.identity.id, writer: writer)
+        try? await store.releasePlaybackRead(token: writer)
     }
 
-    private func fetch(_ range: Range<Int64>) async throws {
+    private func fetch(_ range: Range<Int64>, restrictedNetwork: Bool) async throws {
         do {
             var request = URLRequest(url: resource.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+            if restrictedNetwork {
+                // Additional completion is Wi-Fi-only. Playback-driven reads
+                // keep following the listener's ordinary streaming behavior.
+                request.allowsExpensiveNetworkAccess = false
+                request.allowsConstrainedNetworkAccess = false
+                request.allowsCellularAccess = false
+            }
             request.setValue("bytes=\(range.lowerBound)-\(range.upperBound - 1)", forHTTPHeaderField: "Range")
             request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             if let etag { request.setValue(etag, forHTTPHeaderField: "If-Range") }
@@ -110,8 +155,12 @@ actor AudioTransferCoordinator {
             active = nil
             wakeWaiters()
         } catch {
-            failure = error
             active = nil
+            if restrictedNetwork, Task.isCancelled, !completionAllowed, !closed {
+                wakeWaiters()
+                return
+            }
+            failure = error
             wakeWaiters(error: error)
             throw error
         }
