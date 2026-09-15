@@ -40,6 +40,13 @@
 "播放队列是空的" = "The queue is empty";
 "播放一些音乐吧" = "Play some music";
 "%lld 首" = "%lld songs";
+"睡眠定时" = "Sleep Timer";
+"睡眠定时（剩余 %@）" = "Sleep Timer (%@ remaining)";
+"睡眠定时（本曲结束）" = "Sleep Timer (End of Song)";
+"当前歌曲结束时停止" = "Stop at End of Current Song";
+"将在当前歌曲结束时停止" = "Stops at the end of the current song";
+"剩余 %@" = "%@ remaining";
+"取消睡眠定时" = "Cancel Sleep Timer";
 
 /* Home */
 "推荐歌单" = "Recommended Playlists";

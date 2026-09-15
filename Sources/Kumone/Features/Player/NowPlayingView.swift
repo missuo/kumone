@@ -1290,6 +1290,12 @@ private struct CompactTrackHeader: View {
 
                         Divider()
 
+                        #if os(iOS)
+                        SleepTimerMenu(player: player)
+
+                        Divider()
+                        #endif
+
                         Button {
                             Platform.copyToPasteboard(
                                 string: "https://music.163.com/#/song?id=\(track.id)"
@@ -2042,6 +2048,12 @@ private struct MinimalTrackInfoRow: View {
             }
 
             Divider()
+
+            #if os(iOS)
+            SleepTimerMenu(player: player)
+
+            Divider()
+            #endif
 
             Button {
                 Platform.copyToPasteboard(

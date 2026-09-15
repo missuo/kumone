@@ -53,6 +53,10 @@ public struct KumoneApp: App {
 
                 Divider()
 
+                SleepTimerMenu(player: player)
+
+                Divider()
+
                 Button(player.currentTrack.map { AccountStore.shared.isLiked($0.id) ? String(localized: "取消喜欢") : String(localized: "喜欢") } ?? String(localized: "喜欢")) {
                     if let track = player.currentTrack {
                         Task { await account.toggleLike(trackID: track.id) }
