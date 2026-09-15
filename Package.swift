@@ -42,7 +42,8 @@ let package = Package(
         .testTarget(
             name: "KumoneCoreTests",
             dependencies: ["KumoneCore"],
-            path: "Tests/KumoneCoreTests"
+            path: "Tests/KumoneCoreTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

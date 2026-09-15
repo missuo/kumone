@@ -165,6 +165,7 @@ final class PlayerService: ObservableObject {
     // MARK: - Engine
 
     private let engine = AVPlayer()
+    private var offlinePlaybackLease: OfflinePlaybackLease?
 
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
@@ -585,6 +586,23 @@ final class PlayerService: ObservableObject {
 
     private func resolveAndLoad(_ track: Track, generation: Int) async {
         let quality = SettingsManager.shared.audioQuality.rawValue
+        // A logged-in account with no resolved profile has an unknown scope.
+        // Never expose another account's downloads (cold-start account snapshots
+        // are introduced with the offline library in phase two).
+        let accountScope = offlineAccountScope
+        if let accountScope,
+           let local = try? await OfflineStore.shared.acquire(accountScope: accountScope, trackID: track.id, preferredQuality: quality) {
+            guard generation == resolveGeneration, accountScope == offlineAccountScope else {
+                try? await OfflineStore.shared.release(local)
+                return
+            }
+            consecutiveFailures = 0
+            servedQuality = local.descriptor.identity.quality
+            await loadPlaybackAsset(AVURLAsset(url: local.url), track: track, generation: generation,
+                                    resolvedDuration: local.descriptor.duration, offlineLease: local)
+            return
+        }
+        guard generation == resolveGeneration else { return }
         var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
         if data?.url == nil, quality != AudioQuality.standard.rawValue {
             data = try? await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
@@ -629,14 +647,23 @@ final class PlayerService: ObservableObject {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
 
+        await loadPlaybackAsset(AVURLAsset(url: url), track: track, generation: generation,
+                                resolvedDuration: data.flatMap { $0.time > 0 ? Double($0.time) / 1000 : nil })
+    }
+
+    private func loadPlaybackAsset(_ asset: AVURLAsset, track: Track, generation: Int,
+                                   resolvedDuration: TimeInterval?, offlineLease: OfflinePlaybackLease? = nil) async {
         // Resolve the asset's audio track before the item goes live: an audio mix
         // attached after playback starts is silently ignored, so the spectrum tap
         // has to be spliced in here or not at all. Sources that refuse byte-range
         // requests never resolve a track — those play untapped and the UI falls
         // back to its decorative animation.
-        let asset = AVURLAsset(url: url)
         let assetTrack = await loadAudioTrack(from: asset, timeout: 2)
-        guard generation == resolveGeneration else { return }
+        guard generation == resolveGeneration,
+              offlineLease == nil || offlineLease?.descriptor.identity.accountScope == offlineAccountScope else {
+            if let offlineLease { try? await OfflineStore.shared.release(offlineLease) }
+            return
+        }
 
         let item = AVPlayerItem(asset: asset)
         if let assetTrack, let mix = AudioSpectrum.shared.makeAudioMix(for: assetTrack) {
@@ -655,7 +682,12 @@ final class PlayerService: ObservableObject {
                 self?.handleItemEnded()
             }
         }
+        let previousLease = offlinePlaybackLease
+        offlinePlaybackLease = offlineLease
         engine.replaceCurrentItem(with: item)
+        if let previousLease {
+            Task { try? await OfflineStore.shared.release(previousLease) }
+        }
         engine.play()
         isPlaying = true
 
@@ -666,10 +698,15 @@ final class PlayerService: ObservableObject {
             Task.detached { await NeteaseAPI.scrobbleStart(trackID: tid, sourceID: sid) }
         }
 
-        if let time = data?.time, time > 0 {
-            duration = TimeInterval(time) / 1000
+        if let resolvedDuration, resolvedDuration > 0 {
+            duration = resolvedDuration
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
+    }
+
+    private var offlineAccountScope: String? {
+        guard NeteaseClient.shared.isLoggedIn else { return "guest" }
+        return AccountStore.shared.profile.map { "netease:\($0.userId)" }
     }
 
     /// Resolves the asset's audio track, giving up after `timeout` so a slow or

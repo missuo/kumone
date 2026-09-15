@@ -304,9 +304,11 @@ struct SongURLData: Decodable, Hashable {
     let fee: Int
     let freeTrialInfo: FreeTrialInfo?
     let time: Int
+    let code: Int?
+    let md5: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, br, size, type, level, fee, freeTrialInfo, time
+        case id, url, br, size, type, level, fee, freeTrialInfo, time, code, md5
     }
 
     init(from decoder: Decoder) throws {
@@ -320,6 +322,8 @@ struct SongURLData: Decodable, Hashable {
         fee = (try? c.decode(Int.self, forKey: .fee)) ?? 0
         freeTrialInfo = try? c.decode(FreeTrialInfo.self, forKey: .freeTrialInfo)
         time = (try? c.decode(Int.self, forKey: .time)) ?? 0
+        code = try? c.decode(Int.self, forKey: .code)
+        md5 = try? c.decode(String.self, forKey: .md5)
     }
 }
 

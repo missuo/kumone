@@ -31,14 +31,14 @@ final class NeteaseClient: @unchecked Sendable {
     private var cookies: [String: String] = [:]
     private let cookieFileURL: URL
 
-    private init() {
+    init(cookieDirectory: URL? = nil) {
         let config = URLSessionConfiguration.default
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 15
         session = URLSession(configuration: config)
 
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let support = cookieDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Kumone", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         cookieFileURL = support.appendingPathComponent("cookies.json")
