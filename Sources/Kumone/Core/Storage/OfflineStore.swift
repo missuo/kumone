@@ -85,6 +85,30 @@ actor OfflineStore {
 
     func record(id: String) throws -> OfflineAudioRecord? { try preparedDatabase().record(id: id) }
 
+    func storageFiles() throws -> [AudioStorageFile] {
+        try preparedDatabase().allRecords().flatMap { record in
+            let inUse = writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id)
+            return [audioURL(record), stagingURL(record)].map { url in
+                AudioStorageFile(url: url, assetID: record.id, accountScope: record.descriptor.identity.accountScope,
+                    trackID: record.descriptor.identity.trackID, retained: !record.retainedBy.isEmpty,
+                    complete: record.state == .complete, inUse: inUse)
+            }
+        }
+    }
+
+    func clearMusicCache(excluding downloadAssetIDs: Set<String> = []) throws -> MusicCacheClearResult {
+        var result = MusicCacheClearResult()
+        for record in try preparedDatabase().allRecords() where record.retainedBy.isEmpty && !downloadAssetIDs.contains(record.id) {
+            if writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id) {
+                result.inUse += 1
+                continue
+            }
+            do { try remove(id: record.id); result.removed += 1 }
+            catch { result.failed += 1 }
+        }
+        return result
+    }
+
     func reserveDownload(token: String, bytes: Int64) throws {
         _ = try preparedDatabase()
         let values = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
@@ -106,14 +130,17 @@ actor OfflineStore {
             .compactMap { try availableRecord($0, database: db) }
     }
 
-    func reusableDescriptor(accountScope: String, trackID: Int, quality: String) throws -> OfflineAudioDescriptor? {
+    func reusableDescriptor(accountScope: String, trackID: Int, quality: String, retainingFor owner: String? = nil) throws -> OfflineAudioDescriptor? {
         let db = try preparedDatabase()
         let rank = ["standard", "higher", "exhigh", "lossless", "hires"]
         guard let requested = rank.firstIndex(of: quality) else { return nil }
         for record in try db.records(scope: accountScope, trackID: trackID) where record.state == .complete {
             guard record.descriptor.identity.source == "netease",
                   (rank.firstIndex(of: record.descriptor.identity.quality) ?? -1) >= requested else { continue }
-            if let available = try availableRecord(record, database: db) { return available.descriptor }
+            if var available = try availableRecord(record, database: db) {
+                if let owner { available.retainedBy.insert(owner); try db.save(available) }
+                return available.descriptor
+            }
         }
         return nil
     }

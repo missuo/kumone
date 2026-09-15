@@ -15,41 +15,7 @@ struct DownloadedMusicView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 10) {
-                    Text("已下载 \(tracks.count) 首")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        openDestination(.downloadTasks)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.down.circle")
-                            Text("下载任务")
-                            if pendingCount > 0 { Text("\(pendingCount)").monospacedDigit() }
-                        }
-                        .font(.system(size: 12.5, weight: .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(.primary.opacity(0.06), in: Capsule())
-                    }
-                    .buttonStyle(.pressable)
-
-                    Button {
-                        player.play(tracks: tracks, source: .none)
-                    } label: {
-                        Label("播放全部", systemImage: "play.fill")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(Theme.accentGradient, in: Capsule())
-                    }
-                    .buttonStyle(.pressable)
-                    .disabled(tracks.isEmpty)
-                }
-                .padding(.horizontal, Theme.Layout.contentInset)
-                .padding(.top, 12)
+                header
 
                 if !downloads.isReady, downloads.errorMessage == nil {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
@@ -69,6 +35,81 @@ struct DownloadedMusicView: View {
         }
         .navigationTitle(collection?.name ?? String(localized: "已下载"))
         .task { await downloads.start(); await downloads.refreshLibrary() }
+    }
+
+    private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                songCount
+                Spacer(minLength: 12)
+                actionRow
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                songCount
+                ViewThatFits(in: .horizontal) {
+                    actionRow
+                    VStack(alignment: .leading, spacing: 8) {
+                        downloadQueueButton
+                        playAllButton
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, Theme.Layout.contentInset)
+        .padding(.top, 12)
+    }
+
+    private var songCount: some View {
+        Text("已下载 \(tracks.count) 首")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 10) {
+            downloadQueueButton
+            playAllButton
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var downloadQueueButton: some View {
+        Button {
+            openDestination(.downloadTasks)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.circle")
+                Text("下载任务")
+                if pendingCount > 0 { Text("\(pendingCount)").monospacedDigit() }
+            }
+            .font(.system(size: 12.5, weight: .medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(.primary.opacity(0.06), in: Capsule())
+        }
+        .buttonStyle(.pressable)
+    }
+
+    private var playAllButton: some View {
+        Button {
+            player.play(tracks: tracks, source: .none)
+        } label: {
+            Label("播放全部", systemImage: "play.fill")
+                .font(.system(size: 12.5, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(Theme.accentGradient, in: Capsule())
+        }
+        .buttonStyle(.pressable)
+        .disabled(tracks.isEmpty)
     }
 }
 

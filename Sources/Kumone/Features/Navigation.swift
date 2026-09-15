@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let showDownloadedMusic = Notification.Name("Kumone.showDownloadedMusic")
+}
+
 private struct OpenLoginKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }

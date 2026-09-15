@@ -52,6 +52,7 @@ mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 cp -a "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
 
 # Localization tables → Bundle.main
+cp "$ROOT/Sources/Kumone/Resources/PrivacyInfo.xcprivacy" "$APP_BUNDLE/Contents/Resources/"
 for lproj in "$ROOT"/Sources/Kumone/Resources/*.lproj; do
   [ -d "$lproj" ] && cp -R "$lproj" "$APP_BUNDLE/Contents/Resources/"
 done

@@ -32,6 +32,10 @@ final class DownloadManager: ObservableObject {
         jobs.filter { !$0.owners.isEmpty && $0.status != .complete && $0.status != .cancelled }
     }
 
+    var storageAssetIDs: Set<String> {
+        Set(catalog.jobs.filter { !$0.owners.isEmpty }.flatMap { [$0.assetID, $0.descriptor?.identity.id].compactMap { $0 } })
+    }
+
     func downloadedSongs(in collectionID: String? = nil) -> [Track] {
         guard let collectionID else { return downloadedTracks.map(\.track) }
         guard let collection = collections.first(where: { $0.id == collectionID }) else { return [] }
@@ -312,7 +316,12 @@ final class DownloadManager: ObservableObject {
         do {
             try await persist()
             try await metadata.save(track: job.track, scope: job.accountScope)
-            if let local = try await store.reusableDescriptor(accountScope: job.accountScope, trackID: job.track.id, quality: job.quality) {
+            if let local = try await store.reusableDescriptor(accountScope: job.accountScope, trackID: job.track.id, quality: job.quality,
+                                                              retainingFor: job.retentionOwner) {
+                guard current(job) else {
+                    try? await store.removeRetention(id: local.identity.id, owner: job.retentionOwner)
+                    return
+                }
                 await complete(job: job, descriptor: local)
                 return
             }

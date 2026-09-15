@@ -105,6 +105,11 @@ struct MainWindow: View {
         .playerChrome(detailWidth: detailWidth)
         .environment(\.openLogin, { showLogin = true })
         .environment(\.openDestination, openDestination)
+        .onReceive(NotificationCenter.default.publisher(for: .showDownloadedMusic)) { _ in
+            player.showNowPlaying = false
+            selection = .downloaded
+            path = []
+        }
         #if os(macOS)
         .environmentObject(artworkStore)
         #endif

@@ -7,14 +7,29 @@ actor ImageCache {
     static let shared = ImageCache()
 
     private nonisolated(unsafe) let memory = NSCache<NSString, PlatformImage>()
-    private let diskURL: URL
-    private var inflight: [String: Task<PlatformImage?, Never>] = [:]
+    nonisolated let directory: URL
+    private let session: URLSession
+    private let offlineArtwork: @Sendable (URL) async -> Data?
+    private var generation: UInt64 = 0
+    private struct Request {
+        let generation: UInt64
+        let task: Task<PlatformImage?, Never>
+    }
+    private var inflight: [String: Request] = [:]
 
-    private init() {
+    init(directory: URL = KumonePaths.imageCache, session: URLSession = .shared,
+         offlineArtwork: @escaping @Sendable (URL) async -> Data? = { await ImageCache.loadOfflineArtwork(for: $0) }) {
+        self.directory = directory
+        self.session = session
+        self.offlineArtwork = offlineArtwork
         memory.countLimit = 300
         memory.totalCostLimit = 64 * 1024 * 1024
-        diskURL = KumonePaths.imageCache
-        try? FileManager.default.createDirectory(at: diskURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    private static func loadOfflineArtwork(for url: URL) async -> Data? {
+        guard let scope = await MainActor.run(body: { AccountStore.shared.offlineScope }) else { return nil }
+        return await OfflineMetadataStore.shared.artwork(url: url, scope: scope)
     }
 
     func image(for url: URL) async -> PlatformImage? {
@@ -23,32 +38,45 @@ actor ImageCache {
             return cached
         }
         if let existing = inflight[key] {
-            return await existing.value
+            return await existing.task.value
         }
-        let task = Task<PlatformImage?, Never> { [diskURL] in
-            let fileURL = diskURL.appendingPathComponent(key)
+        let requestGeneration = generation
+        let task = Task<PlatformImage?, Never> { [self] in
+            let fileURL = directory.appendingPathComponent(key)
             if let data = try? Data(contentsOf: fileURL), let image = PlatformImage(data: data) {
                 return image
             }
-            if let scope = await MainActor.run(body: { AccountStore.shared.offlineScope }),
-               let data = await OfflineMetadataStore.shared.artwork(url: url, scope: scope),
+            if let data = await offlineArtwork(url),
                let image = PlatformImage(data: data) { return image }
-            guard let (data, response) = try? await URLSession.shared.data(from: url),
+            guard let (data, response) = try? await session.data(from: url),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
                   let image = PlatformImage(data: data) else { return nil }
-            try? data.write(to: fileURL, options: .atomic)
+            if generation == requestGeneration { try? data.write(to: fileURL, options: .atomic) }
             return image
         }
-        inflight[key] = task
+        inflight[key] = Request(generation: requestGeneration, task: task)
         let result = await task.value
-        inflight[key] = nil
-        if let result {
+        if inflight[key]?.generation == requestGeneration { inflight[key] = nil }
+        if generation == requestGeneration, let result {
             let width = result.size.width
             let height = result.size.height
             memory.setObject(result, forKey: key as NSString,
                              cost: Int(width * height * 4))
         }
         return result
+    }
+
+    /// Existing views may finish loading their image, but requests started
+    /// before the clear cannot refill either disk or memory caches afterwards.
+    func clear() throws {
+        generation += 1
+        memory.removeAllObjects()
+        if FileManager.default.fileExists(atPath: directory.path) {
+            let info = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard info.isDirectory == true, info.isSymbolicLink != true else { throw OfflineAudioError.invalidResource }
+            try FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     /// Synchronous in-memory lookup — safe off the actor (`NSCache` is

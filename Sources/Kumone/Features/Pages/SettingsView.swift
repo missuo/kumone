@@ -3,9 +3,20 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
-    @State private var cacheSize: String = String(localized: "计算中…")
+    @Environment(\.openDestination) private var openDestination
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        #if os(macOS)
+        NavigationStack { settingsForm }
+            .background(SettingsWindowToolbar())
+            .frame(width: 520, height: 620)
+        #else
+        settingsForm
+        #endif
+    }
+
+    private var settingsForm: some View {
         Form {
             Section("播放") {
                 Picker("音质", selection: $settings.audioQuality) {
@@ -78,9 +89,15 @@ struct SettingsView: View {
             }
 
             Section("存储") {
-                LabeledContent("图片缓存", value: cacheSize)
-                Button("清除缓存") {
-                    clearCache()
+                NavigationLink {
+                    StorageSpaceView {
+                        #if os(iOS)
+                        dismiss()
+                        #endif
+                        openDestination(.downloaded)
+                    }
+                } label: {
+                    Label("存储空间", systemImage: "internaldrive")
                 }
             }
 
@@ -121,46 +138,37 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        #if os(macOS)
-        .frame(width: 440, height: 480)
-        #endif
-        .task { updateCacheSize() }
     }
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
-    private var cacheDirectory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("im.missuo.Kumone/images", isDirectory: true)
+}
+
+#if os(macOS)
+/// A Settings scene keeps its preference-style toolbar even when given a
+/// scene-level windowToolbarStyle. Configure this window through AppKit so
+/// navigation shares the title bar instead of becoming a centered second row.
+struct SettingsWindowToolbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> ToolbarHost { ToolbarHost() }
+
+    func updateNSView(_ nsView: ToolbarHost, context: Context) {
+        nsView.updateToolbar()
     }
 
-    private func updateCacheSize() {
-        let dir = cacheDirectory
-        DispatchQueue.global(qos: .utility).async {
-            let files = (try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.fileSizeKey]
-            )) ?? []
-            let bytes = files.reduce(0) { sum, url in
-                sum + ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-            }
-            let formatted = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
-            DispatchQueue.main.async {
-                cacheSize = formatted
-            }
+    final class ToolbarHost: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateToolbar()
         }
-    }
 
-    private func clearCache() {
-        let dir = cacheDirectory
-        DispatchQueue.global(qos: .utility).async {
-            try? FileManager.default.removeItem(at: dir)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            DispatchQueue.main.async {
-                cacheSize = String(localized: "0 字节")
-                ToastCenter.shared.show(String(localized: "缓存已清除"))
+        func updateToolbar() {
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window, window.toolbarStyle != .unifiedCompact else { return }
+                window.toolbarStyle = .unifiedCompact
             }
         }
     }
 }
+#endif
