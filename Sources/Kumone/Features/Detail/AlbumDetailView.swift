@@ -10,6 +10,7 @@ struct AlbumDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var showFullDescription = false
+    @ObservedObject private var downloads = DownloadManager.shared
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -24,6 +25,15 @@ struct AlbumDetailView: View {
     }
 
     var body: some View {
+        Group {
+            if downloads.collections.contains(where: { $0.id == "album:\(albumID)" }),
+               !downloads.network.connected || errorMessage != nil {
+                DownloadedMusicView(collectionID: "album:\(albumID)")
+            } else { onlineContent }
+        }
+    }
+
+    private var onlineContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
                 if let album {
@@ -177,6 +187,7 @@ struct AlbumDetailView: View {
 
             // Compact Action Bar
             HStack(spacing: 10) {
+                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
                 Button {
                     player.play(tracks: tracks, source: .album(albumID),
                                 context: .album(id: albumID, name: album.name))
@@ -266,6 +277,7 @@ struct AlbumDetailView: View {
                 Spacer(minLength: 4)
 
                 HStack(spacing: 10) {
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name)
                     Button {
                         player.play(tracks: tracks, source: .album(albumID),
                                 context: .album(id: albumID, name: album.name))

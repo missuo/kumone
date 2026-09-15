@@ -154,4 +154,13 @@ final class NowPlayingManager {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
     }
+
+    func clear() {
+        artworkTask?.cancel()
+        artworkTask = nil
+        info = [:]
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        MPRemoteCommandCenter.shared().likeCommand.isActive = false
+    }
 }

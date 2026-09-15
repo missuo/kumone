@@ -78,6 +78,7 @@ struct PlaylistDetailView: View {
     var recommendationContext: RecommendationContext?
 
     @StateObject private var model: PlaylistDetailViewModel
+    @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -103,6 +104,15 @@ struct PlaylistDetailView: View {
     }
 
     var body: some View {
+        Group {
+            if downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }),
+               !downloads.network.connected || model.errorMessage != nil {
+                DownloadedMusicView(collectionID: "playlist:\(playlistID)")
+            } else { onlineContent }
+        }
+    }
+
+    private var onlineContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
                 if let detail = model.detail {
@@ -227,6 +237,7 @@ struct PlaylistDetailView: View {
 
             // Compact Action Bar
             HStack(spacing: 10) {
+                downloadButton(detail, compact: true)
                 Button {
                     player.play(tracks: playable, source: .playlist(playlistID),
                                 context: model.detail.map { .playlist(id: playlistID, name: $0.name) })
@@ -337,6 +348,7 @@ struct PlaylistDetailView: View {
 
     private func actionRow(_ detail: PlaylistDetail) -> some View {
         HStack(spacing: 10) {
+            downloadButton(detail)
             Button {
                 player.play(tracks: playable, source: .playlist(playlistID),
                             context: .playlist(id: playlistID, name: detail.name))
@@ -395,8 +407,8 @@ struct PlaylistDetailView: View {
 
     private var playable: [Track] {
         if SettingsManager.shared.enableUnblock { return model.tracks }
-        return model.tracks.filter {
-            $0.playability(privilege: model.privileges[$0.id],
+        return model.tracks.filter { track in
+            downloads.offlineTracks.contains(where: { item in item.id == track.id }) || track.playability(privilege: model.privileges[track.id],
                            isLoggedIn: account.isLoggedIn,
                            vipType: account.vipType) == .playable
         }
@@ -429,6 +441,12 @@ struct PlaylistDetailView: View {
                 ToastCenter.shared.show(error.localizedDescription)
             }
         }
+    }
+
+    private func downloadButton(_ detail: PlaylistDetail, compact: Bool = false) -> some View {
+        DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)", name: detail.name,
+                                 enabled: !model.isLoading && !model.isLoadingMore && Set(model.tracks.map(\.id)) == Set(detail.trackIds.map(\.id)), compact: compact)
+            .accessibilityHint("等待歌单完整加载后下载全部歌曲")
     }
 
     private var loadingHeader: some View {

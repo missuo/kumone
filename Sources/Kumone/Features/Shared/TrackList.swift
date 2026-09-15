@@ -39,9 +39,11 @@ struct TrackRow: View {
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
     @State private var isReducingRecommendation = false
+    @ObservedObject private var downloads = DownloadManager.shared
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var isPlayable: Bool { playability == .playable }
+    private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracks.first { $0.id == track.id } }
+    private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -85,6 +87,11 @@ struct TrackRow: View {
                     if track.fee == 1 {
                         VIPBadge()
                     }
+                    if offlineTrack?.isDownloaded == true {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("已下载")
+                    }
                 }
                 artistLinks
             }
@@ -112,7 +119,7 @@ struct TrackRow: View {
                 }
             }
 
-            if let reason = playability.reason {
+            if let reason = playability.reason, offlineTrack == nil {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -278,6 +285,7 @@ struct TrackRow: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         Button("播放") { onPlay() }
+        TrackDownloadActions(track: track)
         Button("下一首播放") {
             player.addToPlayNext(track)
         }
@@ -527,6 +535,7 @@ final class SpectrumBarsView: PlatformView {
 // MARK: - Track list
 
 struct TrackListView: View {
+    @ObservedObject private var downloads = DownloadManager.shared
     let tracks: [Track]
     var style: TrackRowStyle = .full
     var privileges: [Int: TrackPrivilege] = [:]
@@ -568,6 +577,7 @@ struct TrackListView: View {
     }
 
     private func playability(of track: Track) -> TrackPlayability {
+        if downloads.offlineTracks.contains(where: { $0.id == track.id }) { return .playable }
         // With unblock enabled, gray tracks resolve from third-party sources.
         if SettingsManager.shared.enableUnblock { return .playable }
         return track.playability(

@@ -74,9 +74,10 @@ enum NeteaseAPI {
         }
     }
 
-    static func logout() async {
-        _ = try? await client.weapi("/logout")
-        client.clearAuthCookies()
+    static func logout(detachedCookies: [String: String]? = nil) async {
+        let oldCookies = detachedCookies ?? client.authenticationCookies()
+        if detachedCookies == nil { client.clearAuthCookies() }
+        _ = try? await client.weapi("/logout", cookieOverrides: oldCookies, absorbResponseCookies: false)
     }
 
     static func refreshLogin() async {

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - User
 
-struct UserProfile: Decodable, Hashable {
+struct UserProfile: Codable, Hashable {
     let userId: Int
     let nickname: String
     let avatarUrl: String?
@@ -27,7 +27,7 @@ struct UserProfile: Decodable, Hashable {
 
 // MARK: - Playlist
 
-struct PlaylistCreator: Decodable, Hashable {
+struct PlaylistCreator: Codable, Hashable {
     let userId: Int
     let nickname: String
     let avatarUrl: String?
@@ -46,7 +46,7 @@ struct PlaylistCreator: Decodable, Hashable {
 
 /// A playlist as it appears in grids and sidebars. Tolerates the several cover
 /// field names and numeric types NetEase uses across endpoints.
-struct PlaylistSummary: Decodable, Hashable, Identifiable {
+struct PlaylistSummary: Codable, Hashable, Identifiable {
     let id: Int
     let name: String
     let coverURL: String?
@@ -82,6 +82,20 @@ struct PlaylistSummary: Decodable, Hashable, Identifiable {
 
     /// The auto-created "我喜欢的音乐" playlist.
     var isLikedSongsList: Bool { specialType == 5 }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(coverURL, forKey: .coverImgUrl)
+        try c.encode(playCount, forKey: .playCount)
+        try c.encode(trackCount, forKey: .trackCount)
+        try c.encodeIfPresent(copywriter, forKey: .copywriter)
+        try c.encodeIfPresent(creator, forKey: .creator)
+        try c.encode(specialType, forKey: .specialType)
+        try c.encode(privacy, forKey: .privacy)
+        try c.encode(subscribed, forKey: .subscribed)
+    }
 }
 
 struct TrackIDRef: Codable, Hashable {
@@ -269,8 +283,8 @@ struct ToplistTrackPreview: Codable, Hashable {
 
 // MARK: - Lyrics
 
-struct LyricResponse: Decodable {
-    struct LyricBody: Decodable {
+struct LyricResponse: Codable {
+    struct LyricBody: Codable {
         let lyric: String?
     }
 
@@ -288,7 +302,7 @@ struct LyricResponse: Decodable {
     let uncollected: Bool?
 }
 
-struct LyricContributor: Decodable {
+struct LyricContributor: Codable {
     let nickname: String?
 }
 

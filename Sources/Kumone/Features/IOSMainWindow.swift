@@ -9,6 +9,7 @@ public struct IOSMainWindow: View {
     @StateObject private var updater = IOSUpdater.shared
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     /// The app's intended scheme, read on this ancestor so the search-active
     /// tab environment can't invert it (#31).
@@ -38,10 +39,15 @@ public struct IOSMainWindow: View {
             .environment(\.openLogin, { showLogin = true })
             .environment(\.openDestination, openDestination)
             .task {
+                await DownloadManager.shared.start()
                 await account.bootstrap()
                 if settings.autoCheckUpdates {
                     IOSUpdater.shared.check(interactive: false)
                 }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase != .active { player.checkpointPosition() }
+                else { Task { await DownloadManager.shared.refreshLibrary() } }
             }
             .sheet(isPresented: $updater.showSheet) {
                 IOSUpdaterSheet()
@@ -593,6 +599,12 @@ struct IOSLibraryView: View {
                         }
                         .padding(.vertical, 6)
                     }
+                }
+            }
+
+            Section {
+                NavigationLink(value: Destination.downloaded) {
+                    Label("已下载", systemImage: "arrow.down.circle.fill")
                 }
             }
 

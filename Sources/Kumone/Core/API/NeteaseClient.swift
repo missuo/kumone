@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import os.log
 
 enum NeteaseAPIError: LocalizedError {
@@ -29,17 +30,17 @@ final class NeteaseClient: @unchecked Sendable {
     private let session: URLSession
     private let cookieLock = NSLock()
     private var cookies: [String: String] = [:]
+    private var authEpoch: UInt64 = 0
     private let cookieFileURL: URL
 
-    init(cookieDirectory: URL? = nil) {
-        let config = URLSessionConfiguration.default
+    init(cookieDirectory: URL? = nil, configuration: URLSessionConfiguration? = nil) {
+        let config = configuration ?? URLSessionConfiguration.default
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 15
         session = URLSession(configuration: config)
 
-        let support = cookieDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Kumone", isDirectory: true)
+        let support = cookieDirectory ?? KumonePaths.applicationSupport
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         cookieFileURL = support.appendingPathComponent("cookies.json")
         if let data = try? Data(contentsOf: cookieFileURL),
@@ -52,17 +53,34 @@ final class NeteaseClient: @unchecked Sendable {
 
     var isLoggedIn: Bool { cookie(named: "MUSIC_U") != nil }
 
+    var authenticationFingerprint: String? {
+        cookie(named: "MUSIC_U").map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
+    }
+
+    private var authenticationEpoch: UInt64 {
+        cookieLock.lock(); defer { cookieLock.unlock() }
+        return authEpoch
+    }
+
+    func authenticationCookies() -> [String: String] {
+        cookieLock.lock(); defer { cookieLock.unlock() }
+        return cookies.filter { ["MUSIC_U", "__csrf"].contains($0.key) }
+    }
+
     func cookie(named name: String) -> String? {
         cookieLock.lock(); defer { cookieLock.unlock() }
         return cookies[name]
     }
 
-    func setCookies(_ new: [String: String]) {
+    @discardableResult
+    func setCookies(_ new: [String: String], expectedEpoch: UInt64? = nil) -> Bool {
         cookieLock.lock()
+        defer { cookieLock.unlock() }
+        if let expectedEpoch, expectedEpoch != authEpoch { return false }
+        if let token = new["MUSIC_U"], token != cookies["MUSIC_U"] { authEpoch += 1 }
         for (k, v) in new { cookies[k] = v }
-        let snapshot = cookies
-        cookieLock.unlock()
-        persist(snapshot)
+        persist(cookies)
+        return true
     }
 
     /// Ingests a `;;`-joined raw cookie string as returned by the QR login check.
@@ -81,11 +99,11 @@ final class NeteaseClient: @unchecked Sendable {
 
     func clearAuthCookies() {
         cookieLock.lock()
+        defer { cookieLock.unlock() }
+        authEpoch += 1
         cookies.removeValue(forKey: "MUSIC_U")
         cookies.removeValue(forKey: "__csrf")
-        let snapshot = cookies
-        cookieLock.unlock()
-        persist(snapshot)
+        persist(cookies)
     }
 
     private func persist(_ snapshot: [String: String]) {
@@ -103,29 +121,31 @@ final class NeteaseClient: @unchecked Sendable {
         return all.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
     }
 
-    private func absorbSetCookies(from response: HTTPURLResponse, url: URL) {
-        guard let fields = response.allHeaderFields as? [String: String] else { return }
+    private func absorbSetCookies(from response: HTTPURLResponse, url: URL, epoch: UInt64) -> Bool {
+        guard let fields = response.allHeaderFields as? [String: String] else { return authenticationEpoch == epoch }
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
-        guard !parsed.isEmpty else { return }
+        guard !parsed.isEmpty else { return authenticationEpoch == epoch }
         var new: [String: String] = [:]
         for c in parsed where !c.value.isEmpty && c.value != "\"\"" {
             new[c.name] = c.value
         }
-        if !new.isEmpty { setCookies(new) }
+        return setCookies(new, expectedEpoch: epoch)
     }
 
     // MARK: - Requests
 
     /// POST to `https://music.163.com/weapi<path>` with weapi encryption.
     func weapi(_ path: String, _ payload: [String: Any] = [:],
-               cookieOverrides: [String: String] = [:]) async throws -> Data {
+               cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true) async throws -> Data {
+        let epoch = authenticationEpoch
         var body = payload
-        body["csrf_token"] = cookie(named: "__csrf") ?? ""
+        let csrf = cookieOverrides["__csrf"] ?? cookie(named: "__csrf")
+        body["csrf_token"] = csrf ?? ""
         let json = try JSONSerialization.data(withJSONObject: body)
         let form = NeteaseCrypto.weapi(payload: json)
 
         var fullPath = path
-        if let csrf = cookie(named: "__csrf"), !csrf.isEmpty {
+        if let csrf, !csrf.isEmpty {
             fullPath += (fullPath.contains("?") ? "&" : "?") + "csrf_token=\(csrf)"
         }
         let url = URL(string: "https://music.163.com/weapi\(fullPath)")!
@@ -137,13 +157,14 @@ final class NeteaseClient: @unchecked Sendable {
         request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
                          forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
-        return try await perform(request)
+        return try await perform(request, epoch: epoch, absorbResponseCookies: absorbResponseCookies)
     }
 
     /// POST to `https://interface.music.163.com/eapi<path>` with eapi encryption.
     /// The digest is computed over the corresponding `/api<path>` path.
     func eapi(_ path: String, _ payload: [String: Any] = [:],
               cookieOverrides: [String: String] = [:]) async throws -> Data {
+        let epoch = authenticationEpoch
         let apiPath = "/api" + path
         var body = payload
         var header: [String: String] = [
@@ -173,13 +194,17 @@ final class NeteaseClient: @unchecked Sendable {
         request.setValue(cookieHeader(extra: ["os": "pc", "appver": "3.1.17"], overrides: cookieOverrides),
                          forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
-        return try await perform(request)
+        return try await perform(request, epoch: epoch)
     }
 
-    private func perform(_ request: URLRequest) async throws -> Data {
+    private func perform(_ request: URLRequest, epoch: UInt64, absorbResponseCookies: Bool = true) async throws -> Data {
+        if KumonePaths.isOfflineUITest { throw URLError(.notConnectedToInternet) }
+        try Task.checkCancellation()
+        guard epoch == authenticationEpoch else { throw CancellationError() }
         let (data, response) = try await session.data(for: request)
+        guard epoch == authenticationEpoch else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse else { throw NeteaseAPIError.http(-1) }
-        absorbSetCookies(from: http, url: request.url!)
+        if absorbResponseCookies, !absorbSetCookies(from: http, url: request.url!, epoch: epoch) { throw CancellationError() }
         guard (200..<300).contains(http.statusCode) else {
             Self.log.error("HTTP \(http.statusCode) for \(request.url?.path ?? "?")")
             throw NeteaseAPIError.http(http.statusCode)

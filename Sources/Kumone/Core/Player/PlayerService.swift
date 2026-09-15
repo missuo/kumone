@@ -14,7 +14,7 @@ enum RepeatMode: String, CaseIterable {
 }
 
 /// Where the current queue came from — used for scrobbling and UI affordances.
-enum PlaySource: Equatable {
+enum PlaySource: Codable, Equatable {
     case playlist(Int)
     case album(Int)
     case artist(Int)
@@ -131,7 +131,10 @@ final class PlayerService: ObservableObject {
         set { clock.progress = newValue }
     }
     @Published var repeatMode: RepeatMode = .off {
-        didSet { UserDefaults.standard.set(repeatMode.rawValue, forKey: "player.repeat") }
+        didSet {
+            UserDefaults.standard.set(repeatMode.rawValue, forKey: "player.repeat")
+            if !isRestoringState { persistState() }
+        }
     }
 
     @Published private(set) var shuffleEnabled = false
@@ -166,6 +169,11 @@ final class PlayerService: ObservableObject {
 
     private let engine = AVPlayer()
     private var offlinePlaybackLease: OfflinePlaybackLease?
+    private var stateScope: String?
+    private var sessionID = UUID()
+    private var persistenceRevision: UInt64 = 0
+    private var lastCheckpoint: TimeInterval = 0
+    private var isRestoringState = false
 
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
@@ -183,7 +191,7 @@ final class PlayerService: ObservableObject {
 
     private init() {
         engine.actionAtItemEnd = .pause
-        volume = UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8
+        volume = KumonePaths.isOfflineUITest ? 0 : (UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8)
         engine.volume = volume
         repeatMode = UserDefaults.standard.string(forKey: "player.repeat")
             .flatMap(RepeatMode.init) ?? .off
@@ -224,7 +232,7 @@ final class PlayerService: ObservableObject {
             forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
-                guard let self, !self.isScrubbing else { return }
+                guard let self, !self.isScrubbing, self.engine.currentItem != nil else { return }
                 let seconds = time.seconds
                 guard seconds.isFinite else { return }
 
@@ -239,6 +247,7 @@ final class PlayerService: ObservableObject {
                 if abs(seconds - self.progress) > 0.45 {
                     self.progress = seconds
                     NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
+                    if abs(seconds - self.lastCheckpoint) >= 5 { self.checkpointPosition() }
                 }
             }
         }
@@ -250,6 +259,7 @@ final class PlayerService: ObservableObject {
         }
 
         NowPlayingManager.shared.attach(to: self)
+        stateScope = AccountStore.shared.offlineScope
         restoreState()
     }
 
@@ -320,6 +330,7 @@ final class PlayerService: ObservableObject {
     /// Insert a track right after the current one.
     func addToPlayNext(_ track: Track, playNow: Bool = false) {
         playNextList.append(track)
+        persistState()
         if playNow || currentTrack == nil {
             advanceToNext(userInitiated: true)
         } else {
@@ -335,13 +346,14 @@ final class PlayerService: ObservableObject {
             AudioSpectrum.shared.reset()
         } else if engine.currentItem == nil {
             // Restored session: re-resolve the source.
-            startPlaying(track, indexUnchanged: true)
+            startPlaying(track, indexUnchanged: true, resumeAt: progress)
             return
         } else {
             engine.play()
             isPlaying = true
         }
         NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying ? 1 : 0)
+        checkpointPosition()
     }
 
     func pause() {
@@ -349,6 +361,7 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+        checkpointPosition()
     }
 
     func next() {
@@ -384,6 +397,7 @@ final class PlayerService: ObservableObject {
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
         progress = seconds
+        checkpointPosition()
         updateLyricsCursor(at: seconds)
         engine.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in
@@ -395,6 +409,7 @@ final class PlayerService: ObservableObject {
 
     func toggleShuffle() {
         guard !isFMMode else { return }
+        defer { persistState() }
         shuffleEnabled.toggle()
         guard let current = currentTrack else { return }
         if shuffleEnabled {
@@ -444,6 +459,7 @@ final class PlayerService: ObservableObject {
     }
 
     func removeFromUpcoming(_ track: Track) {
+        defer { persistState() }
         if let idx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.remove(at: idx)
             return
@@ -505,6 +521,7 @@ final class PlayerService: ObservableObject {
         if fmUpcoming.count < 1 {
             if let more = try? await NeteaseAPI.personalFM() {
                 fmUpcoming.append(contentsOf: more)
+                persistState()
             }
         }
     }
@@ -553,10 +570,15 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Source resolution
 
-    private func startPlaying(_ track: Track, indexUnchanged: Bool = false) {
+    private func startPlaying(_ track: Track, indexUnchanged: Bool = false, resumeAt: TimeInterval = 0) {
         scrobbleIfNeeded(completed: false)
+        engine.replaceCurrentItem(with: nil)
+        if let lease = offlinePlaybackLease {
+            offlinePlaybackLease = nil
+            Task { try? await OfflineStore.shared.release(lease) }
+        }
         currentTrack = track
-        progress = 0
+        progress = max(0, resumeAt)
         duration = track.duration
         servedQuality = nil
         unblockSource = nil
@@ -577,18 +599,18 @@ final class PlayerService: ObservableObject {
         persistState()
 
         Task {
-            await resolveAndLoad(track, generation: generation)
+            await resolveAndLoad(track, generation: generation, resumeAt: resumeAt)
         }
         Task {
             await loadLyrics(for: track, generation: generation)
         }
     }
 
-    private func resolveAndLoad(_ track: Track, generation: Int) async {
+    private func resolveAndLoad(_ track: Track, generation: Int, resumeAt: TimeInterval = 0) async {
         let quality = SettingsManager.shared.audioQuality.rawValue
         // A logged-in account with no resolved profile has an unknown scope.
-        // Never expose another account's downloads (cold-start account snapshots
-        // are introduced with the offline library in phase two).
+        // A missing or mismatched login snapshot must not expose another
+        // account's downloads.
         let accountScope = offlineAccountScope
         if let accountScope,
            let local = try? await OfflineStore.shared.acquire(accountScope: accountScope, trackID: track.id, preferredQuality: quality) {
@@ -599,7 +621,7 @@ final class PlayerService: ObservableObject {
             consecutiveFailures = 0
             servedQuality = local.descriptor.identity.quality
             await loadPlaybackAsset(AVURLAsset(url: local.url), track: track, generation: generation,
-                                    resolvedDuration: local.descriptor.duration, offlineLease: local)
+                                    resolvedDuration: local.descriptor.duration, offlineLease: local, resumeAt: resumeAt)
             return
         }
         guard generation == resolveGeneration else { return }
@@ -648,11 +670,12 @@ final class PlayerService: ObservableObject {
         }
 
         await loadPlaybackAsset(AVURLAsset(url: url), track: track, generation: generation,
-                                resolvedDuration: data.flatMap { $0.time > 0 ? Double($0.time) / 1000 : nil })
+                                resolvedDuration: data.flatMap { $0.time > 0 ? Double($0.time) / 1000 : nil }, resumeAt: resumeAt)
     }
 
     private func loadPlaybackAsset(_ asset: AVURLAsset, track: Track, generation: Int,
-                                   resolvedDuration: TimeInterval?, offlineLease: OfflinePlaybackLease? = nil) async {
+                                   resolvedDuration: TimeInterval?, offlineLease: OfflinePlaybackLease? = nil,
+                                   resumeAt: TimeInterval = 0) async {
         // Resolve the asset's audio track before the item goes live: an audio mix
         // attached after playback starts is silently ignored, so the spectrum tap
         // has to be spliced in here or not at all. Sources that refuse byte-range
@@ -688,8 +711,13 @@ final class PlayerService: ObservableObject {
         if let previousLease {
             Task { try? await OfflineStore.shared.release(previousLease) }
         }
-        engine.play()
-        isPlaying = true
+        if let resolvedDuration, resolvedDuration > 0 { duration = resolvedDuration }
+        if resumeAt > 0 {
+            let time = CMTime(seconds: min(resumeAt, max(0, duration - 0.1)), preferredTimescale: 600)
+            _ = await engine.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+            guard generation == resolveGeneration else { return }
+        }
+        if isPlaying { engine.play() }
 
         if !startScrobbled {
             startScrobbled = true
@@ -702,11 +730,11 @@ final class PlayerService: ObservableObject {
             duration = resolvedDuration
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
+        NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying ? 1 : 0)
     }
 
     private var offlineAccountScope: String? {
-        guard NeteaseClient.shared.isLoggedIn else { return "guest" }
-        return AccountStore.shared.profile.map { "netease:\($0.userId)" }
+        AccountStore.shared.offlineScope
     }
 
     /// Resolves the asset's audio track, giving up after `timeout` so a slow or
@@ -727,9 +755,18 @@ final class PlayerService: ObservableObject {
     }
 
     private func loadLyrics(for track: Track, generation: Int) async {
+        if let scope = offlineAccountScope,
+           let cached = await OfflineMetadataStore.shared.lyrics(trackID: track.id, scope: scope) {
+            guard generation == resolveGeneration, offlineAccountScope == scope else { return }
+            lyrics = LyricsParser.parse(cached)
+            updateLyricsCursor(at: progress)
+            return
+        }
+        let scope = offlineAccountScope
         let response = try? await NeteaseAPI.lyric(id: track.id)
-        guard generation == resolveGeneration else { return }
+        guard generation == resolveGeneration, offlineAccountScope == scope else { return }
         lyrics = response.map(LyricsParser.parse)
+        if let response, let scope { try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope) }
         updateLyricsCursor(at: progress)
     }
 
@@ -815,60 +852,81 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    private struct PersistedState: Codable {
-        var queue: [Track]
-        var currentID: Int?
-        var repeatMode: String
-        var shuffle: Bool
-        /// Optional so state files written before recents existed still decode.
-        var recentContexts: [PlayContext]?
-    }
-
     private func persistState() {
-        let state = PersistedState(
-            queue: Array(queue.prefix(1000)),
-            currentID: currentTrack?.id,
-            repeatMode: repeatMode.rawValue,
-            shuffle: shuffleEnabled,
-            recentContexts: recentContexts
-        )
-        guard let data = try? JSONEncoder().encode(state) else { return }
-        let url = Self.stateFileURL
-        Task.detached {
-            try? data.write(to: url, options: .atomic)
-        }
+        guard let scope = stateScope else { return }
+        sessionID = UUID()
+        persistenceRevision += 1
+        let revision = persistenceRevision
+        let snapshot = PlaybackSessionSnapshot(sessionID: sessionID, accountScope: scope, queue: queue,
+            shuffledQueue: shuffledQueue, playNextList: playNextList, fmUpcoming: fmUpcoming,
+            currentIndex: currentIndex, currentTrack: currentTrack, progress: progress, source: source,
+            repeatMode: repeatMode.rawValue, shuffle: shuffleEnabled, isFM: isFMMode, recentContexts: recentContexts)
+        Task { try? await PlaybackSessionStore.shared.save(snapshot, revision: revision) }
     }
 
     private func restoreState() {
-        guard let data = try? Data(contentsOf: Self.stateFileURL),
-              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
-        else { return }
-        // Recents outlive the queue: restore them before bailing out on an
-        // empty queue, or the next played track persists an empty list over
-        // them and the Dock menu loses its history for good.
-        recentContexts = Array((state.recentContexts ?? []).prefix(Self.recentContextsLimit))
-        guard !state.queue.isEmpty else { return }
+        guard let scope = stateScope, let state = PlaybackSessionStore.shared.load(scope: scope) else { return }
+        isRestoringState = true
+        defer { isRestoringState = false }
+        sessionID = state.sessionID
+        recentContexts = Array(state.recentContexts.prefix(Self.recentContextsLimit))
         queue = state.queue
         shuffleEnabled = state.shuffle
-        if shuffleEnabled {
-            shuffledQueue = queue.shuffled()
-        }
-        if let id = state.currentID,
-           let idx = activeQueue.firstIndex(where: { $0.id == id }) {
-            currentIndex = idx
-            currentTrack = activeQueue[idx]
-            duration = activeQueue[idx].duration
-            NowPlayingManager.shared.updateMetadata(for: activeQueue[idx], duration: duration)
-            Task {
-                await loadLyrics(for: activeQueue[idx], generation: resolveGeneration)
-            }
+        shuffledQueue = state.shuffledQueue
+        playNextList = state.playNextList
+        fmUpcoming = state.fmUpcoming
+        isFMMode = state.isFM
+        source = state.source
+        repeatMode = RepeatMode(rawValue: state.repeatMode) ?? .off
+        currentIndex = activeQueue.indices.contains(state.currentIndex) ? state.currentIndex : -1
+        currentTrack = state.currentTrack
+        progress = state.progress
+        lastCheckpoint = progress
+        isPlaying = false
+        if let track = currentTrack {
+            duration = track.duration
+            NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
+            NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+            let generation = resolveGeneration
+            Task { await loadLyrics(for: track, generation: generation) }
         }
     }
 
-    private static var stateFileURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Kumone", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        return support.appendingPathComponent("player-state.json")
+    func checkpointPosition() {
+        guard let scope = stateScope, let track = currentTrack else { return }
+        persistenceRevision += 1
+        let revision = persistenceRevision
+        lastCheckpoint = progress
+        let position = PlaybackPositionSnapshot(sessionID: sessionID, trackID: track.id, progress: progress)
+        Task { try? await PlaybackSessionStore.shared.savePosition(position, scope: scope, revision: revision) }
+    }
+
+    func activateAccount(scope: String?) {
+        guard stateScope != scope else { return }
+        persistState()
+        resolveGeneration += 1
+        engine.replaceCurrentItem(with: nil)
+        if let lease = offlinePlaybackLease {
+            offlinePlaybackLease = nil
+            Task { try? await OfflineStore.shared.release(lease) }
+        }
+        isPlaying = false
+        currentTrack = nil
+        queue = []; shuffledQueue = []; playNextList = []; fmUpcoming = []; recentContexts = []
+        currentIndex = -1
+        progress = 0
+        duration = 0
+        lyrics = nil
+        isFMMode = false
+        shuffleEnabled = false
+        source = .none
+        servedQuality = nil
+        unblockSource = nil
+        isTrial = false
+        showNowPlaying = false
+        stateScope = scope
+        AudioSpectrum.shared.markIdle()
+        NowPlayingManager.shared.clear()
+        restoreState()
     }
 }

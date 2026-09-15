@@ -1,8 +1,7 @@
 import Foundation
 
 actor OfflineStore {
-    static let shared = OfflineStore(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Kumone/Offline", isDirectory: true))
+    static let shared = OfflineStore(directory: KumonePaths.applicationSupport.appendingPathComponent("Offline", isDirectory: true))
 
     nonisolated let directory: URL
     private let minimumFreeBytes: Int64
@@ -10,6 +9,7 @@ actor OfflineStore {
     private var writers: [String: UUID] = [:]
     private var leases: [UUID: String] = [:]
     private var validating: Set<String> = []
+    private var downloadReservations: [String: Int64] = [:]
 
     init(directory: URL, minimumFreeBytes: Int64? = nil) {
         self.directory = directory
@@ -85,6 +85,61 @@ actor OfflineStore {
 
     func record(id: String) throws -> OfflineAudioRecord? { try preparedDatabase().record(id: id) }
 
+    func reserveDownload(token: String, bytes: Int64) throws {
+        _ = try preparedDatabase()
+        let values = try FileManager.default.attributesOfFileSystem(forPath: directory.path)
+        let others = downloadReservations.filter { $0.key != token }.values.reduce(0, +)
+        guard bytes >= 0, let free = values[.systemFreeSize] as? NSNumber,
+              free.int64Value - others - bytes >= minimumFreeBytes else { throw OfflineAudioError.insufficientSpace }
+        downloadReservations[token] = bytes
+    }
+
+    func updateDownloadReservation(token: String, remainingBytes: Int64) {
+        if let existing = downloadReservations[token] { downloadReservations[token] = min(existing, max(0, remainingBytes)) }
+    }
+
+    func releaseDownloadReservation(token: String) { downloadReservations[token] = nil }
+
+    func availableRecords(accountScope: String) throws -> [OfflineAudioRecord] {
+        let db = try preparedDatabase()
+        return try db.allRecords().filter { $0.descriptor.identity.accountScope == accountScope && $0.state == .complete }
+            .compactMap { try availableRecord($0, database: db) }
+    }
+
+    func reusableDescriptor(accountScope: String, trackID: Int, quality: String) throws -> OfflineAudioDescriptor? {
+        let db = try preparedDatabase()
+        let rank = ["standard", "higher", "exhigh", "lossless", "hires"]
+        guard let requested = rank.firstIndex(of: quality) else { return nil }
+        for record in try db.records(scope: accountScope, trackID: trackID) where record.state == .complete {
+            guard record.descriptor.identity.source == "netease",
+                  (rank.firstIndex(of: record.descriptor.identity.quality) ?? -1) >= requested else { continue }
+            if let available = try availableRecord(record, database: db) { return available.descriptor }
+        }
+        return nil
+    }
+
+    /// Background URLSession already owns a whole temporary file. Import it on
+    /// the same volume, then use the same integrity gate as streamed audio.
+    func importDownload(at url: URL, descriptor: OfflineAudioDescriptor) async throws {
+        let writer = UUID(), id = descriptor.identity.id
+        try begin(descriptor, writer: writer)
+        defer { if writers[id] == writer { writers[id] = nil } }
+        let db = try preparedDatabase()
+        guard var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
+        if record.state == .complete { return }
+        guard try url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) == descriptor.byteCount else {
+            throw OfflineAudioError.incomplete
+        }
+        record.ranges = AudioByteRanges()
+        try db.save(record)
+        let staging = stagingURL(record)
+        if FileManager.default.fileExists(atPath: staging.path) { try FileManager.default.removeItem(at: staging) }
+        try FileManager.default.moveItem(at: url, to: staging)
+        record.ranges.insert(0..<descriptor.byteCount)
+        try db.save(record)
+        try await finalize(id: id, writer: writer)
+    }
+
     func finalize(id: String, writer: UUID) async throws {
         let db = try preparedDatabase()
         guard writers[id] == writer, var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
@@ -130,24 +185,9 @@ actor OfflineStore {
                 if (lhs == preferredQuality) != (rhs == preferredQuality) { return lhs == preferredQuality }
                 return (qualities.firstIndex(of: lhs) ?? -1) > (qualities.firstIndex(of: rhs) ?? -1)
             }
-        for var record in records {
+        for candidate in records {
+            guard var record = try availableRecord(candidate, database: db) else { continue }
             let url = audioURL(record)
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            do {
-                guard values?.fileSize.map(Int64.init) == record.descriptor.byteCount else { throw OfflineAudioError.incomplete }
-                if record.verifiedModificationDate == nil || values?.contentModificationDate != record.verifiedModificationDate {
-                    try OfflineAudioValidator.validate(url: url, descriptor: record.descriptor)
-                    record.verifiedModificationDate = values?.contentModificationDate
-                }
-            } catch {
-                // Keep download intentions when an externally removed or
-                // corrupted file needs repair in the download manager.
-                record.state = .missing
-                record.ranges = AudioByteRanges()
-                try db.save(record)
-                if !leases.values.contains(record.id) { try removeFiles(record) }
-                continue
-            }
             record.lastPlayed = Date()
             try db.save(record)
             let token = UUID()
@@ -155,6 +195,27 @@ actor OfflineStore {
             return OfflinePlaybackLease(token: token, descriptor: record.descriptor, url: url)
         }
         return nil
+    }
+
+    private func availableRecord(_ candidate: OfflineAudioRecord, database db: OfflineAudioDatabase) throws -> OfflineAudioRecord? {
+        var record = candidate
+        let url = audioURL(record)
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        do {
+            guard values?.fileSize.map(Int64.init) == record.descriptor.byteCount else { throw OfflineAudioError.incomplete }
+            if record.verifiedModificationDate == nil || values?.contentModificationDate != record.verifiedModificationDate {
+                try OfflineAudioValidator.validate(url: url, descriptor: record.descriptor)
+                record.verifiedModificationDate = values?.contentModificationDate
+                try db.save(record)
+            }
+            return record
+        } catch {
+            record.state = .missing
+            record.ranges = AudioByteRanges()
+            try db.save(record)
+            if !leases.values.contains(record.id) { try removeFiles(record) }
+            return nil
+        }
     }
 
     func release(_ lease: OfflinePlaybackLease) throws {

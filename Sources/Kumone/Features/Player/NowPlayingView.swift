@@ -1276,6 +1276,8 @@ private struct CompactTrackHeader: View {
                     .accessibilityIdentifier("immersiveFavoriteButton")
 
                     Menu {
+                        TrackDownloadActions(track: track)
+                        Divider()
                         Button {
                             player.addToPlayNext(track)
                         } label: {
@@ -2023,6 +2025,8 @@ private struct MinimalTrackInfoRow: View {
 
     private func moreMenu(for track: Track) -> some View {
         Menu {
+            TrackDownloadActions(track: track)
+            Divider()
             Button {
                 airPlayRequest += 1
             } label: {

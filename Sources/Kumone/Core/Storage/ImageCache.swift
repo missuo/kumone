@@ -13,8 +13,7 @@ actor ImageCache {
     private init() {
         memory.countLimit = 300
         memory.totalCostLimit = 64 * 1024 * 1024
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        diskURL = caches.appendingPathComponent("im.missuo.Kumone/images", isDirectory: true)
+        diskURL = KumonePaths.imageCache
         try? FileManager.default.createDirectory(at: diskURL, withIntermediateDirectories: true)
     }
 
@@ -31,6 +30,9 @@ actor ImageCache {
             if let data = try? Data(contentsOf: fileURL), let image = PlatformImage(data: data) {
                 return image
             }
+            if let scope = await MainActor.run(body: { AccountStore.shared.offlineScope }),
+               let data = await OfflineMetadataStore.shared.artwork(url: url, scope: scope),
+               let image = PlatformImage(data: data) { return image }
             guard let (data, response) = try? await URLSession.shared.data(from: url),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
                   let image = PlatformImage(data: data) else { return nil }

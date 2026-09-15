@@ -117,6 +117,8 @@ struct MainWindow: View {
             artworkStore.setArtworkNeeded(needsCurrentArtwork)
 #endif
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
+            await DownloadManager.shared.start()
+            if KumonePaths.isOfflineUITest { selection = .downloaded }
             await account.bootstrap()
         }
         .onChange(of: settings.showDesktopLyrics) { _ in
@@ -203,6 +205,8 @@ struct MainWindow: View {
     @ViewBuilder
     private var rootView: some View {
         switch selection {
+        case .downloaded:
+            DownloadedMusicView()
         case .home:
             HomeView()
         case .explore:
