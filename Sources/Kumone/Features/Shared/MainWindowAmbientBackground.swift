@@ -2,9 +2,10 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
+#endif
 
-/// A non-interactive artwork tint layered above the split view's opaque system
-/// surfaces. The low opacity keeps system materials and controls readable.
+/// A non-interactive artwork tint layered above opaque system surfaces. The low
+/// opacity keeps system materials and controls readable.
 struct MainWindowAmbientBackground: View {
     let colors: ArtworkColors
     let intensity: Double
@@ -64,6 +65,7 @@ enum MainWindowAmbientOpacity {
     }
 }
 
+#if os(macOS)
 struct MainWindowAmbientConfiguration {
     let showsAmbientBackground: Bool
     let showsTitlebarAmbientBackground: Bool

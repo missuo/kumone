@@ -7,6 +7,7 @@ public struct IOSMainWindow: View {
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var toasts = ToastCenter.shared
     @StateObject private var updater = IOSUpdater.shared
+    @StateObject private var artworkStore = NowPlayingArtworkStore()
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
 
@@ -33,6 +34,7 @@ public struct IOSMainWindow: View {
             .environmentObject(account)
             .environmentObject(settings)
             .environmentObject(toasts)
+            .environmentObject(artworkStore)
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
             .environment(\.openLogin, { showLogin = true })
@@ -42,6 +44,9 @@ public struct IOSMainWindow: View {
                 if settings.autoCheckUpdates {
                     IOSUpdater.shared.check(interactive: false)
                 }
+            }
+            .task(id: settings.showMainWindowAmbientBackground) {
+                artworkStore.setArtworkNeeded(settings.showMainWindowAmbientBackground)
             }
             .sheet(isPresented: $updater.showSheet) {
                 IOSUpdaterSheet()
@@ -140,6 +145,15 @@ public struct IOSMainWindow: View {
             MainWindow(path: $iPadPath)
         } else {
             tabInterface
+                .overlay {
+                    if settings.showMainWindowAmbientBackground {
+                        MainWindowAmbientBackground(
+                            colors: artworkStore.colors,
+                            intensity: settings.mainWindowAmbientBackgroundIntensity
+                        )
+                        .ignoresSafeArea()
+                    }
+                }
         }
     }
 
