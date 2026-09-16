@@ -113,7 +113,10 @@ final class SettingsManager: ObservableObject {
     }
 
     @Published var audioQuality: AudioQuality {
-        didSet { UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality) }
+        didSet {
+            UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality)
+            NotificationCenter.default.post(name: .playbackQualityChanged, object: nil)
+        }
     }
 
     @Published var musicCachePolicy: MusicCachePolicy {

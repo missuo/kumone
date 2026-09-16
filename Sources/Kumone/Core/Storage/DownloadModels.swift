@@ -87,8 +87,9 @@ struct DownloadNetworkState: Equatable {
     var connected: Bool
     var expensive: Bool
     var constrained: Bool
+    var isKnown = true
     func permits(_ job: DownloadJob) -> Bool { connected && (job.allowsMetered || (!expensive && !constrained)) }
-    static let unknown = Self(connected: false, expensive: false, constrained: false)
+    static let unknown = Self(connected: false, expensive: false, constrained: false, isKnown: false)
 }
 
 /// Monotonic revisions prevent slower, older saves overwriting a newer pause,

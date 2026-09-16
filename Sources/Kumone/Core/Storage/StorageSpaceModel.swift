@@ -59,6 +59,7 @@ final class StorageSpaceModel: ObservableObject {
                 try await images.clear()
                 message = String(localized: "图片缓存已清理")
             case .musicCache:
+                await PlaybackCacheController.shared.pausePrefetchForCleanup()
                 let result = try await audio.clearMusicCache(excluding: downloadIDs())
                 if result.failed > 0 { message = String(localized: "部分音乐缓存未能清理，请重试") }
                 else if result.inUse > 0 { message = String(localized: "音乐缓存已清理，正在使用的音频已保留") }

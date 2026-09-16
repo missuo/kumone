@@ -26,13 +26,17 @@ final class PlaybackCacheSession {
     private var completion: Task<Void, Never>?
     private var closing: Task<Void, Never>?
     private(set) var isClosed = false
+    private(set) var isComplete = false
+    private let onCompleted: @MainActor () -> Void
 
     init(resource: OfflineAudioResource, store: OfflineStore, context: MusicCacheContext,
-         fallbackURL: URL, onFailure: @escaping @Sendable () -> Void) {
+         fallbackURL: URL, onFailure: @escaping @Sendable () -> Void,
+         onCompleted: @escaping @MainActor () -> Void = {}) {
         transfer = AudioTransferCoordinator(resource: resource, store: store, cacheContext: context)
         loader = CachingAssetResourceLoader(transfer: transfer, onFailure: onFailure)
         self.fallbackURL = fallbackURL
         self.store = store
+        self.onCompleted = onCompleted
     }
 
     func updateCompletion(allowed: Bool) async {
@@ -41,7 +45,14 @@ final class PlaybackCacheSession {
         guard !isClosed else { return }
         if !allowed { completion?.cancel(); completion = nil }
         else if completion == nil {
-            completion = Task { [transfer] in try? await transfer.download(forCompletion: true) }
+            completion = Task { [weak self, transfer] in
+                do {
+                    try await transfer.download(forCompletion: true)
+                    guard let self, !self.isClosed else { return }
+                    self.isComplete = true
+                    self.onCompleted()
+                } catch {}
+            }
         }
     }
 
@@ -68,6 +79,8 @@ final class PlaybackCacheSession {
             try Task.checkCancellation()
             let descriptor = transfer.resource.descriptor
             try await store.retain(id: descriptor.identity.id, owner: owner)
+            isComplete = true
+            if !isClosed { onCompleted() }
             await releaseDownloadConsumer()
             return descriptor
         } catch {
@@ -92,11 +105,21 @@ final class PlaybackCacheController: ObservableObject {
     private var observations: Set<AnyCancellable> = []
     private var network = DownloadNetworkState.unknown
     private var protectedTrack: (scope: String, id: Int)?
+    private let prefetcher = QueuePrefetcher(store: .shared, metadata: .shared)
+    private var upcoming: [Track] = []
+    private var playbackPlaying = false
+    private var playbackBuffering = false
+    private var playbackReady = false
+    private var prefetchSuppressed = false
 
     private init() {
         DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.network = network
             self?.updateCompletion()
+        }.store(in: &observations)
+        DownloadManager.shared.$jobs.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updatePrefetch() }.store(in: &observations)
+        NotificationCenter.default.publisher(for: .playbackQualityChanged).sink { [weak self] _ in
+            self?.updatePrefetch()
         }.store(in: &observations)
         NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.updateCompletion()
@@ -114,13 +137,31 @@ final class PlaybackCacheController: ObservableObject {
     private var context: MusicCacheContext {
         let account = AccountStore.shared
         let liked = account.offlineScope.map { [$0: account.likedTrackIDs] } ?? [:]
+        var protected = protectedTrack.map { [$0.scope: Set([$0.id])] } ?? [:]
+        if let protectedTrack { protected[protectedTrack.scope, default: []].formUnion(PrefetchLimits().window(upcoming).map(\.id)) }
         return .init(policy: SettingsManager.shared.musicCachePolicy,
                      protectedAssetIDs: DownloadManager.shared.storageAssetIDs,
-                     protectedTracks: protectedTrack.map { [$0.scope: [$0.id]] } ?? [:], likedTracks: liked)
+                     protectedTracks: protected, likedTracks: liked)
     }
 
     func protect(trackID: Int?, scope: String?) {
+        if protectedTrack?.id != trackID || protectedTrack?.scope != scope { prefetchSuppressed = false }
         protectedTrack = scope.flatMap { scope in trackID.map { (scope, $0) } }
+    }
+
+    func updatePlayback(upcoming: [Track], isPlaying: Bool, isBuffering: Bool, ready: Bool) {
+        let bounded = PrefetchLimits().window(upcoming)
+        if self.upcoming != bounded { prefetchSuppressed = false }
+        self.upcoming = bounded
+        playbackPlaying = isPlaying
+        playbackBuffering = isBuffering
+        playbackReady = ready
+        updatePrefetch()
+    }
+
+    func pausePrefetchForCleanup() async {
+        prefetchSuppressed = true
+        await prefetcher.cancel().value
     }
 
     func begin(resource: OfflineAudioResource, fallbackURL: URL,
@@ -129,7 +170,8 @@ final class PlaybackCacheController: ObservableObject {
         await closing?.value
         guard ticket == generation, active == nil, context.policy != .disabled else { return nil }
         let candidate = PlaybackCacheSession(resource: resource, store: .shared, context: context,
-                                             fallbackURL: fallbackURL, onFailure: onFailure)
+                                             fallbackURL: fallbackURL, onFailure: onFailure,
+                                             onCompleted: { [weak self] in self?.updatePrefetch() })
         active = candidate
         do {
             try await candidate.transfer.prepare()
@@ -154,10 +196,15 @@ final class PlaybackCacheController: ObservableObject {
     @discardableResult
     func stop() -> Task<Void, Never> {
         generation += 1
+        playbackPlaying = false
+        playbackReady = false
+        upcoming = []
+        let prefetchStopped = prefetcher.cancel()
         let previous = active
         active = nil
         let pending = closing
         let task = Task {
+            await prefetchStopped.value
             await pending?.value
             await previous?.close()
         }
@@ -169,10 +216,10 @@ final class PlaybackCacheController: ObservableObject {
     /// A download requested during playback can finish the same transfer.
     /// Its caller retains the file before this method releases playback.
     func completeForDownload(resource: OfflineAudioResource, owner: String, allowsMetered: Bool) async throws -> OfflineAudioDescriptor? {
-        guard let session = active, !session.isClosed else { return nil }
-        let descriptor = session.transfer.resource.descriptor
-        guard descriptor == resource.descriptor else { return nil }
-        return try await session.finishForDownload(owner: owner, allowsMetered: allowsMetered)
+        if let session = active, !session.isClosed, session.transfer.resource.descriptor == resource.descriptor {
+            return try await session.finishForDownload(owner: owner, allowsMetered: allowsMetered)
+        }
+        return try await prefetcher.finishForDownload(resource: resource, owner: owner, allowsMetered: allowsMetered)
     }
 
     func reconcile() async {
@@ -182,10 +229,25 @@ final class PlaybackCacheController: ObservableObject {
     }
 
     private func updateCompletion() {
-        guard let session = active else { return }
         let allowed = Self.permitsCompletion(network: network, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
             && SettingsManager.shared.musicCachePolicy != .disabled
-        Task { await session.updateCompletion(allowed: allowed) }
+        if let session = active { Task { await session.updateCompletion(allowed: allowed) } }
+        updatePrefetch()
+    }
+
+    private func updatePrefetch() {
+        guard !prefetchSuppressed, playbackPlaying, !playbackBuffering,
+              playbackReady || active?.isComplete == true,
+              Self.permitsCompletion(network: network, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled),
+              SettingsManager.shared.musicCachePolicy != .disabled,
+              let current = protectedTrack, !upcoming.isEmpty else {
+            prefetcher.update(nil)
+            return
+        }
+        let pending = Set(DownloadManager.shared.pendingJobs.filter { $0.accountScope == current.scope }.map { $0.track.id })
+        prefetcher.update(.init(scope: current.scope, currentTrackID: current.id, tracks: upcoming,
+                               quality: SettingsManager.shared.audioQuality.rawValue, context: context,
+                               pendingDownloadTrackIDs: pending))
     }
 
     nonisolated static func permitsCompletion(network: DownloadNetworkState, lowPower: Bool) -> Bool {

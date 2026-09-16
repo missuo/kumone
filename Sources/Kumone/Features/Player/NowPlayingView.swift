@@ -97,6 +97,10 @@ struct NowPlayingView: View {
         #endif
         .preferredColorScheme(.dark)
         #if os(iOS)
+        .modifier(OfflinePlaybackAlert(player: player, onDownloads: { onOpenDestination(.downloaded) },
+            enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
+        #endif
+        #if os(iOS)
         .task(id: player.currentTrack?.id) {
             await loadArtwork()
         }
@@ -628,7 +632,8 @@ struct NowPlayingView: View {
                 .padding(.top, 16)
             MinimalTransportControls(
                 backdrop: colors,
-                showQueue: $showQueueOnMobile
+                showQueue: $showQueueOnMobile,
+                onDownloads: { onOpenDestination(.downloaded) }
             )
                 .padding(.horizontal, 2)
         }
@@ -2079,6 +2084,7 @@ private struct MinimalTransportControls: View {
     @EnvironmentObject private var player: PlayerService
     let backdrop: ArtworkColors
     @Binding var showQueue: Bool
+    let onDownloads: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2122,6 +2128,10 @@ private struct MinimalTransportControls: View {
         .buttonStyle(.pressable)
         .sheet(isPresented: $showQueue) {
             queueSheet
+                .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
+                    showQueue = false
+                    onDownloads()
+                }, enabled: showQueue && player.showNowPlaying))
         }
     }
 

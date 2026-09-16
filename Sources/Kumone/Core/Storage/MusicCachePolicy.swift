@@ -36,12 +36,13 @@ enum MusicCachePolicy: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct MusicCacheContext {
+struct MusicCacheContext: Equatable {
     var policy: MusicCachePolicy
     var protectedAssetIDs: Set<String> = []
     var protectedTracks: [String: Set<Int>] = [:]
     // Unknown accounts get the same retention priority as liked tracks.
     var likedTracks: [String: Set<Int>] = [:]
+    var isPrefetch = false
 }
 
 struct MusicCacheCapacity {
@@ -51,4 +52,5 @@ struct MusicCacheCapacity {
 
 extension Notification.Name {
     static let musicCachePolicyChanged = Notification.Name("Kumone.musicCachePolicyChanged")
+    static let playbackQualityChanged = Notification.Name("Kumone.playbackQualityChanged")
 }

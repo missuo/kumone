@@ -77,7 +77,7 @@ struct StorageSpaceView: View {
                 }
                     .disabled(busy || (model.snapshot?.clearableMusicCacheBytes ?? 0) == 0)
             } footer: {
-                Text("缓存完整的歌曲可离线播放。Wi-Fi 下补齐当前歌曲；蜂窝、低数据或低电量状态只随播放缓存。超限时自动清理，优先保留喜欢的歌曲；下载和播放中的文件会保留。关闭后已有缓存不会删除。")
+                Text("完整缓存可离线播放。普通 Wi-Fi 下补齐当前歌曲，并预存后续最多 5 首，不超过 20 分钟和 100 MB；蜂窝、低数据或低电量状态只缓存播放所需数据。超限时自动清理，优先保留喜欢的歌曲，保护下载和播放中的文件。关闭后保留已有缓存。")
             }
 
             Section {

@@ -33,6 +33,7 @@ actor AudioTransferCoordinator {
         if started { return }
         if preparation == nil {
             preparation = Task { [store, resource, writer, cacheContext] in
+                try Task.checkCancellation()
                 if let cacheContext {
                     try await store.beginCaching(resource.descriptor, writer: writer, context: cacheContext)
                     try await store.protectPlaybackRead(id: resource.descriptor.identity.id, token: writer)
@@ -53,6 +54,8 @@ actor AudioTransferCoordinator {
         if !allowed, activeIsCompletion { active?.cancel() }
         wakeWaiters()
     }
+
+    func failureReason() -> Error? { failure }
 
     /// Returns a contiguous available prefix, never sparse/unreceived bytes.
     func read(at offset: Int64, maximum: Int, forCompletion: Bool = false, allowsMetered: Bool = true) async throws -> Data {

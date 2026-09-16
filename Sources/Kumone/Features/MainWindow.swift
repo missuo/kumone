@@ -103,6 +103,9 @@ struct MainWindow: View {
         )
         #endif
         .playerChrome(detailWidth: detailWidth)
+        #if os(macOS)
+        .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }))
+        #endif
         .environment(\.openLogin, { showLogin = true })
         .environment(\.openDestination, openDestination)
         .onReceive(NotificationCenter.default.publisher(for: .showDownloadedMusic)) { _ in

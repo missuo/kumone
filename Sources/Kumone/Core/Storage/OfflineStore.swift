@@ -167,7 +167,7 @@ actor OfflineStore {
         }
         try begin(descriptor, writer: writer)
         cacheReservations[id] = remaining
-        if var record = try db.record(id: id) {
+        if !context.isPrefetch, var record = try db.record(id: id) {
             record.lastPlayed = Date()
             try db.save(record)
         }
@@ -201,7 +201,9 @@ actor OfflineStore {
                 && context.protectedTracks[$0.descriptor.identity.accountScope]?.contains($0.descriptor.identity.trackID) != true
         }.sorted {
             if priority($0) != priority($1) { return priority($0) < priority($1) }
-            return ($0.lastPlayed ?? .distantPast) < ($1.lastPlayed ?? .distantPast)
+            if ($0.lastPlayed == nil) != ($1.lastPlayed == nil) { return $0.lastPlayed == nil }
+            return ($0.lastPlayed ?? $0.verifiedModificationDate ?? .distantPast)
+                < ($1.lastPlayed ?? $1.verifiedModificationDate ?? .distantPast)
         }
         for record in candidates {
             let enoughDisk = try freeSpace(directory) - pending - reserved >= minimumFreeBytes
@@ -299,14 +301,7 @@ actor OfflineStore {
 
     func acquire(accountScope: String, trackID: Int, preferredQuality: String) throws -> OfflinePlaybackLease? {
         let db = try preparedDatabase()
-        let records = try db.records(scope: accountScope, trackID: trackID)
-            .filter { $0.state == .complete && $0.descriptor.identity.source == "netease" }
-            .sorted {
-                let qualities = ["standard", "higher", "exhigh", "lossless", "hires"]
-                let lhs = $0.descriptor.identity.quality, rhs = $1.descriptor.identity.quality
-                if (lhs == preferredQuality) != (rhs == preferredQuality) { return lhs == preferredQuality }
-                return (qualities.firstIndex(of: lhs) ?? -1) > (qualities.firstIndex(of: rhs) ?? -1)
-            }
+        let records = try playbackRecords(accountScope: accountScope, trackID: trackID, preferredQuality: preferredQuality)
         for candidate in records {
             guard var record = try availableRecord(candidate, database: db) else { continue }
             let url = audioURL(record)
@@ -317,6 +312,25 @@ actor OfflineStore {
             return OfflinePlaybackLease(token: token, descriptor: record.descriptor, url: url)
         }
         return nil
+    }
+
+    func availableDescriptor(accountScope: String, trackID: Int, preferredQuality: String) throws -> OfflineAudioDescriptor? {
+        let db = try preparedDatabase()
+        for candidate in try playbackRecords(accountScope: accountScope, trackID: trackID, preferredQuality: preferredQuality) {
+            if let record = try availableRecord(candidate, database: db) { return record.descriptor }
+        }
+        return nil
+    }
+
+    private func playbackRecords(accountScope: String, trackID: Int, preferredQuality: String) throws -> [OfflineAudioRecord] {
+        try preparedDatabase().records(scope: accountScope, trackID: trackID)
+            .filter { $0.state == .complete && $0.descriptor.identity.source == "netease" }
+            .sorted {
+                let qualities = ["standard", "higher", "exhigh", "lossless", "hires"]
+                let lhs = $0.descriptor.identity.quality, rhs = $1.descriptor.identity.quality
+                if (lhs == preferredQuality) != (rhs == preferredQuality) { return lhs == preferredQuality }
+                return (qualities.firstIndex(of: lhs) ?? -1) > (qualities.firstIndex(of: rhs) ?? -1)
+            }
     }
 
     private func availableRecord(_ candidate: OfflineAudioRecord, database db: OfflineAudioDatabase) throws -> OfflineAudioRecord? {
