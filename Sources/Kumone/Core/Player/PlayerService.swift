@@ -168,6 +168,14 @@ final class PlayerService: ObservableObject {
 
     var hasCurrentTrack: Bool { currentTrack != nil }
 
+    var offlineListeningSnapshot: OfflineListeningSnapshot {
+        let following = repeatMode == .one && !isFMMode ? [] : nextCandidates
+        let anchor = activeQueue.indices.contains(currentIndex) && activeQueue[currentIndex].id == currentTrack?.id ? currentIndex : nil
+        return .init(scope: offlineAccountScope,
+                     tracks: CommutePlanner.orderedTracks(current: currentTrack, next: following, currentQueueIndex: anchor),
+                     quality: SettingsManager.shared.audioQuality.rawValue)
+    }
+
     // MARK: - Engine
 
     private let engine = AVPlayer()
@@ -323,7 +331,7 @@ final class PlayerService: ObservableObject {
     ///   lists that place in the Dock menu's recently played section; callers
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
-              context: PlayContext? = nil) {
+              context: PlayContext? = nil, orderedStartIndex: Int? = nil, resumeAt: TimeInterval = 0) {
         guard !tracks.isEmpty else { return }
         if networkState.connected { offlineOnly = false }
         if let context { recordRecent(context) }
@@ -332,13 +340,17 @@ final class PlayerService: ObservableObject {
         self.source = source
         playNextList.removeAll()
         let startTrack = track ?? tracks[0]
-        if shuffleEnabled {
+        if let index = orderedStartIndex {
+            shuffleEnabled = false
+            shuffledQueue = []
+            currentIndex = min(max(0, index), tracks.count - 1)
+        } else if shuffleEnabled {
             reshuffle(keeping: startTrack)
             currentIndex = 0
         } else {
             currentIndex = tracks.firstIndex(where: { $0.id == startTrack.id }) ?? 0
         }
-        startPlaying(activeQueue[currentIndex], autoAdvance: track == nil && tracks.count > 1)
+        startPlaying(activeQueue[currentIndex], resumeAt: resumeAt, autoAdvance: track == nil && tracks.count > 1)
     }
 
     func playTrack(_ track: Track) {
@@ -474,6 +486,10 @@ final class PlayerService: ObservableObject {
 
     /// Jump to a track in the upcoming list (queue panel click).
     func jumpTo(_ track: Track) {
+        if let index = nextCandidates.firstIndex(where: { $0.track.id == track.id }) {
+            jumpToUpcoming(at: index, matching: track.id)
+            return
+        }
         if networkState.connected { offlineOnly = false }
         if let nextIdx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.removeSubrange(0...nextIdx)
@@ -486,20 +502,42 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    /// Queue rows carry their occurrence, so a repeated song selects the row
+    /// the listener clicked rather than jumping back to its first occurrence.
+    func jumpToUpcoming(at index: Int, matching trackID: Int) {
+        let candidates = nextCandidates
+        guard candidates.indices.contains(index), candidates[index].track.id == trackID else { return }
+        if networkState.connected { offlineOnly = false }
+        let selected = candidates[index]
+        switch selected.origin {
+        case .inserted(let offset): playNextList.removeSubrange(0...offset)
+        case .queue(let offset): playNextList.removeAll(); currentIndex = offset
+        case .fm(let offset): fmUpcoming.removeSubrange(0...offset)
+        }
+        startPlaying(selected.track)
+    }
+
     func removeFromUpcoming(_ track: Track) {
-        defer { persistState() }
-        let anchor = activeQueue.indices.contains(currentIndex) ? activeQueue[currentIndex].id : nil
-        if let idx = playNextList.firstIndex(where: { $0.id == track.id }) {
-            playNextList.remove(at: idx)
-            return
+        guard let index = nextCandidates.firstIndex(where: { $0.track.id == track.id }) else { return }
+        removeUpcoming(at: index, matching: track.id)
+    }
+
+    func removeUpcoming(at index: Int, matching trackID: Int) {
+        let candidates = nextCandidates
+        guard candidates.indices.contains(index), candidates[index].track.id == trackID else { return }
+        let selected = candidates[index]
+        switch selected.origin {
+        case .inserted(let offset): playNextList.remove(at: offset)
+        case .fm(let offset): fmUpcoming.remove(at: offset)
+        case .queue(let offset):
+            guard offset != currentIndex else { return }
+            if shuffleEnabled {
+                shuffledQueue.remove(at: offset)
+                if let original = queue.firstIndex(where: { $0.id == selected.track.id }) { queue.remove(at: original) }
+            } else { queue.remove(at: offset) }
+            if offset < currentIndex { currentIndex -= 1 }
         }
-        if let idx = queue.firstIndex(where: { $0.id == track.id }), idx != currentIndex || shuffleEnabled {
-            queue.remove(at: idx)
-        }
-        if let idx = shuffledQueue.firstIndex(where: { $0.id == track.id }) {
-            shuffledQueue.remove(at: idx)
-        }
-        if let anchor, let index = activeQueue.firstIndex(where: { $0.id == anchor }) { currentIndex = index }
+        persistState()
     }
 
     // MARK: - Personal FM
@@ -1067,7 +1105,8 @@ final class PlayerService: ObservableObject {
     // MARK: - Shuffle helpers
 
     private func reshuffle(keeping first: Track) {
-        var rest = queue.filter { $0.id != first.id }
+        var rest = queue
+        if let index = rest.firstIndex(where: { $0.id == first.id }) { rest.remove(at: index) }
         rest.shuffle()
         shuffledQueue = [first] + rest
     }

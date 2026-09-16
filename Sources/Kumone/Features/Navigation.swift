@@ -75,6 +75,7 @@ enum SidebarItem: Hashable {
 
 enum Destination: Hashable {
     case downloaded, downloadTasks
+    case downloadedCollection(String)
     case playlist(Int)
     case radarPlaylist(Int)
     case album(Int)
@@ -102,6 +103,8 @@ struct DestinationsModifier: ViewModifier {
                 switch destination {
                 case .downloaded:
                     DownloadedMusicView()
+                case .downloadedCollection(let id):
+                    DownloadedMusicView(collectionID: id)
                 case .downloadTasks:
                     DownloadTasksView()
                 case .playlist(let id):

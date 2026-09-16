@@ -325,7 +325,7 @@ struct NowPlayingView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 } else if showQueueOnMobile {
                     #if os(iOS)
-                    CompactQueueContent()
+                    CompactQueueContent { onOpenDestination(.downloadedCollection($0)) }
                         .transition(.opacity)
                     #else
                     lyricsColumn
@@ -425,7 +425,7 @@ struct NowPlayingView: View {
                     .accessibilityHidden(!showsExpandedArtwork)
 
                 if showQueueOnMobile {
-                    CompactQueueContent()
+                    CompactQueueContent { onOpenDestination(.downloadedCollection($0)) }
                         .transition(.opacity)
                 } else {
                     IOSImmersiveLyricsColumn()
@@ -633,7 +633,7 @@ struct NowPlayingView: View {
             MinimalTransportControls(
                 backdrop: colors,
                 showQueue: $showQueueOnMobile,
-                onDownloads: { onOpenDestination(.downloaded) }
+                onOpenDestination: onOpenDestination
             )
                 .padding(.horizontal, 2)
         }
@@ -1471,6 +1471,7 @@ private struct CompactSecondaryControls: View {
 
 private struct CompactQueueContent: View {
     @EnvironmentObject private var player: PlayerService
+    let onOpenCollection: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -1503,6 +1504,8 @@ private struct CompactQueueContent: View {
                 }
             }
 
+            OfflineQueuePreparationView(onOpenCollection: onOpenCollection)
+
             HStack(alignment: .firstTextBaseline) {
                 Text("继续播放")
                     .font(.title3.weight(.bold))
@@ -1528,8 +1531,8 @@ private struct CompactQueueContent: View {
                         ForEach(
                             Array(player.upcomingTracks.prefix(100).enumerated()),
                             id: \.offset
-                        ) { _, track in
-                            CompactQueueRow(track: track)
+                        ) { index, track in
+                            CompactQueueRow(track: track, upcomingIndex: index)
                         }
                     }
                 }
@@ -1576,12 +1579,13 @@ private struct CompactQueueContent: View {
 
 private struct CompactQueueRow: View {
     let track: Track
+    let upcomingIndex: Int
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            player.jumpTo(track)
+            player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
         } label: {
             HStack(spacing: 11) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
@@ -2084,7 +2088,7 @@ private struct MinimalTransportControls: View {
     @EnvironmentObject private var player: PlayerService
     let backdrop: ArtworkColors
     @Binding var showQueue: Bool
-    let onDownloads: () -> Void
+    let onOpenDestination: (Destination) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2130,7 +2134,7 @@ private struct MinimalTransportControls: View {
             queueSheet
                 .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
                     showQueue = false
-                    onDownloads()
+                    onOpenDestination(.downloaded)
                 }, enabled: showQueue && player.showNowPlaying))
         }
     }
@@ -2138,13 +2142,18 @@ private struct MinimalTransportControls: View {
     @ViewBuilder
     private var queueSheet: some View {
         if #available(iOS 16.4, *) {
-            MinimalQueueSheet(backdrop: backdrop)
+            MinimalQueueSheet(backdrop: backdrop, onOpenCollection: openCollection)
                 .presentationDetents([.fraction(0.5)])
                 .presentationBackgroundInteraction(.enabled)
         } else {
-            MinimalQueueSheet(backdrop: backdrop)
+            MinimalQueueSheet(backdrop: backdrop, onOpenCollection: openCollection)
                 .presentationDetents([.fraction(0.5)])
         }
+    }
+
+    private func openCollection(_ id: String) {
+        showQueue = false
+        onOpenDestination(.downloadedCollection(id))
     }
 
     @ViewBuilder
@@ -2192,12 +2201,15 @@ private struct MinimalTransportControls: View {
 private struct MinimalQueueSheet: View {
     @EnvironmentObject private var player: PlayerService
     let backdrop: ArtworkColors
+    let onOpenCollection: (String) -> Void
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 2) {
                     if let current = player.currentTrack {
+                        OfflineQueuePreparationView(onOpenCollection: onOpenCollection)
+                            .padding(.bottom, 8)
                         MinimalQueueSectionLabel("正在播放")
                         MinimalQueueRow(track: current, isCurrent: true)
 
@@ -2207,8 +2219,8 @@ private struct MinimalQueueSheet: View {
                             ForEach(
                                 Array(player.upcomingTracks.prefix(100).enumerated()),
                                 id: \.offset
-                            ) { _, track in
-                                MinimalQueueRow(track: track, isCurrent: false)
+                            ) { index, track in
+                                MinimalQueueRow(track: track, isCurrent: false, upcomingIndex: index)
                             }
                         }
                     } else {
@@ -2269,13 +2281,15 @@ private struct MinimalQueueSectionLabel: View {
 private struct MinimalQueueRow: View {
     let track: Track
     let isCurrent: Bool
+    var upcomingIndex: Int? = nil
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
             guard !isCurrent else { return }
-            player.jumpTo(track)
+            if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
+            else { player.jumpTo(track) }
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)

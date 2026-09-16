@@ -164,6 +164,7 @@ struct LyricsPanel: View {
 
 struct QueuePanel: View {
     @EnvironmentObject private var player: PlayerService
+    @Environment(\.openDestination) private var openDestination
 
     var body: some View {
         VStack(spacing: 0) {
@@ -172,6 +173,11 @@ struct QueuePanel: View {
             if let current = player.currentTrack {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 2) {
+                        OfflineQueuePreparationView {
+                            player.activePanel = nil
+                            openDestination(.downloadedCollection($0))
+                        }
+                            .padding(.bottom, 8)
                         sectionLabel("正在播放")
                         QueueRow(track: current, isCurrent: true)
 
@@ -179,8 +185,8 @@ struct QueuePanel: View {
                             sectionLabel("即将播放")
                                 .padding(.top, 10)
                             ForEach(Array(player.upcomingTracks.prefix(100).enumerated()),
-                                    id: \.offset) { _, track in
-                                QueueRow(track: track, isCurrent: false)
+                                    id: \.offset) { index, track in
+                                QueueRow(track: track, isCurrent: false, upcomingIndex: index)
                             }
                         }
                     }
@@ -236,6 +242,7 @@ struct QueuePanel: View {
 private struct QueueRow: View {
     let track: Track
     let isCurrent: Bool
+    var upcomingIndex: Int? = nil
 
     @EnvironmentObject private var player: PlayerService
     @State private var isHovering = false
@@ -243,7 +250,8 @@ private struct QueueRow: View {
     var body: some View {
         Button {
             guard !isCurrent else { return }
-            player.jumpTo(track)
+            if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
+            else { player.jumpTo(track) }
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
@@ -264,7 +272,8 @@ private struct QueueRow: View {
                     PlayingIndicator(animating: player.isPlaying)
                 } else if isHovering {
                     Button {
-                        player.removeFromUpcoming(track)
+                        if let upcomingIndex { player.removeUpcoming(at: upcomingIndex, matching: track.id) }
+                        else { player.removeFromUpcoming(track) }
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .semibold))

@@ -30,6 +30,9 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var network = DownloadNetworkState.unknown
     var downloadedTracks: [OfflineLibraryTrack] { offlineTracks.filter(\.isDownloaded) }
+    var commuteCollections: [DownloadCollection] {
+        collections.filter { $0.preparation != nil }.sorted { $0.savedAt > $1.savedAt }
+    }
     var pendingJobs: [DownloadJob] {
         jobs.filter { !$0.owners.isEmpty && $0.status != .complete && $0.status != .cancelled }
     }
@@ -42,6 +45,13 @@ final class DownloadManager: ObservableObject {
         guard let collectionID else { return downloadedTracks.map(\.track) }
         guard let collection = collections.first(where: { $0.id == collectionID }) else { return [] }
         let available = Set(downloadedTracks.map(\.id))
+        if collection.preparation != nil {
+            let assetIDs = Set(offlineTracks.flatMap(\.assets).map(\.id))
+            let readyIDs = Set(jobs.filter {
+                $0.owners.contains(collection.id) && $0.status == .complete && $0.assetID.map(assetIDs.contains) == true
+            }.map { $0.track.id })
+            return collection.tracks.filter { readyIDs.contains($0.id) }
+        }
         var seen: Set<Int> = []
         return collection.tracks.filter { available.contains($0.id) && seen.insert($0.id).inserted }
     }
@@ -158,23 +168,28 @@ final class DownloadManager: ObservableObject {
         await enqueue(tracks: [track], owner: "single:\(track.id)", name: nil, quality: quality, allowsMetered: allowsMetered)
     }
 
-    func enqueue(tracks: [Track], owner: String, name: String?, quality: String, allowsMetered: Bool) async {
+    @discardableResult
+    func enqueue(tracks: [Track], owner: String, name: String?, quality: String, allowsMetered: Bool,
+                 preparation: CommutePreparation? = nil, expectedScope: String? = nil) async -> Bool {
+        let requestedScope = expectedScope ?? accountScope
         await start()
-        guard isReady, let scope = accountScope else {
-            errorMessage = String(localized: "登录后即可下载歌曲")
-            return
+        guard isReady, let scope = accountScope, scope == requestedScope else {
+            if accountScope == requestedScope { errorMessage = String(localized: "登录后即可下载歌曲") }
+            return false
         }
-        guard !tracks.isEmpty else { return }
+        guard !tracks.isEmpty else { return false }
         if let name {
             catalog.collections.removeAll { $0.id == owner && $0.accountScope == scope }
-            catalog.collections.append(.init(id: owner, accountScope: scope, name: name, tracks: tracks, savedAt: Date()))
+            catalog.collections.append(.init(id: owner, accountScope: scope, name: name, tracks: tracks,
+                                             savedAt: Date(), preparation: preparation))
         }
         var seen: Set<Int> = []
         for track in tracks where seen.insert(track.id).inserted {
             if let i = catalog.jobs.firstIndex(where: { $0.accountScope == scope && $0.track.id == track.id && $0.quality == quality }) {
+                let keepNetworkPreference = preparation != nil && catalog.jobs[i].owners.contains(owner)
                 catalog.jobs[i].owners.insert(owner)
                 if [.cancelled, .failed, .unavailable].contains(catalog.jobs[i].status) {
-                    catalog.jobs[i].allowsMetered = allowsMetered
+                    if !keepNetworkPreference { catalog.jobs[i].allowsMetered = allowsMetered }
                     catalog.jobs[i].status = .queued
                     catalog.jobs[i].errorMessage = nil
                     catalog.jobs[i].retries = 0
@@ -190,8 +205,61 @@ final class DownloadManager: ObservableObject {
             }
         }
         publish()
-        do { try await persist(); schedule() }
-        catch { errorMessage = String(localized: "无法保存下载任务") }
+        do { try await persist(); errorMessage = nil; schedule(); return true }
+        catch { errorMessage = String(localized: "无法保存下载任务"); return false }
+    }
+
+    func prepareCommute(_ plan: CommutePlan) async throws -> String {
+        await start()
+        guard isReady, accountScope == plan.scope, !plan.tracks.isEmpty else { throw OfflineAudioError.unavailable }
+        await refreshLibrary()
+        guard accountScope == plan.scope else { throw CancellationError() }
+        let existing = catalog.collections.first { CommutePlanner.matches($0, plan: plan) }
+        let owner = existing?.id ?? "commute:\(UUID().uuidString)"
+        let stamp = Date().formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
+        let baseName = String(localized: "通勤准备 · \(stamp)")
+        var name = existing?.name ?? baseName
+        if existing == nil {
+            var number = 2
+            while catalog.collections.contains(where: { $0.accountScope == plan.scope && $0.name == name }) {
+                name = "\(baseName) (\(number))"
+                number += 1
+            }
+        }
+        let saved = await enqueue(tracks: plan.tracks, owner: owner, name: name, quality: plan.preparation.quality,
+                                  allowsMetered: false, preparation: plan.preparation,
+                                  expectedScope: plan.scope)
+        guard saved else {
+            if existing == nil, accountScope == plan.scope { await removeCollection(owner) }
+            throw OfflineAudioError.database("Unable to save commute preparation")
+        }
+        guard accountScope == plan.scope else { throw CancellationError() }
+        let resumable = jobs.filter { $0.owners.contains(owner) && $0.status.canResume }.map(\.id)
+        for id in resumable {
+            guard accountScope == plan.scope else { throw CancellationError() }
+            await resume(id)
+        }
+        return owner
+    }
+
+    func progress(for collection: DownloadCollection) -> DownloadCollectionProgress {
+        guard collection.accountScope == accountScope else {
+            return .init(completed: 0, total: collection.tracks.count, readySeconds: 0, waiting: false, hasFailures: false)
+        }
+        let members = jobs.filter { $0.owners.contains(collection.id) }
+        let assets = Dictionary(offlineTracks.flatMap(\.assets).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var complete = 0
+        var seconds: TimeInterval = 0
+        for (index, track) in collection.tracks.enumerated() {
+            guard let job = members.first(where: { $0.track.id == track.id && $0.status == .complete }),
+                  let id = job.assetID, let asset = assets[id] else { continue }
+            complete += 1
+            let offset = index == 0 ? collection.preparation?.firstTrackOffset ?? 0 : 0
+            seconds += max(0, asset.descriptor.duration - offset)
+        }
+        return .init(completed: complete, total: collection.tracks.count, readySeconds: seconds,
+                     waiting: members.contains { $0.status == .waitingNetwork },
+                     hasFailures: members.contains { [.failed, .unavailable, .cancelled].contains($0.status) })
     }
 
     func pause(_ id: UUID) async {
@@ -252,13 +320,16 @@ final class DownloadManager: ObservableObject {
     }
 
     func removeCollection(_ owner: String) async {
-        let ids = catalog.jobs.filter { $0.accountScope == accountScope && $0.owners.contains(owner) }.map(\.id)
-        catalog.collections.removeAll { $0.accountScope == accountScope && $0.id == owner }
+        guard let scope = accountScope else { return }
+        let ids = catalog.jobs.filter { $0.accountScope == scope && $0.owners.contains(owner) }.map(\.id)
         for id in ids {
+            guard accountScope == scope else { return }
             guard let i = index(id) else { continue }
             catalog.jobs[i].owners.remove(owner)
             if catalog.jobs[i].owners.isEmpty { await cancel(id) }
         }
+        guard accountScope == scope else { return }
+        catalog.collections.removeAll { $0.accountScope == scope && $0.id == owner }
         publish()
         try? await persist()
     }

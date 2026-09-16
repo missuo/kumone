@@ -66,6 +66,16 @@ struct DownloadCollection: Codable, Identifiable {
     let name: String
     let tracks: [Track]
     let savedAt: Date
+    var preparation: CommutePreparation? = nil
+}
+
+struct DownloadCollectionProgress {
+    let completed: Int
+    let total: Int
+    let readySeconds: TimeInterval
+    let waiting: Bool
+    let hasFailures: Bool
+    var isComplete: Bool { total > 0 && completed == total }
 }
 
 struct OfflineLibraryTrack: Identifiable {

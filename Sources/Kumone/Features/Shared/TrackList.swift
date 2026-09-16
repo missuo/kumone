@@ -27,6 +27,7 @@ struct TrackRow: View {
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
     var onRecommendationReduced: ((Track) -> Void)?
+    var isCurrentOccurrence: Bool? = nil
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -41,7 +42,7 @@ struct TrackRow: View {
     @State private var isReducingRecommendation = false
     @ObservedObject private var downloads = DownloadManager.shared
 
-    private var isCurrent: Bool { player.currentTrack?.id == track.id }
+    private var isCurrent: Bool { isCurrentOccurrence ?? (player.currentTrack?.id == track.id) }
     private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracks.first { $0.id == track.id } }
     private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
     private var showsArtwork: Bool { style != .albumTrack }
@@ -546,13 +547,30 @@ struct TrackListView: View {
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
+    var onPlayAtIndex: ((Int) -> Void)?
+
+    private struct Row: Identifiable {
+        enum ID: Hashable { case track(Int), occurrence(Int) }
+        let id: ID
+        let index: Int
+        let track: Track
+    }
+
+    private var rows: [Row] {
+        tracks.enumerated().map { index, track in
+            .init(id: onPlayAtIndex == nil ? .track(track.id) : .occurrence(index), index: index, track: track)
+        }
+    }
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         LazyVStack(spacing: 1) {
-            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            let matchingQueue = onPlayAtIndex != nil && player.activeQueue.map(\.id) == tracks.map(\.id)
+            ForEach(rows) { row in
+                let track = row.track
+                let index = row.index
                 let recommendationHandler = onRecommendationReduced
                 TrackRow(
                     track: track,
@@ -563,10 +581,13 @@ struct TrackListView: View {
                     onRemoved: { onRemoved?(track) },
                     onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
                         ? nil
-                        : { replacement in recommendationHandler?(track, replacement) }
+                        : { replacement in recommendationHandler?(track, replacement) },
+                    isCurrentOccurrence: matchingQueue ? (player.currentIndex == index && player.currentTrack?.id == track.id) : nil
                 ) {
-                    player.play(tracks: playableTracks, source: source, startAt: track,
-                                context: context)
+                    if let onPlayAtIndex { onPlayAtIndex(index) }
+                    else {
+                        player.play(tracks: playableTracks, source: source, startAt: track, context: context)
+                    }
                 }
             }
         }
