@@ -325,7 +325,7 @@ struct NowPlayingView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 } else if showQueueOnMobile {
                     #if os(iOS)
-                    CompactQueueContent { onOpenDestination(.downloadedCollection($0)) }
+                    CompactQueueContent()
                         .transition(.opacity)
                     #else
                     lyricsColumn
@@ -425,7 +425,7 @@ struct NowPlayingView: View {
                     .accessibilityHidden(!showsExpandedArtwork)
 
                 if showQueueOnMobile {
-                    CompactQueueContent { onOpenDestination(.downloadedCollection($0)) }
+                    CompactQueueContent()
                         .transition(.opacity)
                 } else {
                     IOSImmersiveLyricsColumn()
@@ -1471,7 +1471,6 @@ private struct CompactSecondaryControls: View {
 
 private struct CompactQueueContent: View {
     @EnvironmentObject private var player: PlayerService
-    let onOpenCollection: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -1503,8 +1502,6 @@ private struct CompactQueueContent: View {
                     player.repeatMode = player.repeatMode == .one ? .off : .one
                 }
             }
-
-            OfflineQueuePreparationView(onOpenCollection: onOpenCollection)
 
             HStack(alignment: .firstTextBaseline) {
                 Text("继续播放")
@@ -2142,18 +2139,13 @@ private struct MinimalTransportControls: View {
     @ViewBuilder
     private var queueSheet: some View {
         if #available(iOS 16.4, *) {
-            MinimalQueueSheet(backdrop: backdrop, onOpenCollection: openCollection)
+            MinimalQueueSheet(backdrop: backdrop)
                 .presentationDetents([.fraction(0.5)])
                 .presentationBackgroundInteraction(.enabled)
         } else {
-            MinimalQueueSheet(backdrop: backdrop, onOpenCollection: openCollection)
+            MinimalQueueSheet(backdrop: backdrop)
                 .presentationDetents([.fraction(0.5)])
         }
-    }
-
-    private func openCollection(_ id: String) {
-        showQueue = false
-        onOpenDestination(.downloadedCollection(id))
     }
 
     @ViewBuilder
@@ -2201,15 +2193,12 @@ private struct MinimalTransportControls: View {
 private struct MinimalQueueSheet: View {
     @EnvironmentObject private var player: PlayerService
     let backdrop: ArtworkColors
-    let onOpenCollection: (String) -> Void
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 2) {
                     if let current = player.currentTrack {
-                        OfflineQueuePreparationView(onOpenCollection: onOpenCollection)
-                            .padding(.bottom, 8)
                         MinimalQueueSectionLabel("正在播放")
                         MinimalQueueRow(track: current, isCurrent: true)
 

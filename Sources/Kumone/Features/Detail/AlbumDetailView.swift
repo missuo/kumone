@@ -187,7 +187,6 @@ struct AlbumDetailView: View {
 
             // Compact Action Bar
             HStack(spacing: 10) {
-                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
                 Button {
                     player.play(tracks: tracks, source: .album(albumID),
                                 context: .album(id: albumID, name: album.name))
@@ -204,6 +203,8 @@ struct AlbumDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+
+                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
 
                 if account.isLoggedIn {
                     Button {
@@ -277,7 +278,6 @@ struct AlbumDetailView: View {
                 Spacer(minLength: 4)
 
                 HStack(spacing: 10) {
-                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name)
                     Button {
                         player.play(tracks: tracks, source: .album(albumID),
                                 context: .album(id: albumID, name: album.name))
@@ -291,6 +291,8 @@ struct AlbumDetailView: View {
                             .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                     }
                     .buttonStyle(.pressable)
+
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name)
 
                     if account.isLoggedIn {
                         Button {

@@ -168,14 +168,6 @@ final class PlayerService: ObservableObject {
 
     var hasCurrentTrack: Bool { currentTrack != nil }
 
-    var offlineListeningSnapshot: OfflineListeningSnapshot {
-        let following = repeatMode == .one && !isFMMode ? [] : nextCandidates
-        let anchor = activeQueue.indices.contains(currentIndex) && activeQueue[currentIndex].id == currentTrack?.id ? currentIndex : nil
-        return .init(scope: offlineAccountScope,
-                     tracks: CommutePlanner.orderedTracks(current: currentTrack, next: following, currentQueueIndex: anchor),
-                     quality: SettingsManager.shared.audioQuality.rawValue)
-    }
-
     // MARK: - Engine
 
     private let engine = AVPlayer()
@@ -331,7 +323,7 @@ final class PlayerService: ObservableObject {
     ///   lists that place in the Dock menu's recently played section; callers
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
-              context: PlayContext? = nil, orderedStartIndex: Int? = nil, resumeAt: TimeInterval = 0) {
+              context: PlayContext? = nil) {
         guard !tracks.isEmpty else { return }
         if networkState.connected { offlineOnly = false }
         if let context { recordRecent(context) }
@@ -340,17 +332,13 @@ final class PlayerService: ObservableObject {
         self.source = source
         playNextList.removeAll()
         let startTrack = track ?? tracks[0]
-        if let index = orderedStartIndex {
-            shuffleEnabled = false
-            shuffledQueue = []
-            currentIndex = min(max(0, index), tracks.count - 1)
-        } else if shuffleEnabled {
+        if shuffleEnabled {
             reshuffle(keeping: startTrack)
             currentIndex = 0
         } else {
             currentIndex = tracks.firstIndex(where: { $0.id == startTrack.id }) ?? 0
         }
-        startPlaying(activeQueue[currentIndex], resumeAt: resumeAt, autoAdvance: track == nil && tracks.count > 1)
+        startPlaying(activeQueue[currentIndex], autoAdvance: track == nil && tracks.count > 1)
     }
 
     func playTrack(_ track: Track) {

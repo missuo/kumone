@@ -20,7 +20,7 @@ struct OfflineUIFixtureTests {
         let metadata = OfflineMetadataStore(directory: root.appendingPathComponent("Offline/metadata"))
         func track(_ id: Int, _ name: String) throws -> Track {
             try JSONDecoder().decode(Track.self, from: Data("""
-            {"id":\(id),"name":"\(name)","dt":3000,"ar":[{"id":1,"name":"Kumone 测试音频"}],"al":{"id":1,"name":"通勤歌单","picUrl":"https://example.test/cover.png"}}
+            {"id":\(id),"name":"\(name)","dt":3000,"ar":[{"id":1,"name":"Kumone 测试音频"}],"al":{"id":1,"name":"测试歌单","picUrl":"https://example.test/cover.png"}}
             """.utf8))
         }
         let tracks = try [track(1, "地铁离线播放 · 測試曲"), track(2, "等待继续下载的歌曲"), track(3, "需要重试的歌曲"), track(4, "已缓存的歌曲")]
@@ -58,7 +58,7 @@ struct OfflineUIFixtureTests {
             }
             if index < 3 { catalog.jobs.append(job) }
         }
-        catalog.collections = [.init(id: "playlist:987", accountScope: scope, name: "纽约地铁通勤", tracks: Array(tracks.prefix(3)), savedAt: Date())]
+        catalog.collections = [.init(id: "playlist:987", accountScope: scope, name: "离线测试歌单", tracks: Array(tracks.prefix(3)), savedAt: Date())]
         try await DownloadCatalogStore(directory: root.appendingPathComponent("Offline/downloads")).save(catalog)
         if let source = ProcessInfo.processInfo.environment["KUMONE_UI_AUTOMATIC_SOURCE"], let url = URL(string: source) {
             let fixture = try OfflineAudioFixture()

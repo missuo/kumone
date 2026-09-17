@@ -110,89 +110,21 @@ private final class DownloadRestoreGate {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
-    @Test func retryingACommutePreservesAnExplicitNetworkOverride() async throws {
-        let h = try DownloadHarness(expensive: true)
-        defer { h.close() }
-        let plan = try #require(CommutePlanner.plan(.init(scope: "test-account", tracks: [h.track], quality: "exhigh"), progress: 0))
-        var catalog = DownloadCatalog()
-        let owner = "commute:existing"
-        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: owner, allowsMetered: true)
-        job.status = .failed
-        catalog.jobs = [job]
-        catalog.collections = [.init(id: owner, accountScope: "test-account", name: "Commute", tracks: [h.track], savedAt: Date(), preparation: plan.preparation)]
-        try await h.persistence.save(catalog)
-        let id = try await h.manager.prepareCommute(plan)
-        try await waitForDownload { h.transport.started.count == 1 }
-        #expect(id == owner && h.transport.started[0].metered)
-    }
-
-    @Test func commutePreparationCannotCrossAnAccountChangeDuringRestore() async throws {
+    @Test func enqueueCannotCrossAnAccountChangeDuringRestore() async throws {
         let h = try DownloadHarness()
         defer { h.close() }
         let gate = DownloadRestoreGate()
         h.transport.beforeRestore = { await gate.wait() }
-        let plan = try #require(CommutePlanner.plan(.init(scope: "test-account", tracks: [h.track], quality: "exhigh"), progress: 0))
-        let creation = Task { try await h.manager.prepareCommute(plan) }
+        let creation = Task {
+            await h.manager.enqueue(tracks: [h.track], owner: "playlist:1", name: "Saved playlist",
+                                    quality: "exhigh", allowsMetered: false)
+        }
         try await waitForDownload { gate.entered }
         h.manager.activate(accountScope: "other-account")
         gate.open()
-        await #expect(throws: (any Error).self) { try await creation.value }
-        #expect(h.manager.jobs.isEmpty && h.manager.commuteCollections.isEmpty && h.transport.started.isEmpty)
+        #expect(await creation.value == false)
         let saved = try await h.persistence.load()
-        #expect(saved.collections.isEmpty && saved.jobs.isEmpty)
-    }
-
-    @Test func commutePreparationReusesCachesPersistsOrderAndProtectsOtherDownloads() async throws {
-        let h = try DownloadHarness(online: false)
-        defer { h.close() }
-        let second = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Second\",\"dt\":3000}".utf8))
-        for track in [h.track, second] {
-            let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account")
-            let writer = UUID()
-            try await h.store.begin(resource.descriptor, writer: writer)
-            try await h.store.write(h.fixture.data, at: 0, id: resource.descriptor.identity.id, writer: writer)
-            try await h.store.finalize(id: resource.descriptor.identity.id, writer: writer)
-            await h.store.releaseWriter(id: resource.descriptor.identity.id, writer: writer)
-        }
-        let snapshot = OfflineListeningSnapshot(scope: "test-account", tracks: [h.track, second, h.track], quality: "exhigh")
-        let plan = try #require(CommutePlanner.plan(snapshot, progress: 1, target: 6))
-        let id = try await h.manager.prepareCommute(plan)
-        try await waitForDownload { h.manager.commuteCollections.first.map { h.manager.progress(for: $0).isComplete } == true }
-        let saved = try #require(h.manager.commuteCollections.first)
-        #expect(h.manager.downloadedSongs(in: id).map(\.id) == [1, 2, 1])
-        #expect(h.manager.progress(for: saved).readySeconds == 8)
-        #expect(h.transport.started.isEmpty)
-        let again = try await h.manager.prepareCommute(try #require(CommutePlanner.plan(snapshot, progress: 1.5, target: 6)))
-        #expect(again == id && h.manager.commuteCollections.count == 1)
-        let reopened = try await DownloadCatalogStore(directory: h.persistence.directory).load()
-        #expect(reopened.collections.first?.preparation?.firstTrackOffset == 1.5)
-        #expect(h.manager.commuteCollections.first.map { h.manager.progress(for: $0).readySeconds } == 7.5)
-        #expect(reopened.collections.first?.tracks.map(\.id) == [1, 2, 1])
-        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: false)
-        await h.manager.removeCollection(id)
-        #expect(h.manager.commuteCollections.isEmpty)
-        #expect(h.manager.downloadedSongs().map(\.id) == [1])
-        #expect(try await h.store.availableRecords(accountScope: "test-account").count == 2)
-    }
-
-    @Test func partialCommutePreparationNeverClaimsTheTargetIsReady() async throws {
-        let h = try DownloadHarness(online: false)
-        defer { h.close() }
-        let plan = try #require(CommutePlanner.plan(.init(scope: "test-account", tracks: [h.track], quality: "exhigh"), progress: 0))
-        _ = try await h.manager.prepareCommute(plan)
-        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
-        let saved = try #require(h.manager.commuteCollections.first)
-        let progress = h.manager.progress(for: saved)
-        #expect(!progress.isComplete && progress.readySeconds == 0 && progress.waiting)
-        await h.manager.cancel(try #require(h.manager.jobs.first?.id))
-        let resumed = try await h.manager.prepareCommute(plan)
-        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
-        #expect(resumed == saved.id && h.manager.jobs.first?.owners.contains(saved.id) == true)
-        h.manager.activate(accountScope: "another-account")
-        #expect(h.manager.commuteCollections.isEmpty)
-        #expect(h.manager.progress(for: saved).readySeconds == 0)
-        await #expect(throws: (any Error).self) { try await h.manager.prepareCommute(plan) }
-        #expect(h.manager.jobs.isEmpty && h.transport.started.isEmpty)
+        #expect(saved.collections.isEmpty && saved.jobs.isEmpty && h.transport.started.isEmpty)
     }
 
     @Test func downloadingCurrentStreamSharesItsTransfer() async throws {

@@ -27,7 +27,6 @@ struct TrackRow: View {
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
     var onRecommendationReduced: ((Track) -> Void)?
-    var isCurrentOccurrence: Bool? = nil
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -42,7 +41,7 @@ struct TrackRow: View {
     @State private var isReducingRecommendation = false
     @ObservedObject private var downloads = DownloadManager.shared
 
-    private var isCurrent: Bool { isCurrentOccurrence ?? (player.currentTrack?.id == track.id) }
+    private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracks.first { $0.id == track.id } }
     private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
     private var showsArtwork: Bool { style != .albumTrack }
@@ -88,11 +87,9 @@ struct TrackRow: View {
                     if track.fee == 1 {
                         VIPBadge()
                     }
-                    if offlineTrack?.isDownloaded == true {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .accessibilityLabel("已下载")
-                    }
+                    #if os(macOS)
+                    if offlineTrack?.isDownloaded == true { downloadedIndicator }
+                    #endif
                 }
                 artistLinks
             }
@@ -136,6 +133,7 @@ struct TrackRow: View {
             }
 
             likeAndDuration
+                .padding(.leading, isCompact ? 12 : 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, isCompact ? 6 : 5)
@@ -263,8 +261,23 @@ struct TrackRow: View {
         .frame(width: 28)
     }
 
+    private var downloadedIndicator: some View {
+        Image(systemName: "arrow.down.circle.fill")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("已下载")
+    }
+
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
+            #if os(macOS)
+            TrackDownloadButton(track: track, isVisible: isHovering)
+            #else
+            downloadedIndicator
+                .frame(width: 16)
+                .opacity(offlineTrack?.isDownloaded == true ? 1 : 0)
+                .accessibilityHidden(offlineTrack?.isDownloaded != true)
+            #endif
             let liked = account.isLiked(track.id)
             Button {
                 Task { await account.toggleLike(trackID: track.id) }
@@ -547,30 +560,13 @@ struct TrackListView: View {
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
-    var onPlayAtIndex: ((Int) -> Void)?
-
-    private struct Row: Identifiable {
-        enum ID: Hashable { case track(Int), occurrence(Int) }
-        let id: ID
-        let index: Int
-        let track: Track
-    }
-
-    private var rows: [Row] {
-        tracks.enumerated().map { index, track in
-            .init(id: onPlayAtIndex == nil ? .track(track.id) : .occurrence(index), index: index, track: track)
-        }
-    }
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
 
     var body: some View {
         LazyVStack(spacing: 1) {
-            let matchingQueue = onPlayAtIndex != nil && player.activeQueue.map(\.id) == tracks.map(\.id)
-            ForEach(rows) { row in
-                let track = row.track
-                let index = row.index
+            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 let recommendationHandler = onRecommendationReduced
                 TrackRow(
                     track: track,
@@ -581,13 +577,10 @@ struct TrackListView: View {
                     onRemoved: { onRemoved?(track) },
                     onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
                         ? nil
-                        : { replacement in recommendationHandler?(track, replacement) },
-                    isCurrentOccurrence: matchingQueue ? (player.currentIndex == index && player.currentTrack?.id == track.id) : nil
+                        : { replacement in recommendationHandler?(track, replacement) }
                 ) {
-                    if let onPlayAtIndex { onPlayAtIndex(index) }
-                    else {
-                        player.play(tracks: playableTracks, source: source, startAt: track, context: context)
-                    }
+                    player.play(tracks: playableTracks, source: source, startAt: track,
+                                context: context)
                 }
             }
         }

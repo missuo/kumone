@@ -7,8 +7,6 @@ struct DownloadedMusicView: View {
     @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @Environment(\.openDestination) private var openDestination
-    @Environment(\.dismiss) private var dismiss
-    @State private var confirmRemovePreparation = false
 
     private var collection: DownloadCollection? { downloads.collections.first { $0.id == collectionID } }
     private var tracks: [Track] { downloads.downloadedSongs(in: collectionID) }
@@ -20,30 +18,17 @@ struct DownloadedMusicView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
-                if let collection, collection.preparation != nil {
-                    Text(downloads.progress(for: collection).summary)
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, Theme.Layout.contentInset)
-                }
-
                 if !downloads.isReady, downloads.errorMessage == nil {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
                 } else if let error = downloads.errorMessage, tracks.isEmpty {
                     EmptyStateView(icon: "exclamationmark.triangle", title: "无法读取下载", subtitle: LocalizedStringKey(error))
-                        .frame(minHeight: 300)
-                } else if tracks.isEmpty, collection?.preparation != nil {
-                    EmptyStateView(icon: "arrow.down.circle", title: "通勤歌曲尚未准备完成",
-                                   subtitle: "完整下载的歌曲会显示在这里，可在下载任务中查看进度或重试")
                         .frame(minHeight: 300)
                 } else if tracks.isEmpty {
                     EmptyStateView(icon: "arrow.down.circle", title: "还没有下载歌曲",
                                    subtitle: "在歌曲菜单或歌单页面选择下载，即可离线收听")
                         .frame(minHeight: 300)
                 } else {
-                    TrackListView(tracks: displayed, source: .none, onPlayAtIndex: collection?.preparation == nil ? nil : { index in
-                        player.play(tracks: displayed, source: .none, startAt: displayed[index], orderedStartIndex: index)
-                    })
+                    TrackListView(tracks: displayed, source: .none)
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
                 PlayerClearanceSpacer()
@@ -57,48 +42,7 @@ struct DownloadedMusicView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(collectionID == nil ? .large : .inline)
         #endif
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if collection?.preparation != nil {
-                    Menu {
-                        if let collection, !downloads.progress(for: collection).isComplete {
-                            Button("继续准备") {
-                                guard let preparation = collection.preparation,
-                                      let plan = CommutePlanner.plan(.init(scope: collection.accountScope, tracks: collection.tracks,
-                                                                          quality: preparation.quality),
-                                                                     progress: preparation.firstTrackOffset, target: preparation.targetSeconds) else { return }
-                                Task {
-                                    do { _ = try await downloads.prepareCommute(plan) }
-                                    catch {
-                                        if downloads.accountScope == collection.accountScope {
-                                            ToastCenter.shared.show(String(localized: "无法创建通勤准备，请重试"))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Button("查看下载任务") { openDestination(.downloadTasks) }
-                        Button("移除通勤准备", role: .destructive) { confirmRemovePreparation = true }
-                    } label: { Image(systemName: "ellipsis") }
-                    .accessibilityLabel("通勤准备操作")
-                } else if !downloads.commuteCollections.isEmpty {
-                    Menu {
-                        ForEach(downloads.commuteCollections) { saved in
-                            Button(saved.name) { openDestination(.downloadedCollection(saved.id)) }
-                        }
-                    } label: { Label("通勤准备", systemImage: "tram").labelStyle(.iconOnly) }
-                    .accessibilityLabel("查看通勤准备")
-                }
-            }
-        }
         .task { await downloads.start(); await downloads.refreshLibrary() }
-        .alert("移除此通勤准备？", isPresented: $confirmRemovePreparation) {
-            Button("移除", role: .destructive) {
-                guard let id = collection?.id else { return }
-                Task { await downloads.removeCollection(id); dismiss() }
-            }
-            Button("取消", role: .cancel) {}
-        } message: { Text("这组歌曲会恢复为自动缓存；其他下载会保留。") }
     }
 
     private var header: some View {
@@ -161,8 +105,7 @@ struct DownloadedMusicView: View {
 
     private var playAllButton: some View {
         Button {
-            let offset = tracks.first?.id == collection?.tracks.first?.id ? collection?.preparation?.firstTrackOffset ?? 0 : 0
-            player.play(tracks: tracks, source: .none, orderedStartIndex: collection?.preparation != nil ? 0 : nil, resumeAt: offset)
+            player.play(tracks: tracks, source: .none)
         } label: {
             Label("播放全部", systemImage: "play.fill")
                 .font(.system(size: 12.5, weight: .semibold))
@@ -386,20 +329,16 @@ struct DownloadCollectionButton: View {
             Task { await downloads.enqueue(tracks: tracks, owner: owner, name: name,
                                            quality: settings.audioQuality.rawValue, allowsMetered: false) }
         } label: {
-            if compact {
-                Image(systemName: isComplete ? "checkmark" : "arrow.down")
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(width: 38, height: 38)
-                    .background(.primary.opacity(0.06), in: Circle())
-            } else {
-                Label(title, systemImage: isComplete ? "checkmark" : "arrow.down")
-                    .font(.system(size: 13, weight: .medium))
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.primary.opacity(0.06), in: Capsule())
-            }
+            Image(systemName: isComplete ? "checkmark" : "arrow.down")
+                .font(.system(size: compact ? 16 : 14, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .frame(width: compact ? 38 : 34, height: compact ? 38 : 34)
+                .background(.primary.opacity(0.06), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.pressable)
         .accessibilityLabel(title)
+        .help(title)
         .disabled(!enabled || tracks.isEmpty)
     }
 }

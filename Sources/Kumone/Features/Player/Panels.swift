@@ -164,7 +164,6 @@ struct LyricsPanel: View {
 
 struct QueuePanel: View {
     @EnvironmentObject private var player: PlayerService
-    @Environment(\.openDestination) private var openDestination
 
     var body: some View {
         VStack(spacing: 0) {
@@ -173,11 +172,6 @@ struct QueuePanel: View {
             if let current = player.currentTrack {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        OfflineQueuePreparationView {
-                            player.activePanel = nil
-                            openDestination(.downloadedCollection($0))
-                        }
-                            .padding(.bottom, 8)
                         sectionLabel("正在播放")
                         QueueRow(track: current, isCurrent: true)
 
@@ -248,26 +242,37 @@ private struct QueueRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button {
-            guard !isCurrent else { return }
-            if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
-            else { player.jumpTo(track) }
-        } label: {
-            HStack(spacing: 10) {
-                CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.name)
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(isCurrent ? Theme.accent : .primary)
-                        .lineLimit(1)
-                    Text(track.artistNames)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        HStack(spacing: 6) {
+            Button {
+                guard !isCurrent else { return }
+                if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
+                else { player.jumpTo(track) }
+            } label: {
+                HStack(spacing: 10) {
+                    CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.name)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(isCurrent ? Theme.accent : .primary)
+                            .lineLimit(1)
+                        Text(track.artistNames)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            #if os(macOS)
+            TrackDownloadButton(track: track, isVisible: isHovering) { player.activePanel = nil }
+            #endif
+
+            ZStack {
                 if isCurrent {
                     PlayingIndicator(animating: player.isPlaying)
                 } else if isHovering {
@@ -280,17 +285,20 @@ private struct QueueRow: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.pressable)
+                    .accessibilityLabel("移除")
+                    .help("移除")
                 } else {
                     Text(Formatters.duration(track.duration))
                         .font(.system(size: 10.5).monospacedDigit())
                         .foregroundStyle(.quaternary)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
+            .frame(width: 32)
         }
-        .buttonStyle(.interactiveRow)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.primary.opacity(isHovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+        .contentShape(Rectangle())
         .onHover { isHovering = $0 }
     }
 }

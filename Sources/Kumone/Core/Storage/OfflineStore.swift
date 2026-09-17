@@ -285,7 +285,6 @@ actor OfflineStore {
             record.state = .complete
             record.verifiedModificationDate = try audioURL(record).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             try db.save(record)
-            NotificationCenter.default.post(name: .offlineAvailabilityChanged, object: nil)
         } catch {
             try removeFiles(record)
             let wasDeleted = try db.record(id: id)?.state == .deleting
@@ -323,19 +322,6 @@ actor OfflineStore {
         return nil
     }
 
-    func listeningReadiness(accountScope: String, trackIDs: [Int], quality: String) throws -> OfflineListeningReadiness {
-        var known: [Int: TimeInterval] = [:]
-        var durations: [TimeInterval] = []
-        for id in trackIDs {
-            try Task.checkCancellation()
-            if let duration = known[id] { durations.append(duration); continue }
-            guard let descriptor = try availableDescriptor(accountScope: accountScope, trackID: id, preferredQuality: quality) else { break }
-            known[id] = descriptor.duration
-            durations.append(descriptor.duration)
-        }
-        return .init(durations: durations, totalTracks: trackIDs.count)
-    }
-
     private func playbackRecords(accountScope: String, trackID: Int, preferredQuality: String) throws -> [OfflineAudioRecord] {
         try preparedDatabase().records(scope: accountScope, trackID: trackID)
             .filter { $0.state == .complete && $0.descriptor.identity.source == "netease" }
@@ -363,7 +349,6 @@ actor OfflineStore {
             record.state = .missing
             record.ranges = AudioByteRanges()
             try db.save(record)
-            NotificationCenter.default.post(name: .offlineAvailabilityChanged, object: nil)
             if !leases.values.contains(record.id) { try removeFiles(record) }
             return nil
         }
@@ -406,7 +391,6 @@ actor OfflineStore {
         guard record.retainedBy.isEmpty else { throw OfflineAudioError.retained }
         record.state = .deleting
         try db.save(record)
-        NotificationCenter.default.post(name: .offlineAvailabilityChanged, object: nil)
         writers[id] = nil
         cacheReservations[id] = nil
         guard !leases.values.contains(id), !validating.contains(id) else { return }

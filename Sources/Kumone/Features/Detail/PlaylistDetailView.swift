@@ -237,7 +237,6 @@ struct PlaylistDetailView: View {
 
             // Compact Action Bar
             HStack(spacing: 10) {
-                downloadButton(detail, compact: true)
                 Button {
                     player.play(tracks: playable, source: .playlist(playlistID),
                                 context: model.detail.map { .playlist(id: playlistID, name: $0.name) })
@@ -254,6 +253,8 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+
+                downloadButton(detail, compact: true)
 
                 if isLikedList {
                     Button {
@@ -348,7 +349,6 @@ struct PlaylistDetailView: View {
 
     private func actionRow(_ detail: PlaylistDetail) -> some View {
         HStack(spacing: 10) {
-            downloadButton(detail)
             Button {
                 player.play(tracks: playable, source: .playlist(playlistID),
                             context: .playlist(id: playlistID, name: detail.name))
@@ -362,6 +362,8 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
             }
             .buttonStyle(.pressable)
+
+            downloadButton(detail)
 
             if isLikedList {
                 Button {
