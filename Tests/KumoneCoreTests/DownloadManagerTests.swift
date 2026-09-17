@@ -138,6 +138,97 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func removingSelectedDownloadsPreservesOtherSongsAccountsAndPlayback() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        let tracks = try (1...4).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+        }
+        var descriptors: [OfflineAudioDescriptor] = []
+        for (track, scope) in tracks.map({ ($0, "test-account") }) + [(tracks[0], "other-account")] {
+            let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: scope)
+            descriptors.append(resource.descriptor)
+            let input = h.root.appendingPathComponent("input.mp3")
+            try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+            try h.fixture.data.write(to: input)
+            try await h.store.importDownload(at: input, descriptor: resource.descriptor)
+            try await h.metadata.save(track: track, scope: scope)
+            if scope == "other-account" { try await h.store.retain(id: resource.descriptor.identity.id, owner: "other-download") }
+        }
+        await h.manager.enqueue(tracks: Array(tracks.prefix(3)), owner: "playlist:a", name: "A", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.downloadedTracks.count == 3 && h.manager.pendingJobs.isEmpty }
+        await h.manager.enqueue(tracks: Array(tracks.prefix(2)), owner: "playlist:b", name: "B", quality: "exhigh", allowsMetered: false)
+        let playing = try #require(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh"))
+        var counts: [Int] = []
+        let observer = h.manager.$offlineTracks.dropFirst().sink { counts.append($0.filter(\.isDownloaded).count) }
+        defer { observer.cancel() }
+        #expect(await h.manager.deleteLocalAudio(trackIDs: [1, 2]))
+        #expect(!counts.isEmpty && counts.allSatisfy { $0 == 1 })
+        #expect(h.manager.downloadedSongs().map(\.id) == [3])
+        #expect(Set(h.manager.offlineTracks.map(\.id)) == [3, 4])
+        #expect(h.manager.collections.first { $0.id == "playlist:a" }?.tracks.map(\.id) == [1, 2, 3])
+        #expect(h.manager.collections.first { $0.id == "playlist:b" }?.tracks.map(\.id) == [1, 2])
+        #expect(h.manager.jobs.filter { [1, 2].contains($0.track.id) }.allSatisfy { $0.owners.isEmpty && $0.status == .cancelled })
+        #expect(try await h.store.record(id: descriptors[1].identity.id) == nil)
+        #expect(try await h.store.availableRecords(accountScope: "other-account").count == 1)
+        #expect(try Data(contentsOf: playing.url) == h.fixture.data)
+        #expect(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh") == nil)
+        try await h.store.release(playing)
+        #expect(!FileManager.default.fileExists(atPath: playing.url.path))
+    }
+
+    @Test func removingDownloadWithoutACatalogJobStillRemovesItsAudio() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        let input = h.root.appendingPathComponent("input.mp3")
+        try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+        try h.fixture.data.write(to: input)
+        try await h.store.importDownload(at: input, descriptor: h.fixture.descriptor)
+        try await h.store.retain(id: h.fixture.descriptor.identity.id, owner: "download:missing-job")
+        try await h.metadata.save(track: h.track, scope: "test-account")
+        await h.manager.start()
+        #expect(h.manager.jobs.isEmpty && h.manager.downloadedTracks.count == 1)
+        #expect(await h.manager.deleteLocalAudio(trackIDs: [1]))
+        #expect(h.manager.downloadedTracks.isEmpty)
+        #expect(try await h.store.record(id: h.fixture.descriptor.identity.id) == nil)
+    }
+
+    @Test func removing600DownloadedSongsSavesAndRefreshesOnce() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+        var catalog = DownloadCatalog()
+        for id in 1...600 {
+            let track = try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+            let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account")
+            let input = h.root.appendingPathComponent("input.mp3")
+            try h.fixture.data.write(to: input)
+            try await h.store.importDownload(at: input, descriptor: resource.descriptor)
+            var job = DownloadJob(scope: "test-account", track: track, quality: "exhigh", owner: "playlist:600", allowsMetered: false)
+            job.status = .complete
+            job.descriptor = resource.descriptor
+            job.assetID = resource.descriptor.identity.id
+            job.metadataPending = false
+            try await h.store.retain(id: resource.descriptor.identity.id, owner: job.retentionOwner)
+            catalog.jobs.append(job)
+        }
+        try await h.persistence.save(catalog)
+        await h.manager.start()
+        #expect(h.manager.downloadedTracks.count == 600)
+        let revision = try await h.persistence.load().revision
+        var counts: [Int] = []
+        let observer = h.manager.$offlineTracks.dropFirst().sink { counts.append($0.filter(\.isDownloaded).count) }
+        defer { observer.cancel() }
+        let start = ContinuousClock.now
+        #expect(await h.manager.deleteLocalAudio(trackIDs: Set(1...600)))
+        print("Removed 600 downloaded songs in \(start.duration(to: .now))")
+        #expect(!counts.isEmpty && counts.allSatisfy { $0 == 0 })
+        let saved = try await h.persistence.load()
+        #expect(saved.revision == revision + 1)
+        #expect(saved.jobs.allSatisfy { $0.status == .cancelled && $0.owners.isEmpty })
+        #expect(try await h.store.storageFiles().isEmpty)
+    }
+
     @Test func stoppingACollectionPreservesCompletedSongsAndOtherDownloadRequests() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

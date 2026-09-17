@@ -95,8 +95,6 @@ struct StorageSpaceView: View {
             } footer: {
                 if let other = model.snapshot?.otherAccountDownloads, other > 0 {
                     Text("包含其他账号的 \(format(other)) 下载。管理页显示当前账号的歌曲。")
-                } else {
-                    Text("已下载的歌曲会固定保留，可前往已下载页面管理。")
                 }
             }
 

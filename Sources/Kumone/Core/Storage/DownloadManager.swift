@@ -374,7 +374,9 @@ final class DownloadManager: ObservableObject {
         await cancelJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)), owner: owner)
     }
 
-    private func cancelJobs(_ ids: Set<UUID>, owner: String? = nil) async {
+    @discardableResult
+    private func cancelJobs(_ ids: Set<UUID>, owner: String? = nil, deletingTracks: Set<Int> = []) async -> Bool {
+        guard let scope = accountScope else { return false }
         var cancelled: [DownloadJob] = []
         var changed = false
         // Invalidate every selected attempt before yielding so completion and
@@ -396,21 +398,30 @@ final class DownloadManager: ObservableObject {
             catalog.jobs[i].owners = []
             if let token = job.token { transport.cancel(token: token) }
         }
-        guard changed else { return }
+        guard changed || !deletingTracks.isEmpty else { return true }
         batchOperations += 1
         defer { batchOperations -= 1; schedule() }
         let cancelledIDs = Set(cancelled.map(\.id))
         progress.values = progress.values.filter { !cancelledIDs.contains($0.key) }
+        if !deletingTracks.isEmpty { offlineTracks.removeAll { deletingTracks.contains($0.id) } }
         publish()
         try? await persist()
         for job in cancelled {
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
             guard let i = index(job.id), catalog.jobs[i].status == .cancelled else { continue }
-            if let assetID = job.assetID { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
-            if job.status != .complete, let descriptor = job.descriptor { try? await store.remove(id: descriptor.identity.id) }
+            if deletingTracks.isEmpty {
+                if let assetID = job.assetID { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
+                if job.status != .complete, let descriptor = job.descriptor { try? await store.remove(id: descriptor.identity.id) }
+            }
             try? await persistence.saveResumeData(nil, jobID: job.id)
         }
-        if !cancelled.isEmpty { await refreshLibrary() }
+        var succeeded = true
+        if !deletingTracks.isEmpty {
+            do { try await store.removeDownloads(trackIDs: deletingTracks, accountScope: scope) }
+            catch { succeeded = false }
+        }
+        if !cancelled.isEmpty || !deletingTracks.isEmpty { await refreshLibrary() }
+        return succeeded
     }
 
     func removeCollection(_ owner: String) async {
@@ -433,10 +444,14 @@ final class DownloadManager: ObservableObject {
     }
 
     func deleteLocalAudio(trackID: Int) async {
-        let assets = offlineTracks.first { $0.id == trackID }?.assets ?? []
-        await removeDownloads(trackID: trackID)
-        for asset in assets { try? await store.remove(id: asset.id) }
-        await refreshLibrary()
+        await deleteLocalAudio(trackIDs: [trackID])
+    }
+
+    @discardableResult
+    func deleteLocalAudio(trackIDs: Set<Int>) async -> Bool {
+        guard !trackIDs.isEmpty else { return true }
+        let ids = Set(jobs.filter { trackIDs.contains($0.track.id) && !$0.owners.isEmpty }.map(\.id))
+        return await cancelJobs(ids, deletingTracks: trackIDs)
     }
 
     func setNetwork(_ value: DownloadNetworkState) {

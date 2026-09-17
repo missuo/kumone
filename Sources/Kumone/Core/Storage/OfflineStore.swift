@@ -433,6 +433,33 @@ actor OfflineStore {
         try db.remove(id: id)
     }
 
+    /// Explicit removal from the device clears all download owners for the
+    /// selected songs. Commit deletion intent once before touching their files.
+    func removeDownloads(trackIDs: Set<Int>, accountScope: String) throws {
+        let db = try preparedDatabase()
+        var records = try db.allRecords().filter {
+            $0.descriptor.identity.accountScope == accountScope && trackIDs.contains($0.descriptor.identity.trackID)
+        }
+        try db.transaction {
+            for i in records.indices {
+                records[i].retainedBy.removeAll()
+                records[i].state = .deleting
+                try db.save(records[i])
+            }
+        }
+        var removed: [String] = []
+        var failure: Error?
+        for record in records {
+            writers[record.id] = nil
+            cacheReservations[record.id] = nil
+            guard !leases.values.contains(record.id), !validating.contains(record.id) else { continue }
+            do { try removeFiles(record); removed.append(record.id) }
+            catch { failure = error }
+        }
+        try db.transaction { for id in removed { try db.remove(id: id) } }
+        if let failure { throw failure }
+    }
+
     private func preparedDatabase() throws -> OfflineAudioDatabase {
         if let database { return database }
         try makeDirectory(directory)

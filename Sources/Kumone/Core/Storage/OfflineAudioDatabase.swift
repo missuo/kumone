@@ -59,6 +59,17 @@ final class OfflineAudioDatabase {
         }
     }
 
+    func transaction(_ body: () throws -> Void) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try body()
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     private func records(sql: String, values: [String]) throws -> [OfflineAudioRecord] {
         try statement(sql) { stmt in
             for (index, value) in values.enumerated() { try bind(value, to: stmt, at: Int32(index + 1)) }

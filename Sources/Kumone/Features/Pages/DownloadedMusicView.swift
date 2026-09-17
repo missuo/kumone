@@ -7,6 +7,12 @@ struct DownloadedMusicView: View {
     @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @Environment(\.openDestination) private var openDestination
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<Int> = []
+    @State private var confirmRemoval = false
+    @State private var pendingRemoval: Set<Int> = []
+    @State private var removalScope: String?
+    @State private var isRemoving = false
 
     private var collection: DownloadCollection? { downloads.collections.first { $0.id == collectionID } }
     private var tracks: [Track] { downloads.downloadedSongs(in: collectionID) }
@@ -16,7 +22,7 @@ struct DownloadedMusicView: View {
         let displayed = tracks
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                header
+                if isSelecting { selectionHeader } else { header }
 
                 if !downloads.isReady, downloads.errorMessage == nil {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
@@ -28,7 +34,8 @@ struct DownloadedMusicView: View {
                                    subtitle: "在歌曲菜单或歌单页面选择下载，即可离线收听")
                         .frame(minHeight: 300)
                 } else {
-                    TrackListView(tracks: displayed, source: .none)
+                    TrackListView(tracks: displayed, source: .none, selection: isSelecting ? $selectedIDs : nil)
+                        .disabled(isRemoving)
                         .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
                 PlayerClearanceSpacer()
@@ -43,6 +50,74 @@ struct DownloadedMusicView: View {
         .navigationBarTitleDisplayMode(collectionID == nil ? .large : .inline)
         #endif
         .task { await downloads.start(); await downloads.refreshLibrary() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(isSelecting ? String(localized: "完成") : String(localized: "选择")) {
+                    selectedIDs = []
+                    isSelecting.toggle()
+                }
+                .disabled(isRemoving || (!isSelecting && tracks.isEmpty))
+                .accessibilityIdentifier("select-downloads")
+            }
+        }
+        .onChange(of: displayed.map(\.id)) { ids in
+            selectedIDs.formIntersection(ids)
+            if ids.isEmpty { isSelecting = false }
+        }
+        .onChange(of: downloads.accountScope) { _ in
+            selectedIDs = []
+            isSelecting = false
+            confirmRemoval = false
+            pendingRemoval = []
+        }
+        .alert("移除所选的 \(pendingRemoval.count) 首下载？", isPresented: $confirmRemoval) {
+            Button("移除下载", role: .destructive) { removeSelection() }
+            Button("取消", role: .cancel) {}
+        } message: { Text("歌曲仍会保留在歌单中。") }
+    }
+
+    private var selectionHeader: some View {
+        HStack(spacing: 12) {
+            Text("已选择 \(selectedIDs.count) 首")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            let ids = Set(tracks.map(\.id))
+            let allSelected = !ids.isEmpty && ids.isSubset(of: selectedIDs)
+            Button(allSelected ? String(localized: "取消全选") : String(localized: "全选")) {
+                selectedIDs = allSelected ? [] : ids
+            }
+            .keyboardShortcut("a", modifiers: .command)
+            .accessibilityIdentifier("select-all-downloads")
+            Button("移除下载", role: .destructive) {
+                pendingRemoval = selectedIDs.intersection(ids)
+                removalScope = downloads.accountScope
+                confirmRemoval = true
+            }
+            .disabled(selectedIDs.isEmpty)
+            .accessibilityIdentifier("remove-selected-downloads")
+        }
+        .font(.system(size: 12.5, weight: .medium))
+        .buttonStyle(.borderless)
+        .disabled(isRemoving)
+        .padding(.horizontal, Theme.Layout.contentInset)
+        .padding(.top, 12)
+    }
+
+    private func removeSelection() {
+        let ids = pendingRemoval, scope = removalScope
+        guard !ids.isEmpty, downloads.accountScope == scope else { return }
+        isRemoving = true
+        Task {
+            defer { isRemoving = false }
+            guard downloads.accountScope == scope else { return }
+            let succeeded = await downloads.deleteLocalAudio(trackIDs: ids)
+            guard downloads.accountScope == scope else { return }
+            selectedIDs.subtract(ids)
+            pendingRemoval = []
+            if !succeeded { ToastCenter.shared.show(String(localized: "部分下载未能移除，请重试")) }
+        }
     }
 
     private var header: some View {
