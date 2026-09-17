@@ -139,6 +139,62 @@ private final class DownloadRetryClock {
 @MainActor
 struct DownloadManagerTests {
     @Test(arguments: [false, true])
+    func redownloadingAfterRemovalStartsWithFreshProgress(useResume: Bool) async throws {
+        let gate = DownloadRestoreGate()
+        var resolutions = 0
+        let h = try DownloadHarness(resolver: { track, quality, scope in
+            resolutions += 1
+            if resolutions == 2 { await gate.wait() }
+            return try await DownloadHarness.resolve(track: track, quality: quality, scope: scope)
+        })
+        defer { gate.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let first = h.transport.started[0]
+        try h.transport.finish(first)
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        let id = try #require(h.manager.jobs.first?.id)
+        await h.manager.deleteLocalAudio(trackID: h.track.id)
+        var startupProgress: [Double?] = []
+        let observer = h.manager.$jobs.dropFirst().sink { jobs in
+            if let job = jobs.first, [.queued, .resolving].contains(job.status) {
+                startupProgress.append(h.manager.progress.fraction(for: job))
+            }
+        }
+        defer { observer.cancel() }
+        if useResume { await h.manager.resume(id) } else { await h.enqueue() }
+        try await waitForDownload { gate.entered }
+        #expect(!startupProgress.isEmpty && startupProgress.allSatisfy { $0 == nil })
+        #expect(h.manager.jobs.first?.receivedBytes == 0)
+        #expect(h.manager.jobs.first?.expectedBytes == 0)
+        gate.open()
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(!h.transport.started[1].resumed)
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0)
+        h.transport.continuation.yield(.progress(token: first.token, received: 100, expected: 100))
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0)
+        let total = h.fixture.descriptor.byteCount
+        h.transport.continuation.yield(.progress(token: h.transport.started[1].token, received: total / 4, expected: total))
+        try await waitForDownload { h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.25 }
+    }
+
+    @Test func pausingAndResumingStillKeepsValidPartialProgress() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let id = try #require(h.manager.jobs.first?.id), total = h.fixture.descriptor.byteCount
+        h.transport.continuation.yield(.progress(token: h.transport.started[0].token, received: total * 3 / 4, expected: total))
+        try await waitForDownload { h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75 }
+        await h.manager.pause(id)
+        await h.manager.resume(id)
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.started[1].resumed)
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75)
+    }
+
+    @Test(arguments: [false, true])
     func finishingAFileKeepsTheRingFullUntilValidationEnds(corrupt: Bool) async throws {
         let h = try DownloadHarness()
         defer { h.close() }

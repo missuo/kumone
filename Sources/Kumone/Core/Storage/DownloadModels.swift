@@ -55,6 +55,15 @@ struct DownloadJob: Codable, Identifiable {
 
     var token: String? { attempt.map { "\(id.uuidString).\($0.uuidString)" } }
     var retentionOwner: String { "download:\(id.uuidString)" }
+
+    mutating func resetTransferState() {
+        attempt = nil
+        descriptor = nil
+        assetID = nil
+        receivedBytes = 0
+        expectedBytes = 0
+    }
+
     var progress: Double? {
         guard expectedBytes > 0 else { return nil }
         return min(1, max(0, Double(receivedBytes) / Double(expectedBytes)))

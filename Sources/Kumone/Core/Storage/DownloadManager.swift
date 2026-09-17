@@ -267,6 +267,7 @@ final class DownloadManager: ObservableObject {
         for track in tracks where seen.insert(track.id).inserted {
             if let i = catalog.jobs.firstIndex(where: { $0.accountScope == scope && $0.track.id == track.id && $0.quality == quality }) {
                 catalog.jobs[i].owners.insert(owner)
+                if catalog.jobs[i].status == .cancelled { catalog.jobs[i].resetTransferState() }
                 if [.cancelled, .failed, .unavailable].contains(catalog.jobs[i].status) {
                     cancelNetworkRetry(catalog.jobs[i].id)
                     catalog.jobs[i].allowsMetered = allowsMetered
@@ -346,6 +347,7 @@ final class DownloadManager: ObservableObject {
             guard job.status.canResume else { continue }
             resumed.append(job)
             cancelNetworkRetry(job.id)
+            if job.status == .cancelled { catalog.jobs[i].resetTransferState() }
             catalog.jobs[i].attempt = nil
             catalog.jobs[i].status = .queued
             catalog.jobs[i].errorMessage = nil
@@ -397,7 +399,7 @@ final class DownloadManager: ObservableObject {
             cancelNetworkRetry(job.id)
             workers.removeValue(forKey: job.id)?.task.cancel()
             displayWorkers.removeValue(forKey: job.id)?.cancel()
-            catalog.jobs[i].attempt = nil
+            catalog.jobs[i].resetTransferState()
             catalog.jobs[i].status = .cancelled
             catalog.jobs[i].owners = []
             if let token = job.token { transport.cancel(token: token) }
@@ -557,6 +559,10 @@ final class DownloadManager: ObservableObject {
             var resumeData = await persistence.resumeData(jobID: job.id)
             guard current(job) else { return }
             if catalog.jobs[i].descriptor != resource.descriptor { resumeData = nil }
+            if resumeData == nil {
+                catalog.jobs[i].receivedBytes = 0
+                progress.values[job.id] = nil
+            }
             var context = cacheContext()
             context.protectedAssetIDs.formUnion(storageAssetIDs)
             context.protectedAssetIDs.insert(resource.descriptor.identity.id)
