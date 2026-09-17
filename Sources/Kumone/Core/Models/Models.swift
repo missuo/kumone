@@ -108,12 +108,12 @@ struct PlaylistDetail: Decodable, Hashable {
     let coverImgUrl: String?
     let creator: PlaylistCreator?
     let description: String?
-    let trackCount: Int
+    var trackCount: Int
     let playCount: Int
     let subscribedCount: Int
     var subscribed: Bool
-    let trackIds: [TrackIDRef]
-    let tracks: [Track]
+    var trackIds: [TrackIDRef]
+    var tracks: [Track]
     let specialType: Int
     let updateTime: Int
 

@@ -7,6 +7,7 @@ import ImageIO
 actor OfflineMetadataStore {
     static let shared = OfflineMetadataStore(directory: OfflineStore.shared.directory.appendingPathComponent("metadata"))
     nonisolated let directory: URL
+    private var lastCleanup = Date.distantPast
 
     init(directory: URL) { self.directory = directory }
 
@@ -63,6 +64,45 @@ actor OfflineMetadataStore {
         guard let url = track.album.picUrl.flatMap(URL.init(string:)), artwork(url: url, scope: scope) == nil else { return }
         if let (url, data) = await fetchArtwork(track: track), !Task.isCancelled {
             try? saveArtwork(data, url: url, scope: scope)
+        }
+    }
+
+    /// Keep display data for audio, pending downloads and the current queue.
+    /// Recent writes get a short grace period for in-flight playback/download setup.
+    func pruneUnused(audio: OfflineStore, protectedTracks: [String: Set<Int>], force: Bool = false) async throws {
+        let now = Date()
+        guard force || now.timeIntervalSince(lastCleanup) >= 300 else { return }
+        let previousCleanup = lastCleanup
+        lastCleanup = now
+        do {
+            var kept = try await audio.metadataTrackIDs()
+            for (scope, ids) in protectedTracks { kept[scope, default: []].formUnion(ids) }
+            var filesToKeep: [String: Set<String>] = [:]
+            for (scope, ids) in kept {
+                let key = Self.key(scope)
+                for id in ids {
+                    filesToKeep[key, default: []].formUnion(["track-\(id).json", "lyrics-\(id).json"])
+                    if let cover = track(id: id, scope: scope)?.album.picUrl.flatMap(URL.init(string:)) {
+                        filesToKeep[key, default: []].insert(artworkURL(cover, scope: scope).lastPathComponent)
+                    }
+                }
+            }
+            guard FileManager.default.fileExists(atPath: directory.path) else { return }
+            let folders = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])
+            for folder in folders where (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                let protected = filesToKeep[folder.lastPathComponent] ?? []
+                for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) {
+                    let name = file.lastPathComponent
+                    guard !protected.contains(name), ["track-", "lyrics-", "art-"].contains(where: name.hasPrefix),
+                          let modified = try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                          modified < now.addingTimeInterval(-60) else { continue }
+                    try FileManager.default.removeItem(at: file)
+                }
+                if try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty { try FileManager.default.removeItem(at: folder) }
+            }
+        } catch {
+            lastCleanup = previousCleanup
+            throw error
         }
     }
 

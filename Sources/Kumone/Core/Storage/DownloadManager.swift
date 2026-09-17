@@ -43,6 +43,14 @@ final class DownloadManager: ObservableObject {
         Set(catalog.jobs.filter { !$0.owners.isEmpty }.flatMap { [$0.assetID, $0.descriptor?.identity.id].compactMap { $0 } })
     }
 
+    var metadataTrackIDs: [String: Set<Int>] {
+        var result: [String: Set<Int>] = [:]
+        for job in catalog.jobs where !job.owners.isEmpty {
+            result[job.accountScope, default: []].insert(job.track.id)
+        }
+        return result
+    }
+
     func downloadedSongs(in collectionID: String? = nil) -> [Track] {
         guard let collectionID else { return downloadedTracks.map(\.track) }
         guard let collection = collections.first(where: { $0.id == collectionID }) else { return [] }

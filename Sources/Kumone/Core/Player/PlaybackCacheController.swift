@@ -222,10 +222,13 @@ final class PlaybackCacheController: ObservableObject {
         return try await prefetcher.finishForDownload(resource: resource, owner: owner, allowsMetered: allowsMetered)
     }
 
-    func reconcile() async {
+    func reconcile(forceMetadataCleanup: Bool = false) async {
         let requested = context
         let measured = try? await OfflineStore.shared.reconcileCache(requested)
         if requested.policy == SettingsManager.shared.musicCachePolicy { capacity = measured }
+        var protected = context.protectedTracks
+        for (scope, ids) in DownloadManager.shared.metadataTrackIDs { protected[scope, default: []].formUnion(ids) }
+        try? await OfflineMetadataStore.shared.pruneUnused(audio: .shared, protectedTracks: protected, force: forceMetadataCleanup)
     }
 
     private func updateCompletion() {

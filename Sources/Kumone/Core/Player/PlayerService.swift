@@ -1066,18 +1066,19 @@ final class PlayerService: ObservableObject {
     }
 
     private func loadLyrics(for track: Track, generation: Int) async {
-        if let scope = offlineAccountScope,
+        let scope = offlineAccountScope
+        if let scope,
            let cached = await OfflineMetadataStore.shared.lyrics(trackID: track.id, scope: scope) {
             guard generation == resolveGeneration, offlineAccountScope == scope else { return }
             lyrics = LyricsParser.parse(cached)
             updateLyricsCursor(at: progress)
-            return
         }
-        let scope = offlineAccountScope
+        guard generation == resolveGeneration, offlineAccountScope == scope, !usesOfflineQueue else { return }
         let response = try? await NeteaseAPI.lyric(id: track.id)
         guard generation == resolveGeneration, offlineAccountScope == scope else { return }
-        lyrics = response.map(LyricsParser.parse)
-        if let response, let scope { try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope) }
+        guard let response else { return }
+        lyrics = LyricsParser.parse(response)
+        if let scope { try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope) }
         updateLyricsCursor(at: progress)
     }
 

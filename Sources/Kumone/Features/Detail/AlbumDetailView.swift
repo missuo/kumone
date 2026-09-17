@@ -10,6 +10,7 @@ struct AlbumDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var showFullDescription = false
+    @State private var loadGeneration = 0
     @ObservedObject private var downloads = DownloadManager.shared
 
     @EnvironmentObject private var player: PlayerService
@@ -30,6 +31,21 @@ struct AlbumDetailView: View {
                !downloads.network.connected || errorMessage != nil {
                 DownloadedMusicView(collectionID: "album:\(albumID)")
             } else { onlineContent }
+        }
+        .task(id: "\(albumID):\(downloads.network.connected)") {
+            if downloads.network.connected || !downloads.collections.contains(where: { $0.id == "album:\(albumID)" }) {
+                await load()
+            }
+        }
+        .toolbar {
+            if errorMessage != nil, downloads.network.connected,
+               album != nil || downloads.collections.contains(where: { $0.id == "album:\(albumID)" }) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("重试")
+                        .help("重试")
+                }
+            }
         }
     }
 
@@ -93,28 +109,31 @@ struct AlbumDetailView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task(id: albumID) {
-            await load()
-        }
     }
 
     private func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
+        defer { if generation == loadGeneration { isLoading = false } }
         do {
             let response = try await NeteaseAPI.album(id: albumID)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             album = response.album
             tracks = response.songs
             isLoading = false
             if let dynamic = try? await NeteaseAPI.albumDynamic(id: albumID) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 isSubscribed = dynamic.isSub ?? false
             }
             if let artistID = response.album.artist?.id,
                let albums = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 12) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 otherAlbums = albums.hotAlbums.filter { $0.id != albumID }
             }
         } catch {
-            isLoading = false
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }

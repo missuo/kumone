@@ -136,7 +136,13 @@ struct StorageSpaceView: View {
         }
         .alert(clearTitle, isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }), presenting: clearing) { category in
             Button("清理", role: .destructive) {
-                Task { await model.clear(category) }
+                Task {
+                    await model.clear(category)
+                    if category == .musicCache {
+                        await cache.reconcile(forceMetadataCleanup: true)
+                        await model.reload()
+                    }
+                }
                 clearing = nil
             }
             Button("取消", role: .cancel) { clearing = nil }

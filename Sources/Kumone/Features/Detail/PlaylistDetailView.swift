@@ -11,9 +11,22 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var filter = ""
     private var reducedRecommendationIDs: Set<Int> = []
+    private var removedTrackIDs: Set<Int> = []
+    private var loadGeneration = 0
+    private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
+    private let tracksLoader: ([Int]) async throws -> NeteaseAPI.SongDetailResponse
 
-    init(playlistID: Int) {
+    init(playlistID: Int,
+         detailLoader: @escaping (Int) async throws -> NeteaseAPI.PlaylistDetailResponse = { try await NeteaseAPI.playlistDetail(id: $0) },
+         tracksLoader: @escaping ([Int]) async throws -> NeteaseAPI.SongDetailResponse = { try await NeteaseAPI.songDetails(ids: $0) }) {
         self.playlistID = playlistID
+        self.detailLoader = detailLoader
+        self.tracksLoader = tracksLoader
+    }
+
+    var canDownloadAll: Bool {
+        guard let detail, !isLoading, !isLoadingMore, !tracks.isEmpty else { return false }
+        return Set(tracks.map(\.id)) == Set(detail.trackIds.map(\.id))
     }
 
     var filteredTracks: [Track] {
@@ -27,30 +40,43 @@ final class PlaylistDetailViewModel: ObservableObject {
     }
 
     func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        removedTrackIDs = []
         isLoading = tracks.isEmpty
+        isLoadingMore = false
         errorMessage = nil
+        defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false } }
         do {
-            let response = try await NeteaseAPI.playlistDetail(id: playlistID)
-            detail = response.playlist
-            tracks = response.playlist.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
+            let response = try await detailLoader(playlistID)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            var loaded = response.playlist
+            if !removedTrackIDs.isEmpty {
+                loaded.tracks.removeAll { removedTrackIDs.contains($0.id) }
+                loaded.trackIds.removeAll { removedTrackIDs.contains($0.id) }
+                loaded.trackCount = loaded.trackIds.count
+            }
+            detail = loaded
+            tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
             merge(privileges: response.privileges)
             isLoading = false
-            await loadRemainingTracks()
+            try await loadRemainingTracks(generation: generation)
         } catch {
-            isLoading = false
-            if tracks.isEmpty { errorMessage = error.localizedDescription }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
         }
     }
 
-    private func loadRemainingTracks() async {
+    private func loadRemainingTracks(generation: Int) async throws {
         guard let detail, tracks.count < detail.trackIds.count else { return }
         isLoadingMore = true
-        defer { isLoadingMore = false }
-        let remaining = detail.trackIds.map(\.id).dropFirst(tracks.count)
+        let loadedIDs = Set(tracks.map(\.id))
+        let remaining = detail.trackIds.map(\.id).filter { !loadedIDs.contains($0) && !reducedRecommendationIDs.contains($0) }
         for chunk in stride(from: 0, to: remaining.count, by: 500)
             .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-            guard let response = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
-            tracks += response.songs.filter { !reducedRecommendationIDs.contains($0.id) }
+            let response = try await tracksLoader(chunk)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            tracks += response.songs.filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
             merge(privileges: response.privileges)
         }
     }
@@ -62,7 +88,12 @@ final class PlaylistDetailViewModel: ObservableObject {
     }
 
     func remove(_ track: Track) {
+        removedTrackIDs.insert(track.id)
         tracks.removeAll { $0.id == track.id }
+        detail?.tracks.removeAll { $0.id == track.id }
+        detail?.trackIds.removeAll { $0.id == track.id }
+        detail?.trackCount = detail?.trackIds.count ?? 0
+        privileges[track.id] = nil
     }
 
     func replaceRecommendation(_ rejected: Track, with replacement: Track) {
@@ -109,6 +140,21 @@ struct PlaylistDetailView: View {
                !downloads.network.connected || model.errorMessage != nil {
                 DownloadedMusicView(collectionID: "playlist:\(playlistID)")
             } else { onlineContent }
+        }
+        .task(id: "\(playlistID):\(downloads.network.connected)") {
+            if downloads.network.connected || !downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }) {
+                await model.load()
+            }
+        }
+        .toolbar {
+            if model.errorMessage != nil, downloads.network.connected,
+               model.detail != nil || downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }) {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("重试")
+                        .help("重试")
+                }
+            }
         }
     }
 
@@ -162,9 +208,6 @@ struct PlaylistDetailView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task(id: playlistID) {
-            await model.load()
-        }
     }
 
     // MARK: - Compact (Mobile) Header
@@ -447,7 +490,7 @@ struct PlaylistDetailView: View {
 
     private func downloadButton(_ detail: PlaylistDetail, compact: Bool = false) -> some View {
         DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)", name: detail.name,
-                                 enabled: !model.isLoading && !model.isLoadingMore && Set(model.tracks.map(\.id)) == Set(detail.trackIds.map(\.id)), compact: compact)
+                                 enabled: model.canDownloadAll, compact: compact)
             .accessibilityHint("等待歌单完整加载后下载全部歌曲")
     }
 

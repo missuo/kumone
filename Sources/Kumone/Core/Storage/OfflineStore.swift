@@ -98,6 +98,17 @@ actor OfflineStore {
 
     func record(id: String) throws -> OfflineAudioRecord? { try preparedDatabase().record(id: id) }
 
+    func metadataTrackIDs() throws -> [String: Set<Int>] {
+        var result: [String: Set<Int>] = [:]
+        for record in try preparedDatabase().allRecords() {
+            let inUse = writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id)
+            if !record.retainedBy.isEmpty || inUse || ([.partial, .complete, .verifying].contains(record.state) && record.ranges.byteCount > 0) {
+                result[record.descriptor.identity.accountScope, default: []].insert(record.descriptor.identity.trackID)
+            }
+        }
+        return result
+    }
+
     func storageFiles() throws -> [AudioStorageFile] {
         try preparedDatabase().allRecords().flatMap { record in
             let inUse = writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id)
