@@ -138,6 +138,47 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test(arguments: [false, true])
+    func finishingAFileKeepsTheRingFullUntilValidationEnds(corrupt: Bool) async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let transfer = h.transport.started[0], total = h.fixture.descriptor.byteCount
+        h.transport.continuation.yield(.progress(token: transfer.token, received: total * 3 / 4, expected: total))
+        try await waitForDownload { h.manager.progress.values[h.manager.jobs[0].id]?.received == total * 3 / 4 }
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75)
+        var fractions: [(status: DownloadStatus, value: Double?)] = []
+        let observer = h.manager.$jobs.dropFirst().sink { jobs in
+            if let job = jobs.first { fractions.append((job.status, h.manager.progress.fraction(for: job))) }
+        }
+        defer { observer.cancel() }
+        // The final byte-count callback can be coalesced; the receipt itself
+        // establishes that transfer is finished, even if 75% was last displayed.
+        try h.transport.finish(transfer, corrupt: corrupt)
+        try await waitForDownload { h.manager.jobs.first?.status == (corrupt ? .failed : .complete) }
+        #expect(fractions.contains { $0.status == .verifying })
+        #expect(fractions.filter { [.verifying, .complete].contains($0.status) }.allSatisfy { $0.value == 1 })
+        #expect(h.manager.progress.values[h.manager.jobs[0].id]?.received == total)
+        #expect(h.manager.isDownloaded(trackID: h.track.id) == !corrupt)
+    }
+
+    @Test func completedIconDoesNotWaitForTheLibraryScan() async throws {
+        let gate = DownloadRestoreGate()
+        let h = try DownloadHarness(metadataReader: { _, _ in await gate.wait(); return nil })
+        defer { gate.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { gate.entered }
+        #expect(h.manager.jobs.first?.status == .complete && h.manager.downloadedTracks.isEmpty)
+        #expect(h.manager.isDownloaded(trackID: h.track.id))
+        gate.open()
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        await h.manager.deleteLocalAudio(trackID: h.track.id)
+        #expect(!h.manager.isDownloaded(trackID: h.track.id))
+    }
+
     @Test func removingSelectedDownloadsPreservesOtherSongsAccountsAndPlayback() async throws {
         let h = try DownloadHarness(online: false)
         defer { h.close() }

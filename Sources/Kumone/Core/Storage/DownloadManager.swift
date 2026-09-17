@@ -7,7 +7,7 @@ final class DownloadProgress: ObservableObject {
     @Published var values: [UUID: Value] = [:]
 
     func fraction(for job: DownloadJob) -> Double? {
-        if job.status == .complete { return 1 }
+        if [.verifying, .complete].contains(job.status) { return 1 }
         let value = values[job.id]
         let expected = max(value?.expected ?? 0, job.expectedBytes)
         guard expected > 0 else { return nil }
@@ -43,6 +43,10 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var network = DownloadNetworkState.unknown
     var downloadedTracks: [OfflineLibraryTrack] { offlineTracks.filter(\.isDownloaded) }
+    func isDownloaded(trackID: Int) -> Bool {
+        jobs.contains { $0.track.id == trackID && $0.status == .complete && !$0.owners.isEmpty }
+            || downloadedTracks.contains { $0.id == trackID }
+    }
     var pendingJobs: [DownloadJob] {
         jobs.filter { !$0.owners.isEmpty && $0.status != .complete && $0.status != .cancelled }
     }
@@ -608,6 +612,9 @@ final class DownloadManager: ObservableObject {
                 return
             }
             catalog.jobs[i].status = .verifying
+            catalog.jobs[i].receivedBytes = descriptor.byteCount
+            catalog.jobs[i].expectedBytes = descriptor.byteCount
+            progress.values[job.id] = .init(received: descriptor.byteCount, expected: descriptor.byteCount)
             publish()
             try? await persist()
             guard current(job) else { transport.acknowledge(receipt); return }

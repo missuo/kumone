@@ -412,14 +412,9 @@ struct DownloadCollectionButton: View {
 
     var body: some View {
         Button(action: activate) {
-            Group {
-                if isActive || isSubmitting {
-                    DownloadProgressIcon(progress: fraction, size: compact ? 21 : 19)
-                } else {
-                    Image(systemName: isComplete && !canResume ? "checkmark" : "arrow.down")
-                        .font(.system(size: compact ? 16 : 14, weight: .medium))
-                }
-            }
+            DownloadButtonIcon(isActive: isActive || isSubmitting, isComplete: isComplete && !canResume && !isActive,
+                               progress: fraction, size: compact ? 21 : 19, symbolSize: compact ? 16 : 14,
+                               completedSymbol: "checkmark")
                 .foregroundStyle(Theme.accent)
                 .frame(width: compact ? 38 : 34, height: compact ? 38 : 34)
                 .background(.primary.opacity(0.06), in: Circle())

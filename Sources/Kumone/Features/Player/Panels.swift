@@ -269,7 +269,7 @@ private struct QueueRow: View {
             .buttonStyle(.plain)
 
             #if os(macOS)
-            TrackDownloadButton(track: track, isVisible: isHovering) { player.activePanel = nil }
+            TrackDownloadButton(track: track, isVisible: isHovering)
             #endif
 
             ZStack {
