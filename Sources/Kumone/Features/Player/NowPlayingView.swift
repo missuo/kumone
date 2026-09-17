@@ -678,6 +678,7 @@ struct NowPlayingView: View {
                     artworkSurface(size: size)
                 }
                 .buttonStyle(.plain)
+                .noFocusRing()
                 .accessibilityLabel("打开专辑：\(album.name)")
             } else {
                 artworkSurface(size: size)
@@ -1296,6 +1297,12 @@ private struct CompactTrackHeader: View {
                         }
 
                         Divider()
+
+                        #if os(iOS)
+                        SleepTimerMenu(player: player)
+
+                        Divider()
+                        #endif
 
                         Button {
                             Platform.copyToPasteboard(
@@ -2052,6 +2059,12 @@ private struct MinimalTrackInfoRow: View {
             }
 
             Divider()
+
+            #if os(iOS)
+            SleepTimerMenu(player: player)
+
+            Divider()
+            #endif
 
             Button {
                 Platform.copyToPasteboard(

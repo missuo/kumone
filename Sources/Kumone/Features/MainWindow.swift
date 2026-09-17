@@ -13,6 +13,8 @@ struct MainWindow: View {
 
     #if os(macOS)
     @StateObject private var artworkStore = NowPlayingArtworkStore()
+    #else
+    @EnvironmentObject private var artworkStore: NowPlayingArtworkStore
     #endif
     @State private var selection: SidebarItem = .home
     @State private var localPath: [Destination] = []
@@ -53,7 +55,6 @@ struct MainWindow: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
-        #if os(macOS)
         .overlay(alignment: .trailing) {
             if settings.showMainWindowAmbientBackground, detailWidth > 0 {
                 MainWindowAmbientBackground(
@@ -63,7 +64,6 @@ struct MainWindow: View {
                     .frame(width: detailWidth)
             }
         }
-        #endif
         .toolbar {
             if #available(macOS 26.0, iOS 26.0, *) {
                 ToolbarItem(placement: .primaryAction) {

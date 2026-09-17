@@ -6,17 +6,32 @@
 section the English bullets come first, followed by their Simplified Chinese
 counterparts. 段落格式：`## <版本号> - <日期>`，条目必须写成单行。
 
-## 0.3.18 - 2026-09-10
+## 0.3.18 - 2026-09-16
 
 ### Added / 新增
 
+- **iOS + macOS**: a sleep timer — stop playback after a set duration or at the end of the current track, from the 播放 menu (macOS) or the now-playing more-actions menu (iOS). Thanks @yamakze (#98, closes #96).
+- **iOS + macOS**：新增睡眠定时——可在设定时长后、或当前歌曲播完后停止播放,入口在「播放」菜单(macOS)或播放页的更多菜单(iOS)。感谢 @yamakze（#98，关闭 #96）。
+- **iOS + macOS**: jump from a playing track to its artist or album page (and play from there) via the artwork / track menu. Thanks @yamakze (#95, closes #80).
+- **iOS + macOS**：可从正在播放的歌曲跳转到其歌手或专辑页并从那里播放(通过封面 / 歌曲菜单)。感谢 @yamakze（#95，关闭 #80）。
 - **macOS**: an ambient background behind the main window derived from the current track's artwork — a soft color wash plus a subtle titlebar tint that follows the playing song. On by default; toggle it off or adjust the intensity in Settings. Thanks @yamakze (#86).
 - **macOS**：主窗口新增取自当前封面的氛围背景——柔和的色彩铺底 + 淡淡的标题栏染色，随播放歌曲变化。默认开启,可在设置里关闭或调节强度。感谢 @yamakze（#86）。
+- **iOS**: the artwork ambient background is now available on iOS too, with the same toggle + intensity slider in Settings. Thanks @yamakze (#99).
+- **iOS**：封面氛围背景现在 iOS 也支持,设置里同样有开关与强度滑块。感谢 @yamakze（#99）。
 
 ### Fixed / 修复
 
+- **macOS**: the now-playing artwork no longer snaps out of place during the open/close transition when the image finishes loading mid-animation. Thanks @Perfect9s (#92).
+- **macOS**：进入 / 退出播放页时,封面即使在动画途中才加载完也不再错位跳动。感谢 @Perfect9s（#92）。
+- **macOS**: the main-window titlebar ambient tint now matches the app's light/dark appearance instead of lagging a step behind it. Thanks @yamakze (#93).
+- **macOS**：主窗口标题栏的氛围染色现在会正确匹配 App 的浅色 / 深色外观,不再慢一拍。感谢 @yamakze（#93）。
+- **macOS**: switching a fixed theme (Light/Dark) back to "follow system" now updates the native titlebars of both the main and Settings windows immediately, via `NSApp.appearance`. (#94)
+- **macOS**：把固定主题(浅色 / 深色)切回「跟随系统」时,主窗口与设置窗口的原生标题栏现在会通过 `NSApp.appearance` 立即同步。（#94）
+
 - **macOS**: the toolbar search field and the floating player bar now keep more clearance from the window's rounded corners, so their capsules no longer nearly touch the window edges and the inner/outer corner radii stop visually merging. (#88)
 - **macOS**：工具栏搜索框与悬浮播放条现在与窗口圆角保持更多间距,不再几乎贴住窗口边缘,内外圆角也不再互相干扰。（#88）
+- **macOS**: the album artwork in the player bar and the immersive now-playing page no longer shows a stray blue focus ring (macOS 27 drew the system focus ring on those decorative artwork buttons). (#97)
+- **macOS**：播放条与沉浸播放页的专辑封面不再出现多余的蓝色聚焦边框（macOS 27 会在这些装饰性封面按钮上绘制系统聚焦环）。（#97）
 
 ## 0.3.17 - 2026-09-10
 

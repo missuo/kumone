@@ -106,10 +106,8 @@ final class SettingsManager: ObservableObject {
         static let autoCheckUpdates = "settings.autoCheckUpdates"
         static let desktopLyrics = "settings.showDesktopLyrics"
         static let desktopLyricsCentered = "settings.desktopLyricsCentered"
-        #if os(macOS)
         static let mainWindowAmbientBackground = "settings.showMainWindowAmbientBackground"
         static let mainWindowAmbientBackgroundIntensity = "settings.mainWindowAmbientBackgroundIntensity"
-        #endif
     }
 
     @Published var audioQuality: AudioQuality {
@@ -177,10 +175,9 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(desktopLyricsCentered, forKey: Keys.desktopLyricsCentered) }
     }
 
-    #if os(macOS)
     static let mainWindowAmbientBackgroundIntensityRange = 0.5...1.5
 
-    /// Artwork-tinted overlay on the main desktop window.
+    /// Artwork-tinted overlay on the main app interface.
     @Published var showMainWindowAmbientBackground: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -190,7 +187,7 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    /// Multiplier applied to the main window's artwork tint.
+    /// Multiplier applied to the main interface's artwork tint.
     @Published var mainWindowAmbientBackgroundIntensity: Double {
         didSet {
             UserDefaults.standard.set(
@@ -199,8 +196,6 @@ final class SettingsManager: ObservableObject {
             )
         }
     }
-    #endif
-
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
@@ -216,7 +211,6 @@ final class SettingsManager: ObservableObject {
         autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         desktopLyricsCentered = defaults.object(forKey: Keys.desktopLyricsCentered) as? Bool ?? false
-        #if os(macOS)
         showMainWindowAmbientBackground = defaults.object(
             forKey: Keys.mainWindowAmbientBackground
         ) as? Bool ?? true
@@ -227,6 +221,5 @@ final class SettingsManager: ObservableObject {
             max(storedAmbientBackgroundIntensity, Self.mainWindowAmbientBackgroundIntensityRange.lowerBound),
             Self.mainWindowAmbientBackgroundIntensityRange.upperBound
         )
-        #endif
     }
 }

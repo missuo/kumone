@@ -112,3 +112,18 @@ public enum Platform {
     }
 }
 #endif
+
+extension View {
+    /// Suppress the system focus ring on a decorative button (e.g. the album
+    /// artwork that opens the now-playing page / album). macOS 27 draws the
+    /// blue focus ring on these far more eagerly, which read as a stray border
+    /// on the artwork (#97). No-op on OS versions without the modifier.
+    @ViewBuilder
+    func noFocusRing() -> some View {
+        if #available(macOS 14.0, iOS 17.0, *) {
+            focusEffectDisabled()
+        } else {
+            self
+        }
+    }
+}

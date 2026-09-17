@@ -1,7 +1,7 @@
 import Combine
 import SwiftUI
 
-/// Shares the current track artwork and palette between macOS surfaces.
+/// Shares the current track artwork and palette between app surfaces.
 @MainActor
 final class NowPlayingArtworkStore: ObservableObject {
     typealias ImageLoader = (URL) async -> PlatformImage?

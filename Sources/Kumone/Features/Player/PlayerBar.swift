@@ -69,6 +69,7 @@ struct PlayerBar: View {
                 .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
         }
         .buttonStyle(.pressable)
+        .noFocusRing()
         .help("打开播放页")
     }
 

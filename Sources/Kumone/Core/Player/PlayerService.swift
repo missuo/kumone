@@ -146,6 +146,7 @@ final class PlayerService: ObservableObject {
     @Published var offlineIssue: OfflinePlaybackIssue?
     let clock = PlaybackClock()
     let lyricsCursor = LyricsCursor()
+    let sleepTimer = SleepTimer()
     /// Passthrough to the clock so existing `progress` reads/writes keep working.
     var progress: TimeInterval {
         get { clock.progress }
@@ -223,6 +224,9 @@ final class PlayerService: ObservableObject {
 
     private init() {
         engine.actionAtItemEnd = .pause
+        sleepTimer.onDeadlineReached = { [weak self] in
+            self?.pause()
+        }
         volume = KumonePaths.isOfflineUITest ? 0 : (UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8)
         engine.volume = volume
         repeatMode = UserDefaults.standard.string(forKey: "player.repeat")
@@ -384,12 +388,13 @@ final class PlayerService: ObservableObject {
             isPlaying = false
             AudioSpectrum.shared.reset()
         } else if engine.currentItem == nil {
-            // Restored session: re-resolve the source.
-            startPlaying(track, indexUnchanged: true, resumeAt: progress)
+            // Resume a saved position; a track ended by the sleep timer restarts.
+            startPlaying(track, indexUnchanged: true, resumeAt: progress >= duration ? 0 : progress)
             return
         } else {
             engine.play()
             isPlaying = true
+            scrobbleStartIfNeeded()
         }
         NowPlayingManager.shared.updateElapsed(progress, rate: isPlaying ? 1 : 0)
         checkpointPosition()
@@ -756,6 +761,17 @@ final class PlayerService: ObservableObject {
 
     private func handleItemEnded() {
         scrobbleIfNeeded(completed: true)
+
+        if sleepTimer.consumeEndOfCurrentTrack() {
+            progress = duration
+            updateLyricsCursor(at: duration)
+            pause()
+            engine.replaceCurrentItem(with: nil)
+            return
+        }
+
+        guard isPlaying else { return }
+
         if repeatMode == .one, !isFMMode {
             scrobbled = false
             seek(to: 0)
@@ -888,6 +904,10 @@ final class PlayerService: ObservableObject {
                                            isLoggedIn: AccountStore.shared.isLoggedIn,
                                            vipType: AccountStore.shared.vipType).reason
             ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(reason.map { "：\($0)" } ?? "")"))
+            guard isPlaying else {
+                engine.replaceCurrentItem(with: nil)
+                return
+            }
             if consecutiveFailures < 5 {
                 advanceToNext(userInitiated: false)
             } else {
@@ -1046,15 +1066,11 @@ final class PlayerService: ObservableObject {
             _ = await engine.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
             guard generation == resolveGeneration else { return }
         }
-        if isPlaying { engine.play() }
-        refreshPrefetchSoon()
-
-        if !startScrobbled {
-            startScrobbled = true
-            let tid = track.id
-            let sid = source.sourceID
-            Task.detached { await NeteaseAPI.scrobbleStart(trackID: tid, sourceID: sid) }
+        if isPlaying {
+            engine.play()
+            scrobbleStartIfNeeded()
         }
+        refreshPrefetchSoon()
 
         if let resolvedDuration, resolvedDuration > 0 {
             duration = resolvedDuration
@@ -1102,6 +1118,16 @@ final class PlayerService: ObservableObject {
     }
 
     // MARK: - Scrobble
+
+    private func scrobbleStartIfNeeded() {
+        guard let track = currentTrack, !startScrobbled else { return }
+        startScrobbled = true
+        let trackID = track.id
+        let sourceID = source.sourceID
+        Task.detached {
+            await NeteaseAPI.scrobbleStart(trackID: trackID, sourceID: sourceID)
+        }
+    }
 
     private func scrobbleIfNeeded(completed: Bool) {
         guard let track = currentTrack, !scrobbled, progress > 1 else { return }
