@@ -1,114 +1,12 @@
 import SwiftUI
 
-@MainActor
-final class PlaylistDetailViewModel: ObservableObject {
-    let playlistID: Int
-    @Published var detail: PlaylistDetail?
-    @Published var tracks: [Track] = []
-    @Published var privileges: [Int: TrackPrivilege] = [:]
-    @Published var isLoading = true
-    @Published var isLoadingMore = false
-    @Published var errorMessage: String?
-    @Published var filter = ""
-    private var reducedRecommendationIDs: Set<Int> = []
-    private var removedTrackIDs: Set<Int> = []
-    private var loadGeneration = 0
-    private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
-    private let tracksLoader: ([Int]) async throws -> NeteaseAPI.SongDetailResponse
-
-    init(playlistID: Int,
-         detailLoader: @escaping (Int) async throws -> NeteaseAPI.PlaylistDetailResponse = { try await NeteaseAPI.playlistDetail(id: $0) },
-         tracksLoader: @escaping ([Int]) async throws -> NeteaseAPI.SongDetailResponse = { try await NeteaseAPI.songDetails(ids: $0) }) {
-        self.playlistID = playlistID
-        self.detailLoader = detailLoader
-        self.tracksLoader = tracksLoader
-    }
-
-    var canDownloadAll: Bool {
-        guard let detail, !isLoading, !isLoadingMore, !tracks.isEmpty else { return false }
-        return Set(tracks.map(\.id)) == Set(detail.trackIds.map(\.id))
-    }
-
-    var filteredTracks: [Track] {
-        let query = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty else { return tracks }
-        return tracks.filter {
-            $0.name.lowercased().contains(query)
-                || $0.artistNames.lowercased().contains(query)
-                || $0.album.name.lowercased().contains(query)
-        }
-    }
-
-    func load() async {
-        loadGeneration += 1
-        let generation = loadGeneration
-        removedTrackIDs = []
-        isLoading = tracks.isEmpty
-        isLoadingMore = false
-        errorMessage = nil
-        defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false } }
-        do {
-            let response = try await detailLoader(playlistID)
-            guard generation == loadGeneration, !Task.isCancelled else { return }
-            var loaded = response.playlist
-            if !removedTrackIDs.isEmpty {
-                loaded.tracks.removeAll { removedTrackIDs.contains($0.id) }
-                loaded.trackIds.removeAll { removedTrackIDs.contains($0.id) }
-                loaded.trackCount = loaded.trackIds.count
-            }
-            detail = loaded
-            tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-            isLoading = false
-            try await loadRemainingTracks(generation: generation)
-        } catch {
-            guard generation == loadGeneration, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func loadRemainingTracks(generation: Int) async throws {
-        guard let detail, tracks.count < detail.trackIds.count else { return }
-        isLoadingMore = true
-        let loadedIDs = Set(tracks.map(\.id))
-        let remaining = detail.trackIds.map(\.id).filter { !loadedIDs.contains($0) && !reducedRecommendationIDs.contains($0) }
-        for chunk in stride(from: 0, to: remaining.count, by: 500)
-            .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-            let response = try await tracksLoader(chunk)
-            guard generation == loadGeneration, !Task.isCancelled else { return }
-            tracks += response.songs.filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-        }
-    }
-
-    private func merge(privileges list: [TrackPrivilege]?) {
-        for privilege in list ?? [] {
-            privileges[privilege.id] = privilege
-        }
-    }
-
-    func remove(_ track: Track) {
-        removedTrackIDs.insert(track.id)
-        tracks.removeAll { $0.id == track.id }
-        detail?.tracks.removeAll { $0.id == track.id }
-        detail?.trackIds.removeAll { $0.id == track.id }
-        detail?.trackCount = detail?.trackIds.count ?? 0
-        privileges[track.id] = nil
-    }
-
-    func replaceRecommendation(_ rejected: Track, with replacement: Track) {
-        if tracks.replaceRecommendation(rejected, with: replacement) {
-            reducedRecommendationIDs.insert(rejected.id)
-        }
-    }
-}
 
 struct PlaylistDetailView: View {
     let playlistID: Int
     var isLikedList = false
     var recommendationContext: RecommendationContext?
 
-    @StateObject private var model: PlaylistDetailViewModel
+    @StateObject private var model: PlaylistContent
     @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -119,7 +17,7 @@ struct PlaylistDetailView: View {
         self.playlistID = playlistID
         self.isLikedList = isLikedList
         self.recommendationContext = recommendationContext
-        _model = StateObject(wrappedValue: PlaylistDetailViewModel(playlistID: playlistID))
+        _model = StateObject(wrappedValue: PlaylistContent(playlistID: playlistID))
     }
 
     private var isOwnPlaylist: Bool {
@@ -135,22 +33,14 @@ struct PlaylistDetailView: View {
     }
 
     var body: some View {
-        Group {
-            if downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }),
-               !downloads.network.connected || model.errorMessage != nil {
-                DownloadedMusicView(collectionID: "playlist:\(playlistID)")
-            } else { onlineContent }
-        }
-        .task(id: "\(playlistID):\(downloads.network.connected)") {
-            if downloads.network.connected || !downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }) {
-                await model.load()
-            }
+        onlineContent
+        .task(id: "\(playlistID):\(account.offlineScope ?? ""):\(downloads.network.isKnown):\(downloads.network.connected)") {
+            await loadPlaylist()
         }
         .toolbar {
-            if model.errorMessage != nil, downloads.network.connected,
-               model.detail != nil || downloads.collections.contains(where: { $0.id == "playlist:\(playlistID)" }) {
+            if model.errorMessage != nil, downloads.network.connected, model.detail != nil {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
+                    Button { Task { await loadPlaylist() } } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("重试")
                         .help("重试")
                 }
@@ -158,10 +48,15 @@ struct PlaylistDetailView: View {
         }
     }
 
+    private func loadPlaylist() async {
+        await model.load(allowNetwork: !downloads.network.isKnown || downloads.network.connected,
+                         summary: account.userPlaylists.first { $0.id == playlistID })
+    }
+
     private var onlineContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                if let detail = model.detail {
+                if model.loadedScope == account.offlineScope, let detail = model.detail {
                     if isCompact {
                         compactHeader(detail)
                             .padding(.horizontal, 16)
@@ -178,27 +73,40 @@ struct PlaylistDetailView: View {
                         source: .playlist(playlistID),
                         context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
                         removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                        onRemoved: { model.remove($0) },
+                        onRemoved: { track in Task { await model.remove(track) } },
                         recommendationContext: recommendationContext,
                         onRecommendationReduced: { model.replaceRecommendation($0, with: $1) }
                     )
                     .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
 
-                    if model.isLoadingMore {
+                    if model.isLoading || model.isLoadingMore {
                         HStack {
                             Spacer()
                             ProgressView().controlSize(.small)
                             Spacer()
                         }
                         .padding(.vertical, 12)
+                    } else if model.tracks.isEmpty {
+                        Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
+                    } else if model.tracks.count < detail.trackCount {
+                        Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
                     }
                 } else if model.isLoading {
                     loadingHeader
                 } else if let message = model.errorMessage {
                     ErrorStateView(message: message) {
-                        Task { await model.load() }
+                        Task { await loadPlaylist() }
                     }
                     .frame(minHeight: 400)
+                } else {
+                    EmptyStateView(icon: "music.note.list", title: "联网后载入歌曲")
+                        .frame(minHeight: 400)
                 }
                 PlayerClearanceSpacer()
             }
@@ -296,6 +204,7 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+                .disabled(playable.isEmpty)
 
                 downloadButton(detail, compact: true)
 
@@ -405,6 +314,7 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
             }
             .buttonStyle(.pressable)
+            .disabled(playable.isEmpty)
 
             downloadButton(detail)
 

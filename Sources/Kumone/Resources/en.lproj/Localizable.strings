@@ -393,3 +393,7 @@
 "《%@》尚未完整缓存。连接网络后可重试，或播放队列里已有的离线歌曲。" = "“%@” is not fully cached. Reconnect to try again, or play an offline song from the queue.";
 "当前队列没有可离线播放的歌曲。连接网络后可继续，或前往已下载查看其他歌曲。" = "No songs in this queue are available offline. Reconnect to continue, or open Downloads to choose another song.";
 "移除" = "Remove";
+"联网后载入歌曲" = "Connect to load songs";
+"歌单暂无歌曲" = "This playlist is empty";
+"已载入 %lld/%lld 首" = "%lld of %lld songs loaded";
+"此歌曲需要联网播放" = "Connect to play this song";

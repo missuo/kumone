@@ -44,6 +44,7 @@ struct TrackRow: View {
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracks.first { $0.id == track.id } }
     private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
+    private var needsNetwork: Bool { downloads.network.isKnown && !downloads.network.connected && offlineTrack == nil }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -140,7 +141,7 @@ struct TrackRow: View {
         // Fixed row height keeps lazy-stack height estimation exact,
         // preventing scroll-offset jumps in long lists (#3).
         .frame(height: rowHeight)
-        .opacity(isPlayable ? 1 : 0.45)
+        .opacity(isPlayable && !needsNetwork ? 1 : 0.45)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
                 .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
@@ -151,17 +152,22 @@ struct TrackRow: View {
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
-            if isPlayable { onPlay() }
+            playSelectedTrack()
         }
         #else
         .onTapGesture {
-            if isPlayable { onPlay() }
+            playSelectedTrack()
         }
         #endif
         .contextMenu { contextMenuItems }
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track)
         }
+    }
+
+    private func playSelectedTrack() {
+        if needsNetwork { ToastCenter.shared.show(String(localized: "此歌曲需要联网播放")) }
+        else if isPlayable { onPlay() }
     }
 
     @ViewBuilder

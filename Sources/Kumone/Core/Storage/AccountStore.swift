@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Login state and the user's library: profile, liked track IDs, playlists.
@@ -22,6 +23,8 @@ final class AccountStore: ObservableObject {
     }
     private var profileBinding: String?
     private var bootstrapGeneration = 0
+    private var playlistSyncTask: Task<Void, Never>?
+    private var networkObserver: AnyCancellable?
 
     var likedSongsPlaylist: PlaylistSummary? {
         userPlaylists.first(where: \.isLikedSongsList) ?? userPlaylists.first
@@ -48,6 +51,7 @@ final class AccountStore: ObservableObject {
 
     /// Called at launch and after login succeeds.
     func bootstrap() async {
+        observeLibraryNetwork()
         bootstrapGeneration += 1
         let generation = bootstrapGeneration
         defer { if generation == bootstrapGeneration { isBootstrapped = true } }
@@ -76,6 +80,33 @@ final class AccountStore: ObservableObject {
         userPlaylists = fetchedPlaylists ?? userPlaylists
         if let ids = fetchedLiked { likedTrackIDs = Set(ids) }
         saveSnapshot()
+        syncPlaylistContents()
+    }
+
+    private func observeLibraryNetwork() {
+        guard networkObserver == nil else { return }
+        networkObserver = DownloadManager.shared.$network.map(\.connected).removeDuplicates().dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] connected in
+                guard let self else { return }
+                if connected { Task { await self.refreshLibrary() } }
+                else { self.playlistSyncTask?.cancel() }
+            }
+    }
+
+    private func syncPlaylistContents() {
+        playlistSyncTask?.cancel()
+        guard let scope = offlineScope, profile != nil else { return }
+        let playlists = userPlaylists.sorted { $0.isLikedSongsList && !$1.isLikedSongsList }
+        playlistSyncTask = Task(priority: .utility) { [weak self] in
+            for playlist in playlists {
+                guard !Task.isCancelled, self?.offlineScope == scope else { return }
+                let network = DownloadManager.shared.network
+                guard !network.isKnown || network.connected else { return }
+                let model = PlaylistContent(playlistID: playlist.id)
+                await model.load(summary: playlist, background: true)
+            }
+        }
     }
 
     func refreshSublists() async {
@@ -127,6 +158,7 @@ final class AccountStore: ObservableObject {
         profile = value
         profileBinding = binding
         if oldID != value?.userId {
+            playlistSyncTask?.cancel()
             likedTrackIDs = []
             userPlaylists = []
             likedAlbums = []

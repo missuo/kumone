@@ -50,7 +50,12 @@ public struct IOSMainWindow: View {
             }
             .onChange(of: scenePhase) { phase in
                 if phase != .active { player.checkpointPosition() }
-                else { Task { await DownloadManager.shared.refreshLibrary() } }
+                else {
+                    Task {
+                        await DownloadManager.shared.refreshLibrary()
+                        if DownloadManager.shared.network.connected { await account.refreshLibrary() }
+                    }
+                }
             }
             .task(id: settings.showMainWindowAmbientBackground) {
                 artworkStore.setArtworkNeeded(settings.showMainWindowAmbientBackground)

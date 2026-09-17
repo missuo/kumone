@@ -1188,6 +1188,13 @@ final class PlayerService: ObservableObject {
         await downloads.start()
         await downloads.refreshLibrary()
         guard scope == offlineAccountScope, downloads.accountScope == scope else { throw CancellationError() }
+        if context.kind == .playlist, let scope,
+           let saved = await PlaylistSnapshotStore.shared.load(id: context.id, scope: scope) {
+            guard scope == offlineAccountScope else { throw CancellationError() }
+            if saved.isComplete || usesOfflineQueue, !saved.detail.tracks.isEmpty || saved.isComplete {
+                return (saved.detail.tracks, .playlist(context.id))
+            }
+        }
         let liked = context.kind == .playlist && AccountStore.shared.likedSongsPlaylist?.id == context.id
             ? AccountStore.shared.likedTrackIDs : []
         let local = downloads.localTracks(for: context, likedTrackIDs: liked)
@@ -1228,16 +1235,12 @@ final class PlayerService: ObservableObject {
             let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: liked.id)
             return (tracks, .playlist(liked.id))
         case .playlist:
-            let response = try await NeteaseAPI.playlistDetail(id: context.id)
-            var tracks = response.playlist.tracks
-            // /v6/playlist/detail only carries the first page of tracks.
-            let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
-            for chunk in stride(from: 0, to: remaining.count, by: 500)
-                .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
-                tracks += more.songs
+            let model = PlaylistContent(playlistID: context.id)
+            await model.load()
+            guard model.detail != nil, !model.tracks.isEmpty || model.detail?.trackCount == 0 else {
+                throw URLError(.cannotLoadFromNetwork)
             }
-            return (tracks, .playlist(context.id))
+            return (model.tracks, .playlist(context.id))
         }
     }
 

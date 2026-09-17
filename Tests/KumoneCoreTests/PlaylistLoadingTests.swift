@@ -17,10 +17,199 @@ import Testing
         return try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    @Test func coldOfflineOpenRestores747SongsWithoutNetwork() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        let ids = Array(1...747)
+        let first = try response(ids: ids, loaded: [1])
+        var pages: [[Int]] = []
+        let online = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                pages.append(chunk)
+                // The API's return order is not necessarily the playlist order.
+                return .init(songs: try response(ids: chunk, loaded: chunk.reversed()).playlist.tracks, privileges: [])
+            })
+        await online.load()
+        #expect(online.tracks.map(\.id) == ids && online.canDownloadAll)
+        #expect(pages.map(\.count) == [500, 246])
+        let reopened = PlaylistContent(playlistID: 1, snapshots: PlaylistSnapshotStore(directory: root),
+            accountScope: { "a" }, detailLoader: { _ in
+                Issue.record("Offline open requested the network")
+                throw URLError(.notConnectedToInternet)
+            })
+        await reopened.load(allowNetwork: false)
+        #expect(reopened.detail?.name == "Fixture")
+        #expect(reopened.tracks.map(\.id) == ids && reopened.canDownloadAll)
+        reopened.filter = "Track 747"
+        #expect(reopened.filteredTracks.map(\.id) == [747])
+    }
+
+    @Test func unsyncedOfflinePlaylistKeepsItsTitleAndCount() async throws {
+        let summary = try JSONDecoder().decode(PlaylistSummary.self,
+            from: Data("{\"id\":1,\"name\":\"My playlist\",\"trackCount\":747}".utf8))
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "a" }, detailLoader: { _ in
+            Issue.record("An offline playlist tried to load from the network")
+            throw URLError(.notConnectedToInternet)
+        })
+        await model.load(allowNetwork: false, summary: summary)
+        #expect(model.detail?.name == "My playlist" && model.detail?.trackCount == 747)
+        #expect(model.tracks.isEmpty && !model.canDownloadAll && !model.isLoading)
+    }
+
+    @Test func interruptedFirstSyncPersistsPagesAndLaterFillsOnlyMissingSongs() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), ids = Array(1...747)
+        let first = try response(ids: ids, loaded: [1])
+        let interrupted = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                if chunk[0] > 501 { throw URLError(.networkConnectionLost) }
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        await interrupted.load()
+        #expect(interrupted.tracks.count == 501 && !interrupted.canDownloadAll)
+        let resumed = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                #expect(chunk == Array(502...747))
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        await resumed.load(allowNetwork: false)
+        #expect(resumed.tracks.count == 501 && resumed.detail?.trackCount == 747)
+        await resumed.load()
+        #expect(resumed.tracks.map(\.id) == ids && resumed.canDownloadAll)
+    }
+
+    @Test func savedPlaylistAppearsBeforeRefreshAndSurvivesARefreshFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        let first = try response(ids: [1, 2, 3], loaded: [1, 2, 3])
+        let token = try #require(await store.beginRefresh(id: 1, scope: "a", background: false))
+        try await store.save(.init(detail: first.playlist, privileges: [:]), scope: "a", token: token)
+        await store.finishRefresh(id: 1, scope: "a", token: token)
+        let gate = PlaylistGate()
+        defer { gate.open() }
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in
+            await gate.wait()
+            throw URLError(.timedOut)
+        })
+        let request = Task { await model.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.entered && model.tracks.map(\.id) == [1, 2, 3] && !model.isLoading)
+        gate.open()
+        await request.value
+        #expect(model.tracks.map(\.id) == [1, 2, 3] && model.errorMessage != nil)
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [1, 2, 3])
+    }
+
+    @Test func refreshHandlesSameCountReorderingReplacementAndEmptyPlaylist() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        var latest = try response(ids: [1, 2, 3], loaded: [1, 2, 3])
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in latest }, tracksLoader: { chunk in
+                #expect(chunk == [4])
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        await model.load()
+        latest = try response(ids: [3, 4, 2], loaded: [3])
+        await model.load()
+        #expect(model.tracks.map(\.id) == [3, 4, 2])
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [3, 4, 2])
+        latest = try response(ids: [], loaded: [])
+        await model.load()
+        #expect(model.tracks.isEmpty && model.detail?.trackCount == 0)
+        #expect(await store.load(id: 1, scope: "a")?.isComplete == true)
+    }
+
+    @Test func deletingDuringPaginationUpdatesThePersistentSnapshot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let first = try response(ids: [1, 2], loaded: [1])
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                await gate.wait()
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        let request = Task { await model.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        await model.remove(first.playlist.tracks[0])
+        gate.open()
+        await request.value
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [2])
+        #expect(await store.load(id: 1, scope: "a")?.isComplete == true)
+    }
+
+    @Test func openedPlaylistTakesPriorityOverAnOlderBackgroundSync() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let old = try response(ids: [1], loaded: [1]), new = try response(ids: [2], loaded: [2])
+        let background = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in
+            await gate.wait()
+            return old
+        })
+        let request = Task { await background.load(background: true) }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        let opened = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in new })
+        await opened.load()
+        gate.open()
+        await request.value
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [2])
+    }
+
+    @Test func switchingAccountRejectsThePreviousAccountsLateResponse() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        var scope = "a"
+        let data = try response(ids: [1], loaded: [1])
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { scope }, detailLoader: { _ in
+            await gate.wait()
+            return data
+        })
+        let request = Task { await model.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        scope = "b"
+        await model.load(allowNetwork: false)
+        gate.open()
+        await request.value
+        #expect(model.tracks.isEmpty && model.detail == nil)
+        #expect(await store.load(id: 1, scope: "a") == nil)
+        #expect(await store.load(id: 1, scope: "b") == nil)
+    }
+
+    @Test func restartingLibrarySyncDoesNotSkipTheCancelledPlaylist() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let data = try response(ids: [1, 2], loaded: [1, 2])
+        let old = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in
+            await gate.wait()
+            return data
+        })
+        let oldRequest = Task { await old.load(background: true) }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        oldRequest.cancel()
+        let replacement = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in data })
+        await replacement.load(background: true)
+        gate.open()
+        await oldRequest.value
+        #expect(await store.load(id: 1, scope: "a")?.isComplete == true)
+        #expect(replacement.tracks.map(\.id) == [1, 2])
+    }
+
     @Test func retryAfterAnInitialFailureRestoresTheDownloadAction() async throws {
         var attempts = 0
         let data = try response(ids: [1, 2], loaded: [1, 2])
-        let model = PlaylistDetailViewModel(playlistID: 1, detailLoader: { _ in
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in
             attempts += 1
             if attempts == 1 { throw URLError(.timedOut) }
             return data
@@ -30,7 +219,7 @@ import Testing
         await model.load()
         #expect(model.errorMessage == nil && model.canDownloadAll)
         let removed = try #require(model.tracks.first)
-        model.remove(removed)
+        await model.remove(removed)
         #expect(model.tracks.map(\.id) == [2])
         #expect(model.detail?.trackIds.map(\.id) == [2] && model.detail?.trackCount == 1)
         #expect(model.canDownloadAll)
@@ -41,7 +230,7 @@ import Testing
         defer { gate.open() }
         let data = try response(ids: [1, 2, 3], loaded: [1, 2])
         let third = try response(ids: [3], loaded: [3]).playlist.tracks[0]
-        let model = PlaylistDetailViewModel(playlistID: 1, detailLoader: { _ in data }, tracksLoader: { ids in
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in data }, tracksLoader: { ids in
             #expect(ids == [3])
             await gate.wait()
             return .init(songs: [third], privileges: [])
@@ -49,7 +238,7 @@ import Testing
         let loading = Task { await model.load() }
         for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.entered && !model.canDownloadAll)
-        model.remove(data.playlist.tracks[0])
+        await model.remove(data.playlist.tracks[0])
         gate.open()
         await loading.value
         #expect(model.tracks.map(\.id) == [2, 3])
@@ -62,7 +251,7 @@ import Testing
         defer { gate.open() }
         var calls = 0
         let data = try response(ids: [1, 2], loaded: [1, 2])
-        let model = PlaylistDetailViewModel(playlistID: 1, detailLoader: { _ in
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in
             calls += 1
             if calls == 2 { await gate.wait() }
             return data
@@ -71,7 +260,7 @@ import Testing
         let reload = Task { await model.load() }
         for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.entered)
-        model.remove(data.playlist.tracks[0])
+        await model.remove(data.playlist.tracks[0])
         gate.open()
         await reload.value
         #expect(model.tracks.map(\.id) == [2] && model.detail?.trackIds.map(\.id) == [2])
@@ -83,7 +272,7 @@ import Testing
         defer { gate.open() }
         var calls = 0
         let old = try response(ids: [1], loaded: [1]), new = try response(ids: [2], loaded: [2])
-        let model = PlaylistDetailViewModel(playlistID: 1, detailLoader: { _ in
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in
             calls += 1
             if calls == 1 { await gate.wait(); return old }
             return new
@@ -100,7 +289,7 @@ import Testing
     @Test func aFailedPageCanBeRetried() async throws {
         var failPage = true
         let data = try response(ids: [1, 2], loaded: [1]), second = try response(ids: [2], loaded: [2]).playlist.tracks[0]
-        let model = PlaylistDetailViewModel(playlistID: 1, detailLoader: { _ in data }, tracksLoader: { _ in
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in data }, tracksLoader: { _ in
             if failPage { throw URLError(.networkConnectionLost) }
             return .init(songs: [second], privileges: [])
         })

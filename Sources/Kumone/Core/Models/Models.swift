@@ -102,7 +102,7 @@ struct TrackIDRef: Codable, Hashable {
     let id: Int
 }
 
-struct PlaylistDetail: Decodable, Hashable {
+struct PlaylistDetail: Codable, Hashable {
     let id: Int
     let name: String
     let coverImgUrl: String?
@@ -137,6 +137,22 @@ struct PlaylistDetail: Decodable, Hashable {
         tracks = (try? c.decode([Track].self, forKey: .tracks)) ?? []
         specialType = (try? c.decode(Int.self, forKey: .specialType)) ?? 0
         updateTime = (try? c.decode(Int.self, forKey: .updateTime)) ?? 0
+    }
+
+    init(summary: PlaylistSummary) {
+        id = summary.id
+        name = summary.name
+        coverImgUrl = summary.coverURL
+        creator = summary.creator
+        description = summary.copywriter
+        trackCount = summary.trackCount
+        playCount = summary.playCount
+        subscribedCount = 0
+        subscribed = summary.subscribed
+        trackIds = []
+        tracks = []
+        specialType = summary.specialType
+        updateTime = 0
     }
 }
 
