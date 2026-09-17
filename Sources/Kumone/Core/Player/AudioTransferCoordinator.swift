@@ -55,7 +55,18 @@ actor AudioTransferCoordinator {
         wakeWaiters()
     }
 
-    func failureReason() -> Error? { failure }
+    nonisolated static func isConnectivityFailure(_ error: Error) -> Bool {
+        var value = error as NSError
+        for _ in 0..<4 {
+            if value.domain == NSURLErrorDomain,
+               [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+                NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
+                NSURLErrorDataNotAllowed, NSURLErrorInternationalRoamingOff].contains(value.code) { return true }
+            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+            value = underlying
+        }
+        return false
+    }
 
     /// Returns a contiguous available prefix, never sparse/unreceived bytes.
     func read(at offset: Int64, maximum: Int, forCompletion: Bool = false, allowsMetered: Bool = true) async throws -> Data {
@@ -163,7 +174,10 @@ actor AudioTransferCoordinator {
                 wakeWaiters()
                 return
             }
-            failure = error
+            // A failed network request ends that read, not the resource. Playback
+            // can retry its missing range on the available connection; integrity
+            // and storage failures still require abandoning this cached stream.
+            if !Self.isConnectivityFailure(error) { failure = error }
             wakeWaiters(error: error)
             throw error
         }

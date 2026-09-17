@@ -30,7 +30,11 @@ private final class FakeDownloadTransport: DownloadTransport {
         started.append(.init(resource: resource, token: token, metered: allowsMetered, resumed: resumeData != nil))
         existing.insert(token)
     }
-    func pause(token: String) async -> Data? { cancel(token: token); return Data("resume".utf8) }
+    func pause(token: String) async -> Data? {
+        guard existing.contains(token) else { return nil }
+        cancel(token: token)
+        return Data("resume".utf8)
+    }
     func cancel(token: String) { cancelled.append(token); existing.remove(token) }
     func acknowledge(_ receipt: CompletedDownload) {
         existing.remove(receipt.token)
@@ -110,6 +114,99 @@ private final class DownloadRestoreGate {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func queuedResumeKeepsItsPlaceAndResumeDataAcrossNetworkChanges() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        var catalog = DownloadCatalog()
+        for id in 1...3 {
+            let track = try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+            var job = DownloadJob(scope: "test-account", track: track, quality: "exhigh", owner: "single:\(id)", allowsMetered: false)
+            job.descriptor = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account").descriptor
+            if id == 3 { job.status = .paused }
+            catalog.jobs.append(job)
+        }
+        let waiting = catalog.jobs[2]
+        try await h.persistence.save(catalog)
+        try await h.persistence.saveResumeData(Data("resume".utf8), jobID: waiting.id)
+        await h.manager.start()
+        try await waitForDownload { h.transport.started.count == 2 }
+
+        await h.manager.resume(waiting.id)
+        #expect(h.manager.jobs.first { $0.id == waiting.id }?.status == .queued)
+        #expect(h.manager.jobs.first { $0.id == waiting.id }?.token == nil)
+        await h.manager.pause(waiting.id)
+        #expect(await h.persistence.resumeData(jobID: waiting.id) == Data("resume".utf8))
+        await h.manager.resume(waiting.id)
+        h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
+        #expect(h.manager.jobs.first { $0.id == waiting.id }?.status == .waitingNetwork)
+        #expect(h.manager.jobs.first { $0.id == waiting.id }?.token == nil)
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.transport.started.count == 3 }
+        #expect(h.transport.started[2].resource.descriptor.identity.trackID == 3)
+        #expect(h.transport.started[2].resumed)
+    }
+
+    @Test func wifiDownloadWaitsAndCanBeOverriddenWithoutDelegateNotification() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let old = h.transport.started[0], id = try #require(h.manager.jobs.first?.id)
+        h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        await h.manager.resume(id, allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.cancelled.contains(old.token))
+        #expect(h.transport.started[1].metered)
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test func failedTransferFreesTheSlotAndKeepsResumeData() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        let next = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Next\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(tracks: [h.track, next], owner: "playlist:1", name: "Test", quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let first = h.transport.started[0]
+        let id = try #require(h.manager.jobs.first { $0.track.id == 1 }?.id)
+        h.transport.continuation.yield(.failed(token: first.token, domain: NSURLErrorDomain,
+                                              code: NSURLErrorNetworkConnectionLost, resumeData: Data("resume".utf8)))
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.started[1].resource.descriptor.identity.trackID == 2)
+        #expect(h.manager.jobs.first { $0.id == id }?.status == .waitingNetwork)
+        #expect(h.manager.jobs.first { $0.id == id }?.token == nil)
+        await h.manager.resume(id)
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.transport.started.count == 3 }
+        #expect(h.transport.started[2].resumed)
+        h.transport.continuation.yield(.failed(token: first.token, domain: NSURLErrorDomain,
+                                              code: NSURLErrorCancelled, resumeData: nil))
+        try h.transport.finish(h.transport.started[2])
+        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .complete } }
+    }
+
+    @Test func restoredWifiTransferCanBeResumedOnCellular() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .downloading
+        job.attempt = UUID()
+        job.descriptor = h.fixture.descriptor
+        let token = try #require(job.token)
+        var catalog = DownloadCatalog()
+        catalog.jobs = [job]
+        try await h.persistence.save(catalog)
+        h.transport.existing.insert(token)
+        await h.manager.start()
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        await h.manager.resume(job.id, allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.transport.started[0].metered)
+        #expect(h.transport.started[0].token != token && h.transport.cancelled.contains(token))
+    }
+
     @Test func enqueueCannotCrossAnAccountChangeDuringRestore() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

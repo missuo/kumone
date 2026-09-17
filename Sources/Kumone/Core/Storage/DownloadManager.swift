@@ -55,7 +55,7 @@ final class DownloadManager: ObservableObject {
     private let metadataFetcher: MetadataFetcher
     private let cacheCompletion: CacheCompletion
     private var catalog = DownloadCatalog()
-    private var workers: [UUID: Task<Void, Never>] = [:]
+    private var workers: [UUID: (attempt: UUID, task: Task<Void, Never>)] = [:]
     private var displayWorkers: [UUID: Task<Void, Never>] = [:]
     private var restoration: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
@@ -120,7 +120,7 @@ final class DownloadManager: ObservableObject {
                 }
             }
             await refreshLibrary()
-            schedule()
+            setNetwork(network)
         } catch {
             errorMessage = String(localized: "无法读取下载记录，请重新打开应用")
         }
@@ -132,7 +132,7 @@ final class DownloadManager: ObservableObject {
         offlineTracks = []
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope != scope && catalog.jobs[i].status != .complete {
             let job = catalog.jobs[i]
-            workers.removeValue(forKey: job.id)?.cancel()
+            workers.removeValue(forKey: job.id)?.task.cancel()
             displayWorkers.removeValue(forKey: job.id)?.cancel()
             if let token = job.token {
                 transport.cancel(token: token)
@@ -202,7 +202,7 @@ final class DownloadManager: ObservableObject {
               [.queued, .resolving, .downloading, .waitingNetwork].contains(catalog.jobs[i].status) else { return }
         let token = catalog.jobs[i].token
         let stamp = UUID()
-        workers.removeValue(forKey: id)?.cancel()
+        workers.removeValue(forKey: id)?.task.cancel()
         catalog.jobs[i].status = .paused
         catalog.jobs[i].attempt = stamp
         publish()
@@ -211,7 +211,7 @@ final class DownloadManager: ObservableObject {
             let data = await transport.pause(token: token)
             await store.releaseDownloadReservation(token: token)
             if let i = index(id), catalog.jobs[i].attempt == stamp, catalog.jobs[i].status == .paused {
-                try? await persistence.saveResumeData(data, jobID: id)
+                if let data { try? await persistence.saveResumeData(data, jobID: id) }
             }
         }
         schedule()
@@ -220,7 +220,7 @@ final class DownloadManager: ObservableObject {
     func resume(_ id: UUID, allowsMetered: Bool? = nil) async {
         guard let i = index(id), catalog.jobs[i].accountScope == accountScope, catalog.jobs[i].status.canResume else { return }
         let oldToken = catalog.jobs[i].token
-        catalog.jobs[i].attempt = UUID()
+        catalog.jobs[i].attempt = nil
         catalog.jobs[i].status = .queued
         catalog.jobs[i].errorMessage = nil
         catalog.jobs[i].retries = 0
@@ -239,7 +239,7 @@ final class DownloadManager: ObservableObject {
     func cancel(_ id: UUID) async {
         guard let i = index(id), catalog.jobs[i].accountScope == accountScope else { return }
         let job = catalog.jobs[i]
-        workers.removeValue(forKey: id)?.cancel()
+        workers.removeValue(forKey: id)?.task.cancel()
         displayWorkers.removeValue(forKey: id)?.cancel()
         catalog.jobs[i].attempt = nil
         catalog.jobs[i].status = .cancelled
@@ -284,13 +284,15 @@ final class DownloadManager: ObservableObject {
         network = value
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == accountScope && !catalog.jobs[i].owners.isEmpty {
             if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .resolving {
-                workers.removeValue(forKey: catalog.jobs[i].id)?.cancel()
+                workers.removeValue(forKey: catalog.jobs[i].id)?.task.cancel()
                 catalog.jobs[i].attempt = nil
                 catalog.jobs[i].status = .waitingNetwork
             }
-            if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .queued { catalog.jobs[i].status = .waitingNetwork }
-            else if value.permits(catalog.jobs[i]), catalog.jobs[i].status == .waitingNetwork,
-                    catalog.jobs[i].attempt == nil { catalog.jobs[i].status = .queued }
+            if !value.permits(catalog.jobs[i]), [.queued, .downloading].contains(catalog.jobs[i].status) {
+                catalog.jobs[i].status = .waitingNetwork
+            } else if value.permits(catalog.jobs[i]), catalog.jobs[i].status == .waitingNetwork {
+                catalog.jobs[i].status = catalog.jobs[i].attempt == nil ? .queued : .downloading
+            }
         }
         publish()
         if isReady { Task { try? await persist() } }
@@ -302,14 +304,14 @@ final class DownloadManager: ObservableObject {
 
     func shutdown() {
         eventTask?.cancel()
-        workers.values.forEach { $0.cancel() }
+        workers.values.forEach { $0.task.cancel() }
         displayWorkers.values.forEach { $0.cancel() }
         monitor?.cancel()
     }
 
     private func schedule() {
         guard isReady else { return }
-        var running = catalog.jobs.filter { $0.accountScope == accountScope && ($0.status.isWorking || ($0.status == .waitingNetwork && $0.attempt != nil)) }.count
+        var running = catalog.jobs.filter { $0.accountScope == accountScope && ($0.status.isWorking || ($0.status == .waitingNetwork && $0.attempt != nil && network.permits($0))) }.count
         let limit = network.expensive ? 1 : 2
         for i in catalog.jobs.indices where running < limit {
             let job = catalog.jobs[i]
@@ -317,17 +319,18 @@ final class DownloadManager: ObservableObject {
                   job.status == .queued else { continue }
             // Cached audio can be promoted even without a connection.
             catalog.jobs[i].status = .resolving
-            catalog.jobs[i].attempt = UUID()
+            let attempt = UUID()
+            catalog.jobs[i].attempt = attempt
             let scheduled = catalog.jobs[i]
             running += 1
-            workers[job.id] = Task { await self.prepare(scheduled) }
+            workers[job.id] = (attempt, Task { await self.prepare(scheduled) })
         }
         publish()
     }
 
     private func prepare(_ job: DownloadJob) async {
         defer {
-            if !Task.isCancelled { workers[job.id] = nil; schedule() }
+            if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil; schedule() }
         }
         guard let token = job.token else { return }
         do {
@@ -384,7 +387,6 @@ final class DownloadManager: ObservableObject {
         } catch {
             await fail(job: job, error: error)
         }
-        if current(job) { workers[job.id] = nil }
     }
 
     private func handle(_ event: DownloadTransportEvent) async {
@@ -393,7 +395,9 @@ final class DownloadManager: ObservableObject {
             guard let i = index(token: token), catalog.jobs[i].accountScope == accountScope else { return }
             progress.values[catalog.jobs[i].id] = .init(received: received, expected: expected)
             catalog.jobs[i].receivedBytes = received
-            if catalog.jobs[i].status == .waitingNetwork { catalog.jobs[i].status = .downloading; publish() }
+            if catalog.jobs[i].status == .waitingNetwork, network.permits(catalog.jobs[i]) {
+                catalog.jobs[i].status = .downloading; publish()
+            }
             await store.updateDownloadReservation(token: token, remainingBytes: max(0, expected - received))
         case let .waiting(token):
             guard let i = index(token: token), [.downloading, .waitingNetwork].contains(catalog.jobs[i].status) else { return }
@@ -442,7 +446,7 @@ final class DownloadManager: ObservableObject {
             if domain == NSURLErrorDomain, [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorDataNotAllowed].contains(code) {
                 catalog.jobs[i].status = .waitingNetwork
                 catalog.jobs[i].attempt = nil
-                publish(); try? await persist()
+                publish(); try? await persist(); schedule()
             } else {
                 let hadResumeData = await persistence.resumeData(jobID: job.id) != nil
                 guard current(job) else { return }
@@ -459,7 +463,7 @@ final class DownloadManager: ObservableObject {
             // Register the next small batch with the system before handing
             // execution back to iOS; metadata work does not delay this handoff.
             let preparing = Array(workers.values)
-            for worker in preparing { await worker.value }
+            for worker in preparing { await worker.task.value }
             try? await persist()
             backgroundEventsDelivered = true
             finishBackgroundEventsIfPossible()
@@ -500,7 +504,7 @@ final class DownloadManager: ObservableObject {
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
             await refreshLibrary()
             fetchMetadata(catalog.jobs[i])
-            workers[job.id] = nil
+            if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil }
             schedule()
         } catch { await fail(job: job, error: error) }
     }
@@ -512,7 +516,7 @@ final class DownloadManager: ObservableObject {
         catalog.jobs[i].status = (error as? OfflineAudioError) == .unavailable ? .unavailable : .failed
         catalog.jobs[i].errorMessage = Self.message(for: error)
         catalog.jobs[i].attempt = nil
-        workers[job.id] = nil
+        if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil }
         publish()
         try? await persist()
         schedule()

@@ -57,9 +57,16 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
                 var cursor = offset
                 while cursor < end {
                     try Task.checkCancellation()
-                    let data = try await transfer.read(at: cursor, maximum: Int(min(end - cursor, 256 * 1024)))
-                    guard let self, await self.deliver(data, to: request) else { return }
-                    cursor += Int64(data.count)
+                    do {
+                        let data = try await transfer.read(at: cursor, maximum: Int(min(end - cursor, 256 * 1024)))
+                        guard let self, await self.deliver(data, to: request) else { return }
+                        cursor += Int64(data.count)
+                    } catch {
+                        guard AudioTransferCoordinator.isConnectivityFailure(error) else { throw error }
+                        // Keep AVFoundation's request and buffered audio alive.
+                        // Seeking or switching tracks cancels this retry as usual.
+                        try await Task.sleep(for: .seconds(1))
+                    }
                 }
                 self?.finish(request, error: nil)
             } catch { self?.finish(request, error: error) }
