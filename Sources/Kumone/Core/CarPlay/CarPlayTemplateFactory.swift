@@ -132,18 +132,18 @@ enum CarPlayTemplateFactory {
     /// template apps get an empty button unless they push their own list, which is what this
     /// template is for. The current track is pinned in its own section so the driver can see
     /// what's playing without hunting through the queue, and tapping any upcoming row jumps
-    /// straight to it via `PlayerService.jumpTo`.
+    /// straight to that occurrence in the shared phone queue.
     ///
     /// - Parameters:
     ///   - current: The playing track, or nil when nothing is loaded.
     ///   - upcoming: `PlayerService.upcomingTracks` — already ordered and shuffle-aware.
     ///   - onCurrentTap: Invoked when the pinned "now playing" row is tapped.
-    ///   - onTrackTap: Invoked with the upcoming track the driver picked.
+    ///   - onTrackTap: Invoked with the upcoming row's index and track.
     static func queueTemplate(
         current: Track?,
         upcoming: [Track],
         onCurrentTap: @escaping () -> Void,
-        onTrackTap: @escaping (Track) -> Void
+        onTrackTap: @escaping (Int, Track) -> Void
     ) -> CPListTemplate {
         var sections: [CPListSection] = []
 
@@ -164,12 +164,12 @@ enum CarPlayTemplateFactory {
             // explicitly at the framework's own limit rather than a guessed number — a NetEase
             // queue is routinely longer than that. The section header still reports the real
             // total so the driver can tell the list is partial.
-            let capped = Array(upcoming.prefix(CPListTemplate.maximumItemCount))
-            let items = capped.map { track -> CPListItem in
+            let limit = max(0, CPListTemplate.maximumItemCount - (current == nil ? 0 : 1))
+            let items = upcoming.prefix(limit).enumerated().map { index, track -> CPListItem in
                 let item = CPListItem(text: track.name, detailText: track.artistNames)
                 item.accessoryType = .none
                 item.handler = { _, completion in
-                    onTrackTap(track)
+                    onTrackTap(index, track)
                     completion()
                 }
                 return item

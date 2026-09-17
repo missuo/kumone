@@ -5,7 +5,7 @@
 import Foundation
 
 /// Backs the CarPlay templates with playlist / toplist / track data.
-/// Each fetcher has a built-in ~5-minute TTL so we don't pound the API on every tab switch.
+/// Discovery data has a short TTL; personal track lists resolve through the shared phone player.
 @MainActor
 final class CarPlayContentStore {
 
@@ -34,9 +34,6 @@ final class CarPlayContentStore {
     private var officialFetchedAt: Date = .distantPast
     private var chineseFetchedAt: Date = .distantPast
     private var toplistsFetchedAt: Date = .distantPast
-    private var dailyFetchedAt: Date = .distantPast
-    private var recentsFetchedAt: Date = .distantPast
-    private var cloudFetchedAt: Date = .distantPast
     private var radarFetchedAt: Date = .distantPast
     private var albumsFetchedAt: Date = .distantPast
     private var artistsFetchedAt: Date = .distantPast
@@ -111,37 +108,29 @@ final class CarPlayContentStore {
 
     /// Loads the daily-recommend tracks. Login-only — logged-out callers get an
     /// empty array right away so we don't waste a request on a guaranteed 401.
-    func fetchDailyTracks(loggedIn: Bool, force: Bool = false) async {
+    func fetchDailyTracks(loggedIn: Bool) async {
         guard loggedIn else { dailyTracks = []; return }
-        if !force, Date().timeIntervalSince(dailyFetchedAt) < ttl, !dailyTracks.isEmpty { return }
-        dailyTracks = (try? await NeteaseAPI.dailyRecommendSongs()) ?? []
-        dailyFetchedAt = Date()
+        if let resolved = try? await PlayerService.shared.resolve(.daily) { dailyTracks = resolved.tracks }
     }
 
     // MARK: - Recently played
 
     /// Loads the all-time recently-played tracks. We unwrap `.song` on each
     /// `PlayRecordItem` so callers get a plain `[Track]`.
-    func fetchRecentsTracks(loggedIn: Bool, force: Bool = false) async {
-        guard loggedIn, let uid = AccountStore.shared.profile?.userId else {
+    func fetchRecentsTracks(loggedIn: Bool) async {
+        guard loggedIn else {
             recentsTracks = []
             return
         }
-        if !force, Date().timeIntervalSince(recentsFetchedAt) < ttl, !recentsTracks.isEmpty { return }
-        recentsTracks = (try? await NeteaseAPI.playRecords(uid: uid, week: false))?.map(\.song) ?? []
-        recentsFetchedAt = Date()
+        if let resolved = try? await PlayerService.shared.resolve(.recents) { recentsTracks = resolved.tracks }
     }
 
     // MARK: - Cloud disk
 
-    /// Loads cloud-disk tracks, capped at 300 to match the upper bound that
-    /// `trackListTemplate` renders anyway (no point pulling more).
-    func fetchCloudTracks(loggedIn: Bool, force: Bool = false) async {
+    /// Uses the same cloud track metadata and local fallback as phone playback.
+    func fetchCloudTracks(loggedIn: Bool) async {
         guard loggedIn else { cloudTracks = []; return }
-        if !force, Date().timeIntervalSince(cloudFetchedAt) < ttl, !cloudTracks.isEmpty { return }
-        cloudTracks = (try? await NeteaseAPI.cloudSongs(limit: 300, offset: 0))?
-            .data?.compactMap(\.simpleSong) ?? []
-        cloudFetchedAt = Date()
+        if let resolved = try? await PlayerService.shared.resolve(.cloud) { cloudTracks = resolved.tracks }
     }
 
     // MARK: - Radar playlists

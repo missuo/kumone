@@ -21,6 +21,7 @@ public final class CarPlayConnector: NSObject {
     private var curatedTab: CPListTemplate?
     private var fmTab: CPListTemplate?
     private var libraryTab: CPListTemplate?
+    private weak var playbackQueueTemplate: CPListTemplate?
 
     private var content = CarPlayContentStore()
     private var cancellables: Set<AnyCancellable> = []
@@ -44,6 +45,7 @@ public final class CarPlayConnector: NSObject {
     /// Called when the CarPlay scene connects. Builds the root template and kicks off data loading.
     public func didConnect(interfaceController: CPInterfaceController, window: CPWindow) {
         self.interfaceController = interfaceController
+        content = CarPlayContentStore()
         cancellables.removeAll()
 
         // Force PlayerService to initialize (sets up the audio session and remote commands).
@@ -51,8 +53,9 @@ public final class CarPlayConnector: NSObject {
 
         // Login / logout → rebuild every tab from scratch.
         AccountStore.shared.$profile
+            .removeDuplicates(by: { $0?.userId == $1?.userId })
             .dropFirst()
-            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.rebuildAllTabs()
             }
@@ -131,6 +134,28 @@ public final class CarPlayConnector: NSObject {
             }
             .store(in: &cancellables)
 
+        let player = PlayerService.shared
+        Publishers.MergeMany([
+            player.$queue.map { _ in () }.eraseToAnyPublisher(),
+            player.$shuffledQueue.map { _ in () }.eraseToAnyPublisher(),
+            player.$playNextList.map { _ in () }.eraseToAnyPublisher(),
+            player.$currentTrack.map { _ in () }.eraseToAnyPublisher(),
+            player.$currentIndex.map { _ in () }.eraseToAnyPublisher(),
+            player.$shuffleEnabled.map { _ in () }.eraseToAnyPublisher(),
+            player.$fmUpcoming.map { _ in () }.eraseToAnyPublisher(),
+            player.$isFMMode.map { _ in () }.eraseToAnyPublisher(),
+        ])
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in self?.updateQueue() }
+        .store(in: &cancellables)
+
+        DownloadManager.shared.$network.map(\.connected).removeDuplicates().dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] connected in
+                if connected { self?.scheduleFullReload(bootstrapIfNeeded: true) }
+            }
+            .store(in: &cancellables)
+
         // Configure the Now Playing buttons (persistent — live for the singleton's lifetime).
         configureNowPlayingButtons()
 
@@ -138,6 +163,8 @@ public final class CarPlayConnector: NSObject {
         let root = makeRootTemplate()
         tabBar = root
         interfaceController.setRootTemplate(root, animated: true, completion: nil)
+        updateLibraryTab()
+        updateFMTab()
 
         // On cold start, finish account bootstrap first, then load all four tabs in their final logged-in/out state.
         scheduleFullReload(bootstrapIfNeeded: true)
@@ -156,6 +183,7 @@ public final class CarPlayConnector: NSObject {
         curatedTab = nil
         fmTab = nil
         libraryTab = nil
+        playbackQueueTemplate = nil
     }
 
     // MARK: - Root template
@@ -275,20 +303,38 @@ public final class CarPlayConnector: NSObject {
     // MARK: - Now Playing navigation
 
     /// Pushes the live playback queue when the driver taps the Up Next button.
-    private func showQueue() {
+    func queueSnapshot() -> CPListTemplate {
         let player = PlayerService.shared
-        let template = CarPlayTemplateFactory.queueTemplate(
-            current: player.currentTrack,
-            upcoming: player.upcomingTracks,
+        let scope = AccountStore.shared.offlineScope
+        return CarPlayTemplateFactory.queueTemplate(
+            current: player.currentTrack, upcoming: player.upcomingTracks,
             onCurrentTap: { [weak self] in
+                guard scope == AccountStore.shared.offlineScope else { return }
                 self?.interfaceController?.popTemplate(animated: true, completion: nil)
             },
-            onTrackTap: { [weak self] track in
-                PlayerService.shared.jumpTo(track)
+            onTrackTap: { [weak self] index, track in
+                guard scope == AccountStore.shared.offlineScope else { return }
+                player.jumpToUpcoming(at: index, matching: track.id)
                 self?.interfaceController?.popTemplate(animated: true, completion: nil)
             }
         )
+    }
+
+    private func showQueue() {
+        let template = queueSnapshot()
+        playbackQueueTemplate = template
         interfaceController?.pushTemplate(template, animated: true, completion: nil)
+    }
+
+    private func updateQueue() {
+        guard let template = playbackQueueTemplate else { return }
+        template.updateSections(queueSnapshot().sections)
+    }
+
+    /// The list already contains the phone's track metadata. Playback resolves
+    /// audio through its shared local-first player without loading the list again.
+    static func playLoadedTracks(_ tracks: [Track], context: PlayContext, startAt: Track? = nil) {
+        PlayerService.shared.play(tracks: tracks, source: context.source, startAt: startAt, context: context)
     }
 
     /// Opens the current track's album, falling back to its first artist when the track carries no
@@ -299,16 +345,12 @@ public final class CarPlayConnector: NSObject {
         if track.album.id > 0 {
             pushTracks(
                 title: track.album.name,
-                load: { try? await NeteaseAPI.album(id: track.album.id).songs },
-                context: .album(id: track.album.id, name: track.album.name),
-                source: .album(track.album.id)
+                context: .album(id: track.album.id, name: track.album.name)
             )
         } else if let artist = track.artists.first, artist.id > 0 {
             pushTracks(
                 title: artist.name,
-                load: { try? await NeteaseAPI.artist(id: artist.id).hotSongs },
-                context: .artist(id: artist.id, name: artist.name),
-                source: .artist(artist.id)
+                context: .artist(id: artist.id, name: artist.name)
             )
         }
     }
@@ -323,6 +365,12 @@ public final class CarPlayConnector: NSObject {
     /// Loads all four tabs' data into an independent snapshot in parallel.
     /// The last three fetchers are guarded by `loggedIn` so logged-out callers don't hit a guaranteed 401.
     private func loadAllTabs(into content: CarPlayContentStore, loggedIn: Bool) async {
+        if DownloadManager.shared.network.isKnown && !DownloadManager.shared.network.connected {
+            await content.fetchDailyTracks(loggedIn: loggedIn)
+            await content.fetchRecentsTracks(loggedIn: loggedIn)
+            await content.fetchCloudTracks(loggedIn: loggedIn)
+            return
+        }
         async let r: Void = content.fetchRecommendPlaylists(loggedIn: loggedIn)
         async let c: Void = content.fetchCuratedPlaylists()
         async let o: Void = content.fetchOfficialPlaylists()
@@ -345,7 +393,12 @@ public final class CarPlayConnector: NSObject {
         loadTask?.cancel()
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            if bootstrapIfNeeded, !AccountStore.shared.isBootstrapped {
+            await DownloadManager.shared.start()
+            guard !Task.isCancelled, generation == loadGeneration, interfaceController != nil else { return }
+            updateLibraryTab()
+            updateFMTab()
+            if bootstrapIfNeeded, !AccountStore.shared.isBootstrapped,
+               !DownloadManager.shared.network.isKnown || DownloadManager.shared.network.connected {
                 await AccountStore.shared.bootstrap()
             }
             guard !Task.isCancelled,
@@ -621,30 +674,19 @@ public final class CarPlayConnector: NSObject {
         libraryTab.emptyViewTitleVariants = ["暂无内容"]
     }
 
-    /// Tap handler for the four Library entries: pushes the tracks-list template, then renders it once tracks load.
     private func pushLibraryEntry(_ entry: CarPlayLibraryEntry, liked: PlaylistSummary?) {
-        let loading = CPListTemplate(title: entry.title, sections: [])
-        loading.emptyViewTitleVariants = ["正在加载…"]
-
-        interfaceController?.pushTemplate(loading, animated: true) { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self else { return }
-                let tracks = await self.fetchTracks(for: entry, liked: liked)
-                guard !tracks.isEmpty else {
-                    loading.updateSections([])
-                    loading.emptyViewTitleVariants = ["暂无曲目"]
-                    return
-                }
-                let detail = CarPlayTemplateFactory.trackListTemplate(
-                    title: entry.title,
-                    trackCount: tracks.count,
-                    tracks: tracks,
-                    onPlayAll: { [weak self] in self?.handlePlayAll(entry: entry, liked: liked) },
-                    onTrackTap: { [weak self] track, allTracks in self?.handleTrackTap(entry: entry, track: track, allTracks: allTracks, liked: liked) }
-                )
-                loading.updateSections(detail.sections)
-            }
+        let context: PlayContext
+        switch entry {
+        case .liked:
+            guard let liked else { return }
+            context = .playlist(id: liked.id, name: liked.name)
+        case .daily: context = .daily
+        case .recents: context = .recents
+        case .cloud: context = .cloud
         }
+        pushTracks(title: entry.title, load: { [weak self] in
+            await self?.fetchTracks(for: entry, liked: liked)
+        }, context: context)
     }
 
     /// Fetches tracks for a given Library entry. An empty array means "no tracks" or "not logged in".
@@ -665,56 +707,6 @@ public final class CarPlayConnector: NSObject {
         }
     }
 
-    /// "Play all" handler: routes through `play(context:)` so PlayerService drives its full resolve + load flow.
-    private func handlePlayAll(entry: CarPlayLibraryEntry, liked: PlaylistSummary?) {
-        switch entry {
-        case .liked:
-            guard let liked else { return }
-            PlayerService.shared.play(context: .playlist(id: liked.id, name: liked.name))
-        case .daily:
-            PlayerService.shared.play(context: .daily)
-        case .recents:
-            PlayerService.shared.play(context: .recents)
-        case .cloud:
-            PlayerService.shared.play(context: .cloud)
-        }
-    }
-
-    /// Single-track tap handler: passes the full queue so next/prev stay useful.
-    private func handleTrackTap(entry: CarPlayLibraryEntry, track: Track, allTracks: [Track], liked: PlaylistSummary?) {
-        switch entry {
-        case .liked:
-            guard let liked else { return }
-            PlayerService.shared.play(
-                tracks: allTracks,
-                source: .playlist(liked.id),
-                startAt: track,
-                context: .playlist(id: liked.id, name: liked.name)
-            )
-        case .daily:
-            PlayerService.shared.play(
-                tracks: allTracks,
-                source: .daily,
-                startAt: track,
-                context: .daily
-            )
-        case .recents:
-            PlayerService.shared.play(
-                tracks: allTracks,
-                source: .none,
-                startAt: track,
-                context: .recents
-            )
-        case .cloud:
-            PlayerService.shared.play(
-                tracks: allTracks,
-                source: .cloud,
-                startAt: track,
-                context: .cloud
-            )
-        }
-    }
-
     // MARK: - Radar / album / artist detail
 
     /// Recommend tab radar tap: `radar.id` is itself a playlist id, so it goes straight through `fetchPlaylistTracks`.
@@ -725,8 +717,7 @@ public final class CarPlayConnector: NSObject {
                 guard let self else { return nil }
                 return await self.content.fetchPlaylistTracks(id: radar.id, name: radar.title)
             },
-            context: .playlist(id: radar.id, name: radar.title),
-            source: .playlist(radar.id)
+            context: .playlist(id: radar.id, name: radar.title)
         )
     }
 
@@ -734,11 +725,7 @@ public final class CarPlayConnector: NSObject {
     private func pushAlbum(_ album: AlbumSummary) {
         pushTracks(
             title: album.name,
-            load: {
-                try? await NeteaseAPI.album(id: album.id).songs
-            },
-            context: .album(id: album.id, name: album.name),
-            source: .album(album.id)
+            context: .album(id: album.id, name: album.name)
         )
     }
 
@@ -746,39 +733,43 @@ public final class CarPlayConnector: NSObject {
     private func pushArtist(_ artist: ArtistSummary) {
         pushTracks(
             title: artist.name,
-            load: {
-                try? await NeteaseAPI.artist(id: artist.id).hotSongs
-            },
-            context: .artist(id: artist.id, name: artist.name),
-            source: .artist(artist.id)
+            context: .artist(id: artist.id, name: artist.name)
         )
     }
 
     /// Generic "push tracks" helper: shows an empty template first, then fills it with `trackListTemplate` once tracks load.
     private func pushTracks(
         title: String,
-        load: @escaping () async -> [Track]?,
-        context: PlayContext,
-        source: PlaySource
+        load: (() async -> [Track]?)? = nil,
+        context: PlayContext
     ) {
         let loading = CPListTemplate(title: title, sections: [])
         loading.emptyViewTitleVariants = ["正在加载…"]
 
-        interfaceController?.pushTemplate(loading, animated: true) { [weak self] _, _ in
+        guard let controller = interfaceController else { return }
+        let scope = AccountStore.shared.offlineScope
+        controller.pushTemplate(loading, animated: true) { [weak self, weak controller] _, _ in
             Task { @MainActor in
-                guard let self else { return }
-                guard let tracks = await load(), !tracks.isEmpty else {
-                    loading.updateSections([])
+                guard let self, let controller, self.interfaceController === controller else { return }
+                let tracks: [Track]?
+                if let load { tracks = await load() }
+                else { tracks = (try? await PlayerService.shared.resolve(context))?.tracks }
+                guard self.interfaceController === controller, scope == AccountStore.shared.offlineScope else { return }
+                guard let tracks, !tracks.isEmpty else {
                     loading.emptyViewTitleVariants = ["暂无曲目"]
                     return
                 }
                 let detail = CarPlayTemplateFactory.trackListTemplate(
-                    title: title,
-                    trackCount: tracks.count,
-                    tracks: tracks,
-                    onPlayAll: { PlayerService.shared.play(context: context) },
-                    onTrackTap: { track, allTracks in
-                        PlayerService.shared.play(tracks: allTracks, source: source, startAt: track, context: context)
+                    title: title, trackCount: tracks.count, tracks: tracks,
+                    onPlayAll: { [weak self, weak controller] in
+                        guard let self, let controller, self.interfaceController === controller,
+                              scope == AccountStore.shared.offlineScope else { return }
+                        Self.playLoadedTracks(tracks, context: context)
+                    },
+                    onTrackTap: { [weak self, weak controller] track, allTracks in
+                        guard let self, let controller, self.interfaceController === controller,
+                              scope == AccountStore.shared.offlineScope else { return }
+                        Self.playLoadedTracks(allTracks, context: context, startAt: track)
                     }
                 )
                 loading.updateSections(detail.sections)
@@ -790,73 +781,25 @@ public final class CarPlayConnector: NSObject {
 
     /// Pushes the playlist detail template: empty template with title first, then populated once tracks load.
     private func pushPlaylistDetail(_ playlist: PlaylistSummary) {
-        let loading = CPListTemplate(title: playlist.name, sections: [])
-        loading.emptyViewTitleVariants = ["正在加载…"]
-
-        interfaceController?.pushTemplate(loading, animated: true) { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self else { return }
-                let tracks = await self.content.fetchPlaylistTracks(
-                    id: playlist.id, name: playlist.name
-                )
-                let detail = CarPlayTemplateFactory.playlistDetailTemplate(
-                    playlist: playlist,
-                    tracks: tracks,
-                    onPlayAll: {
-                        // Play all: route through PlayerService.play(context:) so we reuse the full load + play pipeline.
-                        PlayerService.shared.play(context: .playlist(id: playlist.id, name: playlist.name))
-                    },
-                    onTrackTap: { track, allTracks in
-                        // Single track tap: hand over the entire queue so next/prev still work.
-                        PlayerService.shared.play(
-                            tracks: allTracks,
-                            source: .playlist(playlist.id),
-                            startAt: track,
-                            context: .playlist(id: playlist.id, name: playlist.name)
-                        )
-                    }
-                )
-                loading.updateSections(detail.sections)
-            }
-        }
+        pushTracks(title: playlist.name, context: .playlist(id: playlist.id, name: playlist.name))
     }
 
-    /// Pushes the toplist detail template (toplists are just playlists under the hood).
     private func pushToplistDetail(_ toplist: ToplistItem) {
-        let loading = CPListTemplate(title: toplist.name, sections: [])
-        loading.emptyViewTitleVariants = ["正在加载…"]
-
-        interfaceController?.pushTemplate(loading, animated: true) { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self else { return }
-                // A toplist's id is just its playlist id.
-                let tracks = await self.content.fetchPlaylistTracks(
-                    id: toplist.id, name: toplist.name
-                )
-                let detail = CarPlayTemplateFactory.toplistDetailTemplate(
-                    toplist: toplist,
-                    tracks: tracks,
-                    onPlayAll: {
-                        PlayerService.shared.play(context: .playlist(id: toplist.id, name: toplist.name))
-                    },
-                    onTrackTap: { track, allTracks in
-                        PlayerService.shared.play(
-                            tracks: allTracks,
-                            source: .playlist(toplist.id),
-                            startAt: track,
-                            context: .playlist(id: toplist.id, name: toplist.name)
-                        )
-                    }
-                )
-                loading.updateSections(detail.sections)
-            }
-        }
+        pushTracks(title: toplist.name, context: .playlist(id: toplist.id, name: toplist.name))
     }
 
     // MARK: - Login-state rebuild
 
     /// When the account changes, rebuild all tab data (forces a full cache refresh).
     private func rebuildAllTabs() {
+        guard let controller = interfaceController else { return }
+        content = CarPlayContentStore()
+        playbackQueueTemplate = nil
+        let root = makeRootTemplate()
+        tabBar = root
+        controller.setRootTemplate(root, animated: false, completion: nil)
+        updateLibraryTab()
+        updateFMTab()
         scheduleFullReload(bootstrapIfNeeded: false)
     }
 

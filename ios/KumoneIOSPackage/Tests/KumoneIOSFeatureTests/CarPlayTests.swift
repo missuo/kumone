@@ -12,6 +12,41 @@ import UIKit
 /// pure function of player state so this part stays unit-testable.
 @Suite("CarPlay queue template")
 struct CarPlayQueueTemplateTests {
+    @Test("Repeated queue rows retain their occurrence and complete the selection")
+    @MainActor
+    func repeatedTrackSelectsTheTappedOccurrence() throws {
+        let track = try makeTrack(id: 7, name: "Repeated", artist: "Artist", album: "Album")
+        var selected: Int?, completed = false
+        let template = CarPlayTemplateFactory.queueTemplate(current: nil, upcoming: [track, track],
+            onCurrentTap: {}, onTrackTap: { index, chosen in selected = index; #expect(chosen.id == 7) })
+        let item = try #require(template.sections[0].items[1] as? CPListItem)
+        item.handler?(item, { completed = true })
+        #expect(selected == 1 && completed)
+    }
+
+    @Test("The pinned current song shares the vehicle's item limit")
+    @MainActor
+    func currentSongIsIncludedInTheItemLimit() throws {
+        let track = try makeTrack(id: 7, name: "Track", artist: "Artist", album: "Album")
+        let template = CarPlayTemplateFactory.queueTemplate(current: track,
+            upcoming: Array(repeating: track, count: CPListTemplate.maximumItemCount + 10),
+            onCurrentTap: {}, onTrackTap: { _, _ in })
+        #expect(template.sections.reduce(0) { $0 + $1.items.count } <= CPListTemplate.maximumItemCount)
+    }
+
+    @Test("Track selection passes the complete loaded list without fetching it again")
+    @MainActor
+    func loadedListStaysAvailableToPlayback() throws {
+        let tracks = try (1...305).map { try makeTrack(id: $0, name: "Track \($0)", artist: "Artist", album: "Album") }
+        var selected: [Track] = [], playedAll = false
+        let template = CarPlayTemplateFactory.trackListTemplate(title: "Loaded", trackCount: tracks.count, tracks: tracks,
+            onPlayAll: { playedAll = true }, onTrackTap: { _, all in selected = all })
+        let item = try #require(template.sections[1].items.first as? CPListItem)
+        item.handler?(item, {})
+        let playAll = try #require(template.sections[0].items.first as? CPListItem)
+        playAll.handler?(playAll, {})
+        #expect(selected.map(\.id) == tracks.map(\.id) && playedAll)
+    }
 
     private func makeTrack(id: Int, name: String, artist: String, album: String) throws -> Track {
         let json = """
@@ -19,7 +54,7 @@ struct CarPlayQueueTemplateTests {
             "id": \(id),
             "name": "\(name)",
             "artists": [{"id": 1, "name": "\(artist)"}],
-            "album": {"id": 10, "name": "\(album)", "picUrl": "https://example.com/pic.jpg"},
+            "album": {"id": 10, "name": "\(album)"},
             "duration": 226000
         }
         """.data(using: .utf8)!
@@ -36,7 +71,7 @@ struct CarPlayQueueTemplateTests {
             current: current,
             upcoming: [next],
             onCurrentTap: {},
-            onTrackTap: { _ in }
+            onTrackTap: { _, _ in }
         )
 
         #expect(template.sections.count == 2)
@@ -70,7 +105,7 @@ struct CarPlayQueueTemplateTests {
             current: nil,
             upcoming: [first, second],
             onCurrentTap: {},
-            onTrackTap: { picked = $0 }
+            onTrackTap: { _, track in picked = track }
         )
 
         // No current track → only the upcoming section is built.
@@ -91,7 +126,7 @@ struct CarPlayQueueTemplateTests {
             current: nil,
             upcoming: tracks,
             onCurrentTap: {},
-            onTrackTap: { _ in }
+            onTrackTap: { _, _ in }
         )
 
         // Anything past the framework limit is dropped by CarPlay itself, so the template must
@@ -108,7 +143,7 @@ struct CarPlayQueueTemplateTests {
             current: nil,
             upcoming: [],
             onCurrentTap: {},
-            onTrackTap: { _ in }
+            onTrackTap: { _, _ in }
         )
 
         #expect(template.sections.isEmpty)

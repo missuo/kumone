@@ -58,6 +58,32 @@ final class DownloadManager: ObservableObject {
         var seen: Set<Int> = []
         return collection.tracks.filter { available.contains($0.id) && seen.insert($0.id).inserted }
     }
+
+    /// Metadata already held by the phone, shared by all playback entry points.
+    func localTracks(for context: PlayContext, likedTrackIDs: Set<Int> = []) -> [Track] {
+        guard let scope = accountScope else { return [] }
+        if let id = context.downloadCollectionID,
+           let collection = collections.first(where: { $0.id == id && $0.accountScope == scope }) {
+            return collection.tracks
+        }
+        switch context.kind {
+        case .playlist:
+            return offlineTracks.map(\.track).filter { likedTrackIDs.contains($0.id) }
+        case .album:
+            return offlineTracks.map(\.track).filter { $0.album.id == context.id }.sorted { $0.trackNo < $1.trackNo }
+        case .artist:
+            return offlineTracks.map(\.track).filter { $0.artists.contains { $0.id == context.id } }
+        case .cloud:
+            return offlineTracks.map(\.track).filter(\.isCloud)
+        case .recents:
+            return offlineTracks.compactMap { item -> (Track, Date)? in
+                guard let played = item.assets.compactMap(\.lastPlayed).max() else { return nil }
+                return (item.track, played)
+            }.sorted { $0.1 > $1.1 }.map(\.0)
+        default:
+            return []
+        }
+    }
     let progress = DownloadProgress()
     private(set) var accountScope: String?
     private let store: OfflineStore

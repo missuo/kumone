@@ -68,6 +68,25 @@ struct PlayContext: Codable, Hashable {
     static var heartbeat: PlayContext { .init(kind: .heartbeat, id: 0, name: String(localized: "心动模式")) }
     static var fm: PlayContext { .init(kind: .fm, id: 0, name: String(localized: "私人漫游")) }
 
+    var source: PlaySource {
+        switch kind {
+        case .playlist: return .playlist(id)
+        case .album: return .album(id)
+        case .artist: return .artist(id)
+        case .daily: return .daily
+        case .cloud: return .cloud
+        default: return .none
+        }
+    }
+
+    var downloadCollectionID: String? {
+        switch kind {
+        case .playlist: return "playlist:\(id)"
+        case .album: return "album:\(id)"
+        default: return nil
+        }
+    }
+
     /// Identity is the place, not its current title — a renamed playlist is
     /// still the same entry in the recents list.
     static func == (lhs: PlayContext, rhs: PlayContext) -> Bool {
@@ -1119,17 +1138,48 @@ final class PlayerService: ObservableObject {
     func play(context: PlayContext) {
         // Personal FM is a stream, not a fixed list — restart it in place.
         guard context.kind != .fm else { return startFM() }
+        let scope = offlineAccountScope
+        let generation = resolveGeneration
         Task {
             do {
                 guard let resolved = try await resolve(context) else { return }
+                guard scope == offlineAccountScope, generation == resolveGeneration else { return }
                 play(tracks: resolved.tracks, source: resolved.source, context: context)
             } catch {
+                guard scope == offlineAccountScope, generation == resolveGeneration else { return }
                 ToastCenter.shared.show(error.localizedDescription)
             }
         }
     }
 
     func resolve(_ context: PlayContext) async throws -> (tracks: [Track], source: PlaySource)? {
+        let scope = offlineAccountScope
+        if scope != nil, stateScope == scope, !isFMMode, context.source != .none,
+           source == context.source, !queue.isEmpty {
+            return (queue, source)
+        }
+        let downloads = DownloadManager.shared
+        await downloads.start()
+        await downloads.refreshLibrary()
+        guard scope == offlineAccountScope, downloads.accountScope == scope else { throw CancellationError() }
+        let liked = context.kind == .playlist && AccountStore.shared.likedSongsPlaylist?.id == context.id
+            ? AccountStore.shared.likedTrackIDs : []
+        let local = downloads.localTracks(for: context, likedTrackIDs: liked)
+        let saved = context.downloadCollectionID.map { id in downloads.collections.contains { $0.id == id } } ?? false
+        if !local.isEmpty, saved || usesOfflineQueue { return (local, context.source) }
+        if usesOfflineQueue { throw URLError(.notConnectedToInternet) }
+        do {
+            let resolved = try await resolveOnline(context)
+            guard scope == offlineAccountScope else { throw CancellationError() }
+            return resolved
+        } catch {
+            guard scope == offlineAccountScope, !Task.isCancelled else { throw CancellationError() }
+            if !local.isEmpty { return (local, context.source) }
+            throw error
+        }
+    }
+
+    private func resolveOnline(_ context: PlayContext) async throws -> (tracks: [Track], source: PlaySource)? {
         switch context.kind {
         case .fm:
             return nil

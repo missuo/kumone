@@ -116,6 +116,42 @@ private final class DownloadRestoreGate {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func playbackContextsReuseSavedCollectionsAndCachedMetadata() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        var tracks: [Track] = []
+        for id in 1...3 {
+            var json: [String: Any] = ["id": id, "name": "Track \(id)", "dt": 3000, "no": 4 - id,
+                "al": ["id": id == 3 ? 60 : 50, "name": "Album"],
+                "ar": [["id": id == 2 ? 200 : 100, "name": "Artist"]]]
+            if id == 3 { json["pc"] = [:] as [String: String] }
+            let track = try JSONDecoder().decode(Track.self, from: JSONSerialization.data(withJSONObject: json))
+            tracks.append(track)
+            let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account")
+            let writer = UUID()
+            try await h.store.begin(resource.descriptor, writer: writer)
+            try await h.store.write(h.fixture.data, at: 0, id: resource.descriptor.identity.id, writer: writer)
+            try await h.store.finalize(id: resource.descriptor.identity.id, writer: writer)
+            await h.store.releaseWriter(id: resource.descriptor.identity.id, writer: writer)
+            try await h.metadata.save(track: track, scope: "test-account")
+        }
+        await h.manager.enqueue(tracks: [tracks[1], tracks[0]], owner: "playlist:9", name: "Saved", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.count == 2 && h.manager.jobs.allSatisfy { $0.status == .complete } }
+        let played = try #require(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh"))
+        try await h.store.release(played)
+        await h.manager.refreshLibrary()
+        #expect(h.manager.localTracks(for: .playlist(id: 9, name: "Saved")).map(\.id) == [2, 1])
+        #expect(h.manager.localTracks(for: .playlist(id: 99, name: "Liked"), likedTrackIDs: [2]).map(\.id) == [2])
+        #expect(h.manager.localTracks(for: .album(id: 50, name: "Album")).map(\.id) == [2, 1])
+        #expect(Set(h.manager.localTracks(for: .artist(id: 100, name: "Artist")).map(\.id)) == [1, 3])
+        #expect(h.manager.localTracks(for: .cloud).map(\.id) == [3])
+        #expect(h.manager.localTracks(for: .recents).map(\.id) == [1])
+        #expect(h.transport.started.isEmpty)
+        h.manager.activate(accountScope: "other-account")
+        #expect(h.manager.localTracks(for: .playlist(id: 9, name: "Saved")).isEmpty)
+        #expect(h.manager.localTracks(for: .album(id: 50, name: "Album")).isEmpty)
+    }
+
     @Test func oldLibraryScanCannotMarkANewDownloadMissing() async throws {
         let gate = DownloadRestoreGate()
         var blockNextRead = false
