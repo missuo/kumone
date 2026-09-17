@@ -809,7 +809,8 @@ final class PlayerService: ObservableObject {
         let accountScope = offlineAccountScope
         var available = localLease
         if available == nil, let accountScope {
-            available = try? await OfflineStore.shared.acquire(accountScope: accountScope, trackID: track.id, preferredQuality: quality)
+            available = try? await OfflineStore.shared.acquire(accountScope: accountScope, trackID: track.id,
+                preferredQuality: quality, allowLowerQuality: !networkState.connected)
         }
         if let local = available {
             guard generation == resolveGeneration, accountScope == offlineAccountScope else {
@@ -833,6 +834,7 @@ final class PlayerService: ObservableObject {
         } catch {
             guard generation == resolveGeneration else { return }
             if Self.isConnectivityFailure(error) {
+                if await playCachedFallback(track, generation: generation, scope: accountScope, quality: quality, resumeAt: resumeAt) { return }
                 unavailableOffline(track, generation: generation, autoAdvance: autoAdvance)
                 return
             }
@@ -843,6 +845,11 @@ final class PlayerService: ObservableObject {
         if let urlString = data?.url {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
+
+        if resolvedURL == nil || data?.freeTrialInfo != nil {
+            if await playCachedFallback(track, generation: generation, scope: accountScope, quality: quality, resumeAt: resumeAt) { return }
+        }
+        guard generation == resolveGeneration, accountScope == offlineAccountScope else { return }
 
         // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, SettingsManager.shared.enableUnblock {
@@ -909,6 +916,21 @@ final class PlayerService: ObservableObject {
                                 resolvedDuration: data.flatMap { $0.time > 0 ? Double($0.time) / 1000 : nil }, resumeAt: resumeAt)
     }
 
+    private func playCachedFallback(_ track: Track, generation: Int, scope: String?, quality: String,
+                                    resumeAt: TimeInterval) async -> Bool {
+        guard generation == resolveGeneration, let scope, scope == offlineAccountScope,
+              let local = try? await OfflineStore.shared.acquire(accountScope: scope, trackID: track.id, preferredQuality: quality) else { return false }
+        guard generation == resolveGeneration, scope == offlineAccountScope else {
+            try? await OfflineStore.shared.release(local)
+            return false
+        }
+        consecutiveFailures = 0
+        servedQuality = local.descriptor.identity.quality
+        await loadPlaybackAsset(AVURLAsset(url: local.url), track: track, generation: generation,
+                                resolvedDuration: local.descriptor.duration, offlineLease: local, resumeAt: resumeAt)
+        return true
+    }
+
     private static func resolveCacheResource(data: SongURLData, track: Track, scope: String) async -> OfflineAudioResource? {
         await withTaskGroup(of: OfflineAudioResource?.self) { group in
             group.addTask { try? await PlaybackCacheResolver.resolve(data: data, track: track, scope: scope) }
@@ -934,7 +956,7 @@ final class PlayerService: ObservableObject {
             guard generation == resolveGeneration else { return }
             if let scope = offlineAccountScope,
                let local = try? await OfflineStore.shared.acquire(accountScope: scope, trackID: track.id,
-                                                                  preferredQuality: SettingsManager.shared.audioQuality.rawValue) {
+                    preferredQuality: SettingsManager.shared.audioQuality.rawValue, allowLowerQuality: !networkState.connected) {
                 guard generation == resolveGeneration, scope == offlineAccountScope else {
                     try? await OfflineStore.shared.release(local)
                     return

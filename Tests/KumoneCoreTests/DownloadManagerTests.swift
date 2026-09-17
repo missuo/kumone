@@ -64,7 +64,8 @@ private final class DownloadHarness {
     let transport: FakeDownloadTransport
     let manager: DownloadManager
 
-    init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false) throws {
+    init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false,
+         metadataReader: ((Int, String) async -> Track?)? = nil) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-download-tests-\(UUID())")
         fixture = try OfflineAudioFixture()
         track = try JSONDecoder().decode(Track.self, from: Data("{\"id\":1,\"name\":\"Offline fixture\",\"dt\":3000}".utf8))
@@ -73,7 +74,8 @@ private final class DownloadHarness {
         persistence = DownloadCatalogStore(directory: root.appendingPathComponent("catalog"))
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
-                                  accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: { _, _ in })
+                                  accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: { _, _ in },
+                                  metadataReader: metadataReader)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
 
@@ -114,6 +116,49 @@ private final class DownloadRestoreGate {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func oldLibraryScanCannotMarkANewDownloadMissing() async throws {
+        let gate = DownloadRestoreGate()
+        var blockNextRead = false
+        let h = try DownloadHarness(metadataReader: { id, _ in
+            if id == 1, blockNextRead { blockNextRead = false; await gate.wait() }
+            return nil
+        })
+        defer { gate.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.offlineTracks.count == 1 }
+        blockNextRead = true
+        let oldScan = Task { await h.manager.refreshLibrary() }
+        try await waitForDownload { gate.entered }
+
+        let next = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Just downloaded\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(track: next, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 2 }
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.manager.offlineTracks.count == 2 && h.manager.jobs.allSatisfy { $0.status == .complete } }
+        gate.open()
+        await oldScan.value
+        #expect(h.manager.jobs.allSatisfy { $0.status == .complete })
+        #expect(Set(h.manager.downloadedSongs().map(\.id)) == [1, 2])
+        #expect(try await h.persistence.load().jobs.allSatisfy { $0.status == .complete })
+    }
+
+    @Test func libraryScanStillReportsAnActuallyMissingDownload() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.downloadedSongs().count == 1 }
+        let lease = try #require(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh"))
+        try await h.store.release(lease)
+        try FileManager.default.removeItem(at: lease.url)
+        await h.manager.refreshLibrary()
+        #expect(h.manager.jobs.first?.status == .failed)
+        #expect(h.manager.downloadedSongs().isEmpty)
+    }
+
     @Test func queuedResumeKeepsItsPlaceAndResumeDataAcrossNetworkChanges() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

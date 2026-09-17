@@ -14,6 +14,11 @@ final class DownloadManager: ObservableObject {
         let manager = DownloadManager(store: .shared, metadata: .shared, persistence: DownloadCatalogStore(directory: root),
                                       transport: BackgroundDownloadTransport(inbox: root.appendingPathComponent("inbox")),
                                       accountScope: AccountStore.shared.offlineScope,
+                                      cacheContext: {
+                                          let account = AccountStore.shared
+                                          return .init(policy: SettingsManager.shared.musicCachePolicy,
+                                              likedTracks: account.offlineScope.map { [$0: account.likedTrackIDs] } ?? [:])
+                                      },
                                       cacheCompletion: { try await PlaybackCacheController.shared.completeForDownload(resource: $0, owner: $1, allowsMetered: $2) })
         manager.monitorNetwork()
         Task { await manager.start() }
@@ -53,6 +58,8 @@ final class DownloadManager: ObservableObject {
     private let transport: any DownloadTransport
     private let resolver: Resolver
     private let metadataFetcher: MetadataFetcher
+    private let metadataReader: (Int, String) async -> Track?
+    private let cacheContext: () -> MusicCacheContext
     private let cacheCompletion: CacheCompletion
     private var catalog = DownloadCatalog()
     private var workers: [UUID: (attempt: UUID, task: Task<Void, Never>)] = [:]
@@ -62,11 +69,14 @@ final class DownloadManager: ObservableObject {
     private var monitor: NWPathMonitor?
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
+    private var libraryRefreshID = UUID()
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
          resolver: @escaping Resolver = { try await NeteaseAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
          metadataFetcher: MetadataFetcher? = nil,
+         metadataReader: ((Int, String) async -> Track?)? = nil,
+         cacheContext: @escaping () -> MusicCacheContext = { .init(policy: .automatic) },
          cacheCompletion: @escaping CacheCompletion = { _, _, _ in nil }) {
         self.store = store
         self.metadata = metadata
@@ -76,6 +86,8 @@ final class DownloadManager: ObservableObject {
         self.resolver = resolver
         self.cacheCompletion = cacheCompletion
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
+        self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
+        self.cacheContext = cacheContext
     }
 
     func start() async {
@@ -128,6 +140,7 @@ final class DownloadManager: ObservableObject {
 
     func activate(accountScope scope: String?) {
         guard accountScope != scope else { return }
+        libraryRefreshID = UUID()
         accountScope = scope
         offlineTracks = []
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope != scope && catalog.jobs[i].status != .complete {
@@ -374,7 +387,10 @@ final class DownloadManager: ObservableObject {
             var resumeData = await persistence.resumeData(jobID: job.id)
             guard current(job) else { return }
             if catalog.jobs[i].descriptor != resource.descriptor { resumeData = nil }
-            try await store.reserveDownload(token: token, bytes: resource.descriptor.byteCount)
+            var context = cacheContext()
+            context.protectedAssetIDs.formUnion(storageAssetIDs)
+            context.protectedAssetIDs.insert(resource.descriptor.identity.id)
+            try await store.reserveDownload(token: token, bytes: resource.descriptor.byteCount, context: context)
             guard current(job) else { await store.releaseDownloadReservation(token: token); return }
             catalog.jobs[i].descriptor = resource.descriptor
             catalog.jobs[i].expectedBytes = resource.descriptor.byteCount
@@ -570,21 +586,33 @@ final class DownloadManager: ObservableObject {
     }
 
     func refreshLibrary() async {
+        let requestID = UUID()
+        libraryRefreshID = requestID
         guard let scope = accountScope else { offlineTracks = []; return }
-        let available = (try? await store.availableRecords(accountScope: scope)) ?? []
+        let completedAtStart = Dictionary(uniqueKeysWithValues: catalog.jobs.filter {
+            $0.accountScope == scope && $0.status == .complete
+        }.map { ($0.id, (assetID: $0.assetID, attempt: $0.attempt)) })
+        let available: [OfflineAudioRecord]
+        do { available = try await store.availableRecords(accountScope: scope) }
+        catch { return }
         var result: [OfflineLibraryTrack] = []
         for (trackID, assets) in Dictionary(grouping: available, by: { $0.descriptor.identity.trackID }) {
-            if let track = await metadata.track(id: trackID, scope: scope)
+            guard libraryRefreshID == requestID, accountScope == scope, !Task.isCancelled else { return }
+            if let track = await metadataReader(trackID, scope)
                 ?? catalog.jobs.first(where: { $0.accountScope == scope && $0.track.id == trackID })?.track {
                 result.append(.init(track: track, assets: assets))
             }
         }
-        guard accountScope == scope else { return }
+        guard libraryRefreshID == requestID, accountScope == scope, !Task.isCancelled else { return }
         offlineTracks = result.sorted { $0.track.name.localizedStandardCompare($1.track.name) == .orderedAscending }
         let availableIDs = Set(available.map(\.id))
         var changed = false
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == scope && catalog.jobs[i].status == .complete {
-            if let id = catalog.jobs[i].assetID, !availableIDs.contains(id) {
+            let job = catalog.jobs[i]
+            // A scan can only invalidate the completed attempt it started with.
+            // Downloads completed or retried during metadata reads are newer.
+            if let id = job.assetID, let scanned = completedAtStart[job.id],
+               scanned.assetID == id, scanned.attempt == job.attempt, !availableIDs.contains(id) {
                 catalog.jobs[i].status = .failed
                 catalog.jobs[i].attempt = nil
                 catalog.jobs[i].errorMessage = String(localized: "本地文件缺失，请重新下载")

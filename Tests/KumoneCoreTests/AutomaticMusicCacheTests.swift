@@ -5,6 +5,61 @@ import Testing
 
 @Suite("Automatic current-track cache", .timeLimit(.minutes(1)))
 struct AutomaticMusicCacheTests {
+    @Test func downloadsReclaimOrdinaryCacheBeforeLikesAndKeepProtectedAudio() async throws {
+        let fixture = try OfflineAudioFixture(), root = fixture.store().directory
+        defer { try? FileManager.default.removeItem(at: root) }
+        let block = Int64((fixture.data.count + 4095) / 4096 * 4096)
+        let floor: Int64 = 4096
+        let store = OfflineStore(directory: root, minimumFreeBytes: floor, freeSpace: { url in
+            let files = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey])
+            var used: Int64 = 0
+            while let file = files?.nextObject() as? URL {
+                if file.pathExtension == "mp3" {
+                    used += Int64((try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0)
+                }
+            }
+            return floor + block * 6 - used
+        })
+        var assets: [OfflineAudioDescriptor] = []
+        for id in 1...5 {
+            let asset = descriptor(fixture, id: id)
+            let input = root.appendingPathComponent("input")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try fixture.data.write(to: input)
+            try await store.importDownload(at: input, descriptor: asset)
+            assets.append(asset)
+        }
+        try await store.retain(id: assets[2].identity.id, owner: "download")
+        let playing = try #require(try await store.acquire(accountScope: "test-account", trackID: 4, preferredQuality: "exhigh"))
+        let context = MusicCacheContext(policy: .disabled, protectedAssetIDs: [assets[4].identity.id], likedTracks: ["test-account": [2]])
+        try await store.reserveDownload(token: "first", bytes: block * 2, context: context)
+        #expect(try await store.record(id: assets[0].identity.id) == nil)
+        #expect(try await store.record(id: assets[1].identity.id)?.state == .complete)
+        try await store.reserveDownload(token: "second", bytes: block, context: context)
+        #expect(try await store.record(id: assets[1].identity.id) == nil)
+        for asset in assets.suffix(3) { #expect(try await store.record(id: asset.identity.id)?.state == .complete) }
+        await #expect(throws: OfflineAudioError.insufficientSpace) {
+            try await store.reserveDownload(token: "third", bytes: 1, context: context)
+        }
+        await store.releaseDownloadReservation(token: "first")
+        await store.releaseDownloadReservation(token: "second")
+        try await store.release(playing)
+    }
+
+    @Test func impossibleDownloadDoesNotEraseTheCache() async throws {
+        let fixture = try OfflineAudioFixture(), root = fixture.store().directory
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OfflineStore(directory: root, minimumFreeBytes: 0, freeSpace: { _ in 0 })
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let input = root.appendingPathComponent("input")
+        try fixture.data.write(to: input)
+        try await store.importDownload(at: input, descriptor: fixture.descriptor)
+        await #expect(throws: OfflineAudioError.insufficientSpace) {
+            try await store.reserveDownload(token: "too-large", bytes: 1_000_000)
+        }
+        #expect(try await store.record(id: fixture.descriptor.identity.id)?.state == .complete)
+    }
+
     @Test @MainActor func switchingSongsDoesNotCancelAnAttachedDownload() async throws {
         let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
         let server = try await AudioFixtureServer(fixture: fixture, delay: 0.01)

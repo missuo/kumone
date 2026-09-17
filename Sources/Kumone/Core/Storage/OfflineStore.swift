@@ -122,10 +122,24 @@ actor OfflineStore {
         return result
     }
 
-    func reserveDownload(token: String, bytes: Int64) throws {
-        _ = try preparedDatabase()
+    func reserveDownload(token: String, bytes: Int64, context: MusicCacheContext = .init(policy: .automatic)) throws {
+        let db = try preparedDatabase()
         let others = downloadReservations.filter { $0.key != token }.values.reduce(0, +) + cacheReservations.values.reduce(0, +)
-        guard bytes >= 0, try freeSpace(directory) - others - bytes >= minimumFreeBytes else { throw OfflineAudioError.insufficientSpace }
+        guard bytes >= 0 else { throw OfflineAudioError.insufficientSpace }
+        if try freeSpace(directory) - others - bytes < minimumFreeBytes {
+            let records = try db.allRecords().filter { $0.retainedBy.isEmpty && !context.protectedAssetIDs.contains($0.id) }
+            let candidates = evictionCandidates(records, context: context)
+            let reclaimable = candidates.reduce(Int64(0)) { $0 + cacheFileBytes($1) }
+            // Do not discard useful cache if even removing it cannot fit this download.
+            guard try freeSpace(directory) + reclaimable - others - bytes >= minimumFreeBytes else {
+                throw OfflineAudioError.insufficientSpace
+            }
+            for record in candidates {
+                if try freeSpace(directory) - others - bytes >= minimumFreeBytes { break }
+                try remove(id: record.id)
+            }
+        }
+        guard try freeSpace(directory) - others - bytes >= minimumFreeBytes else { throw OfflineAudioError.insufficientSpace }
         downloadReservations[token] = bytes
     }
 
@@ -190,13 +204,24 @@ actor OfflineStore {
         guard context.policy != .disabled else { return .init(limit: 0, used: used) }
         let reserved = cacheReservations.values.reduce(0, +) + additionalBytes
         let target = used + reserved > limit ? limit * 9 / 10 : limit
+        for record in evictionCandidates(records, context: context, protecting: protecting) {
+            let enoughDisk = try freeSpace(directory) - pending - reserved >= minimumFreeBytes
+            if used + reserved <= target && enoughDisk { break }
+            try remove(id: record.id)
+            used -= sizes.removeValue(forKey: record.id) ?? 0
+        }
+        return .init(limit: limit, used: used)
+    }
+
+    private func evictionCandidates(_ records: [OfflineAudioRecord], context: MusicCacheContext,
+                                    protecting: String? = nil) -> [OfflineAudioRecord] {
         func priority(_ record: OfflineAudioRecord) -> Int {
             if record.state != .complete { return 0 }
             let liked = context.likedTracks[record.descriptor.identity.accountScope]?
                 .contains(record.descriptor.identity.trackID) ?? true
             return liked ? 2 : 1
         }
-        let candidates = records.filter {
+        return records.filter {
             $0.id != protecting && writers[$0.id] == nil && !validating.contains($0.id) && !leases.values.contains($0.id)
                 && context.protectedTracks[$0.descriptor.identity.accountScope]?.contains($0.descriptor.identity.trackID) != true
         }.sorted {
@@ -205,13 +230,6 @@ actor OfflineStore {
             return ($0.lastPlayed ?? $0.verifiedModificationDate ?? .distantPast)
                 < ($1.lastPlayed ?? $1.verifiedModificationDate ?? .distantPast)
         }
-        for record in candidates {
-            let enoughDisk = try freeSpace(directory) - pending - reserved >= minimumFreeBytes
-            if used + reserved <= target && enoughDisk { break }
-            try remove(id: record.id)
-            used -= sizes.removeValue(forKey: record.id) ?? 0
-        }
-        return .init(limit: limit, used: used)
     }
 
     private func cacheFileBytes(_ record: OfflineAudioRecord) -> Int64 {
@@ -229,7 +247,7 @@ actor OfflineStore {
 
     func reusableDescriptor(accountScope: String, trackID: Int, quality: String, retainingFor owner: String? = nil) throws -> OfflineAudioDescriptor? {
         let db = try preparedDatabase()
-        let rank = ["standard", "higher", "exhigh", "lossless", "hires"]
+        let rank = AudioQuality.allCases.map(\.rawValue)
         guard let requested = rank.firstIndex(of: quality) else { return nil }
         for record in try db.records(scope: accountScope, trackID: trackID) where record.state == .complete {
             guard record.descriptor.identity.source == "netease",
@@ -299,10 +317,16 @@ actor OfflineStore {
         }
     }
 
-    func acquire(accountScope: String, trackID: Int, preferredQuality: String) throws -> OfflinePlaybackLease? {
+    func acquire(accountScope: String, trackID: Int, preferredQuality: String,
+                 allowLowerQuality: Bool = true) throws -> OfflinePlaybackLease? {
         let db = try preparedDatabase()
         let records = try playbackRecords(accountScope: accountScope, trackID: trackID, preferredQuality: preferredQuality)
+        let qualities = AudioQuality.allCases.map(\.rawValue)
         for candidate in records {
+            if !allowLowerQuality {
+                guard let requested = qualities.firstIndex(of: preferredQuality),
+                      let cached = qualities.firstIndex(of: candidate.descriptor.identity.quality), cached >= requested else { continue }
+            }
             guard var record = try availableRecord(candidate, database: db) else { continue }
             let url = audioURL(record)
             record.lastPlayed = Date()
@@ -326,7 +350,7 @@ actor OfflineStore {
         try preparedDatabase().records(scope: accountScope, trackID: trackID)
             .filter { $0.state == .complete && $0.descriptor.identity.source == "netease" }
             .sorted {
-                let qualities = ["standard", "higher", "exhigh", "lossless", "hires"]
+                let qualities = AudioQuality.allCases.map(\.rawValue)
                 let lhs = $0.descriptor.identity.quality, rhs = $1.descriptor.identity.quality
                 if (lhs == preferredQuality) != (rhs == preferredQuality) { return lhs == preferredQuality }
                 return (qualities.firstIndex(of: lhs) ?? -1) > (qualities.firstIndex(of: rhs) ?? -1)

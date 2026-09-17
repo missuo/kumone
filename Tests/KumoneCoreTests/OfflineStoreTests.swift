@@ -4,6 +4,42 @@ import Testing
 
 @Suite("Offline storage")
 struct OfflineStoreTests {
+    @Test func preferredQualityCanExcludeLowerCacheWithoutMarkingItPlayed() async throws {
+        let low = try OfflineAudioFixture(), store = low.store()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        let writer = UUID()
+        try await store.begin(low.descriptor, writer: writer)
+        try await store.write(low.data, at: 0, id: low.descriptor.identity.id, writer: writer)
+        try await store.finalize(id: low.descriptor.identity.id, writer: writer)
+        await store.releaseWriter(id: low.descriptor.identity.id, writer: writer)
+        #expect(try await store.acquire(accountScope: "test-account", trackID: 1,
+                                       preferredQuality: "lossless", allowLowerQuality: false) == nil)
+        #expect(try await store.record(id: low.descriptor.identity.id)?.lastPlayed == nil)
+        let offline = try #require(try await store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "lossless"))
+        #expect(offline.descriptor.identity.quality == "exhigh")
+        #expect(try Data(contentsOf: offline.url) == low.data)
+        try await store.release(offline)
+
+        let high = try OfflineAudioFixture(.flac)
+        let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: "test-account", trackID: 1, source: "netease", quality: "lossless",
+                                                               format: .flac, contentMD5: high.descriptor.identity.contentMD5),
+                                                byteCount: high.descriptor.byteCount, duration: 3)
+        let highWriter = UUID()
+        try await store.begin(descriptor, writer: highWriter)
+        try await store.write(high.data, at: 0, id: descriptor.identity.id, writer: highWriter)
+        try await store.finalize(id: descriptor.identity.id, writer: highWriter)
+        await store.releaseWriter(id: descriptor.identity.id, writer: highWriter)
+        let preferred = try #require(try await store.acquire(accountScope: "test-account", trackID: 1,
+                                                            preferredQuality: "lossless", allowLowerQuality: false))
+        #expect(preferred.descriptor.identity.quality == "lossless")
+        try await store.release(preferred)
+        try await store.remove(id: low.descriptor.identity.id)
+        let better = try #require(try await store.acquire(accountScope: "test-account", trackID: 1,
+                                                         preferredQuality: "exhigh", allowLowerQuality: false))
+        #expect(better.descriptor.identity.quality == "lossless")
+        try await store.release(better)
+    }
+
     @Test func sparseFileIsNotOfflinePlayable() async throws {
         let fixture = try OfflineAudioFixture()
         let store = fixture.store(), writer = UUID(), id = fixture.descriptor.identity.id
