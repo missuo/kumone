@@ -279,10 +279,7 @@ struct TrackRow: View {
             #if os(macOS)
             TrackDownloadButton(track: track, isVisible: isHovering)
             #else
-            downloadedIndicator
-                .frame(width: 16)
-                .opacity(offlineTrack?.isDownloaded == true ? 1 : 0)
-                .accessibilityHidden(offlineTrack?.isDownloaded != true)
+            TrackDownloadButton(track: track, isVisible: offlineTrack?.isDownloaded == true)
             #endif
             let liked = account.isLiked(track.id)
             Button {

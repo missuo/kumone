@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import KumoneCore
@@ -137,6 +138,135 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func stoppingACollectionPreservesCompletedSongsAndOtherDownloadRequests() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue(owner: "playlist:a")
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        let tracks = try (2...4).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+        }
+        await h.manager.enqueue(tracks: [h.track, tracks[0], tracks[1]], owner: "playlist:a", name: "A", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 3 }
+        let shared = h.transport.started.first { $0.resource.descriptor.identity.trackID == 2 }!
+        let stopped = h.transport.started.first { $0.resource.descriptor.identity.trackID == 3 }!
+        await h.manager.enqueue(tracks: [tracks[0]], owner: "playlist:b", name: "B", quality: "exhigh", allowsMetered: false)
+        await h.manager.enqueue(track: tracks[2], quality: "exhigh", allowsMetered: false)
+        await h.manager.cancelCollection("playlist:a")
+        try await waitForDownload { h.transport.started.count == 4 }
+        #expect(!h.transport.cancelled.contains(shared.token))
+        #expect(h.transport.cancelled.contains(stopped.token))
+        #expect(h.manager.jobs.first { $0.track.id == 2 }?.owners == ["playlist:b"])
+        #expect(h.manager.jobs.first { $0.track.id == 3 }?.status == .cancelled)
+        #expect(h.manager.pendingJobs.allSatisfy { !$0.owners.contains("playlist:a") })
+        #expect(h.manager.downloadedSongs().map(\.id) == [1])
+        #expect(h.manager.jobs.first { $0.track.id == 1 }?.owners == ["playlist:a"])
+        try h.transport.finish(stopped)
+        try h.transport.finish(shared)
+        try await waitForDownload { h.manager.downloadedTracks.count == 2 }
+        #expect(h.manager.jobs.first { $0.track.id == 2 }?.owners == ["playlist:b"])
+        #expect(h.manager.pendingJobs.map { $0.track.id } == [4])
+    }
+
+    @Test func a600SongCollectionPausesAndResumesAsABatch() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        let tracks = try (1...600).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:600", name: "600 songs", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 2 }
+        let revision = try await h.persistence.load().revision
+        var pausedCounts: [Int] = []
+        let observer = h.manager.$jobs.dropFirst().sink { jobs in pausedCounts.append(jobs.filter { $0.status == .paused }.count) }
+        let start = ContinuousClock.now
+        await h.manager.pauseCollection("playlist:600")
+        print("Paused 600 songs in \(start.duration(to: .now))")
+        observer.cancel()
+        #expect(!pausedCounts.isEmpty && pausedCounts.allSatisfy { $0 == 600 })
+        let pausedCatalog = try await h.persistence.load()
+        #expect(pausedCatalog.revision - revision < 10)
+        #expect(h.transport.started.count == 2)
+        #expect(h.manager.jobs.allSatisfy { $0.status == .paused && $0.owners == ["playlist:600"] })
+        await h.manager.resumeCollection("playlist:600")
+        try await waitForDownload { h.transport.started.count == 4 }
+        #expect(h.transport.started.suffix(2).allSatisfy { $0.resumed })
+        #expect(!h.manager.jobs.contains { $0.status == .paused })
+        await h.manager.cancelCollection("playlist:600")
+        #expect(h.manager.pendingJobs.isEmpty)
+        #expect(h.manager.jobs.allSatisfy { $0.status == .cancelled })
+    }
+
+    @Test func cancelling600TasksPublishesOneEmptyQueueAndPreservesCompletedAudio() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        let tracks = try (2...601).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:600", name: "600 songs", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 3 }
+        #expect(h.manager.pendingJobs.count == 600)
+        let revision = try await h.persistence.load().revision
+        var counts: [Int] = []
+        let observer = h.manager.$jobs.dropFirst().sink { jobs in
+            counts.append(jobs.filter { !$0.owners.isEmpty && ![.complete, .cancelled].contains($0.status) }.count)
+        }
+        defer { observer.cancel() }
+        let start = ContinuousClock.now
+        await h.manager.cancelAll()
+        print("Cancelled 600 tasks in \(start.duration(to: .now))")
+        #expect(!counts.isEmpty && counts.allSatisfy { $0 == 0 })
+        #expect(h.transport.started.count == 3)
+        #expect(h.manager.pendingJobs.isEmpty && h.manager.downloadedSongs().map(\.id) == [1])
+        let saved = try await h.persistence.load()
+        #expect(saved.jobs.filter { $0.status == .cancelled }.count == 600)
+        // Metadata callbacks may also save, but cancelling must not save per song.
+        #expect(saved.revision - revision < 10)
+        for transfer in h.transport.started.dropFirst() {
+            #expect(h.transport.cancelled.contains(transfer.token))
+            try h.transport.finish(transfer)
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(h.manager.pendingJobs.isEmpty && h.manager.downloadedSongs().map(\.id) == [1])
+        #expect(try await h.store.availableRecords(accountScope: "test-account").count == 1)
+    }
+
+    @Test func tasksAddedDuringBatchCleanupStartAfterCleanupFinishes() async throws {
+        let gate = DownloadRestoreGate()
+        var blockRead = false
+        let h = try DownloadHarness(metadataReader: { _, _ in
+            if blockRead { await gate.wait() }
+            return nil
+        })
+        defer { gate.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        let second = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Second\",\"dt\":3000}".utf8))
+        let third = try JSONDecoder().decode(Track.self, from: Data("{\"id\":3,\"name\":\"Third\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(track: second, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 2 }
+        blockRead = true
+        let cancellation = Task { await h.manager.cancelAll() }
+        try await waitForDownload { gate.entered }
+        #expect(h.manager.pendingJobs.isEmpty)
+        await h.manager.enqueue(track: third, quality: "exhigh", allowsMetered: false)
+        #expect(h.transport.started.count == 2)
+        #expect(h.manager.jobs.first { $0.track.id == third.id }?.status == .queued)
+        blockRead = false
+        gate.open()
+        await cancellation.value
+        try await waitForDownload { h.transport.started.count == 3 }
+        #expect(h.transport.started[2].resource.descriptor.identity.trackID == third.id)
+    }
+
     @Test func connectedNetworkRetriesWithoutAPathChangeAndKeepsResumeData() async throws {
         let clock = DownloadRetryClock()
         let h = try DownloadHarness(retrySleep: { await clock.sleep($0) })

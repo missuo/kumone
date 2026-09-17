@@ -5,6 +5,14 @@ import Network
 final class DownloadProgress: ObservableObject {
     struct Value { let received: Int64; let expected: Int64 }
     @Published var values: [UUID: Value] = [:]
+
+    func fraction(for job: DownloadJob) -> Double? {
+        if job.status == .complete { return 1 }
+        let value = values[job.id]
+        let expected = max(value?.expected ?? 0, job.expectedBytes)
+        guard expected > 0 else { return nil }
+        return min(1, max(0, Double(value?.received ?? job.receivedBytes) / Double(expected)))
+    }
 }
 
 @MainActor
@@ -107,6 +115,7 @@ final class DownloadManager: ObservableObject {
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
     private var libraryRefreshID = UUID()
+    private var batchOperations = 0
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
@@ -277,63 +286,131 @@ final class DownloadManager: ObservableObject {
     }
 
     func pause(_ id: UUID) async {
-        guard let i = index(id), catalog.jobs[i].accountScope == accountScope,
-              [.queued, .resolving, .downloading, .waitingNetwork].contains(catalog.jobs[i].status) else { return }
-        let token = catalog.jobs[i].token
-        let stamp = UUID()
-        cancelNetworkRetry(id)
-        workers.removeValue(forKey: id)?.task.cancel()
-        catalog.jobs[i].status = .paused
-        catalog.jobs[i].attempt = stamp
+        await pauseJobs([id])
+    }
+
+    func pauseAll() async { await pauseJobs(Set(pendingJobs.map(\.id))) }
+
+    func pauseCollection(_ owner: String) async {
+        await pauseJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)))
+    }
+
+    private func pauseJobs(_ ids: Set<UUID>) async {
+        var paused: [(job: DownloadJob, stamp: UUID)] = []
+        for i in catalog.jobs.indices where ids.contains(catalog.jobs[i].id) && catalog.jobs[i].accountScope == accountScope {
+            let job = catalog.jobs[i]
+            guard [.queued, .resolving, .downloading, .waitingNetwork].contains(job.status) else { continue }
+            let stamp = UUID()
+            paused.append((job, stamp))
+            cancelNetworkRetry(job.id)
+            workers.removeValue(forKey: job.id)?.task.cancel()
+            catalog.jobs[i].status = .paused
+            catalog.jobs[i].attempt = stamp
+        }
+        guard !paused.isEmpty else { return }
+        batchOperations += 1
+        defer { batchOperations -= 1; schedule() }
         publish()
         try? await persist()
-        if let token {
+        for (job, stamp) in paused {
+            guard let token = job.token else { continue }
             let data = await transport.pause(token: token)
             await store.releaseDownloadReservation(token: token)
-            if let i = index(id), catalog.jobs[i].attempt == stamp, catalog.jobs[i].status == .paused {
-                if let data { try? await persistence.saveResumeData(data, jobID: id) }
+            if let i = index(job.id), catalog.jobs[i].attempt == stamp, catalog.jobs[i].status == .paused {
+                if let data { try? await persistence.saveResumeData(data, jobID: job.id) }
             }
         }
-        schedule()
     }
 
     func resume(_ id: UUID, allowsMetered: Bool? = nil) async {
-        guard let i = index(id), catalog.jobs[i].accountScope == accountScope, catalog.jobs[i].status.canResume else { return }
-        let oldToken = catalog.jobs[i].token
-        cancelNetworkRetry(id)
-        catalog.jobs[i].attempt = nil
-        catalog.jobs[i].status = .queued
-        catalog.jobs[i].errorMessage = nil
-        catalog.jobs[i].retries = 0
-        if let allowsMetered {
-            catalog.jobs[i].allowsMetered = allowsMetered
-            // Resume blobs contain the previous request's network restrictions.
-            try? await persistence.saveResumeData(nil, jobID: id)
+        await resumeJobs([id], allowsMetered: allowsMetered)
+    }
+
+    func resumeAll(failedOnly: Bool = false) async {
+        let jobs = pendingJobs.filter { !failedOnly || [.failed, .unavailable].contains($0.status) }
+        await resumeJobs(Set(jobs.map(\.id)))
+    }
+
+    func resumeCollection(_ owner: String) async {
+        await resumeJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)))
+    }
+
+    private func resumeJobs(_ ids: Set<UUID>, allowsMetered: Bool? = nil) async {
+        var resumed: [DownloadJob] = []
+        for i in catalog.jobs.indices where ids.contains(catalog.jobs[i].id) && catalog.jobs[i].accountScope == accountScope {
+            let job = catalog.jobs[i]
+            guard job.status.canResume else { continue }
+            resumed.append(job)
+            cancelNetworkRetry(job.id)
+            catalog.jobs[i].attempt = nil
+            catalog.jobs[i].status = .queued
+            catalog.jobs[i].errorMessage = nil
+            catalog.jobs[i].retries = 0
+            if let allowsMetered { catalog.jobs[i].allowsMetered = allowsMetered }
+            if catalog.jobs[i].owners.isEmpty { catalog.jobs[i].owners.insert("single:\(job.track.id)") }
+            if let token = job.token { transport.cancel(token: token) }
         }
-        if catalog.jobs[i].owners.isEmpty { catalog.jobs[i].owners.insert("single:\(catalog.jobs[i].track.id)") }
-        if let oldToken { transport.cancel(token: oldToken); await store.releaseDownloadReservation(token: oldToken) }
+        guard !resumed.isEmpty else { return }
+        batchOperations += 1
+        defer { batchOperations -= 1; schedule() }
         publish()
         try? await persist()
-        schedule()
+        for job in resumed {
+            if let token = job.token { await store.releaseDownloadReservation(token: token) }
+            // Resume blobs contain the previous request's network restrictions.
+            if allowsMetered != nil { try? await persistence.saveResumeData(nil, jobID: job.id) }
+        }
     }
 
     func cancel(_ id: UUID) async {
-        guard let i = index(id), catalog.jobs[i].accountScope == accountScope else { return }
-        let job = catalog.jobs[i]
-        cancelNetworkRetry(id)
-        workers.removeValue(forKey: id)?.task.cancel()
-        displayWorkers.removeValue(forKey: id)?.cancel()
-        catalog.jobs[i].attempt = nil
-        catalog.jobs[i].status = .cancelled
-        catalog.jobs[i].owners = []
-        if let token = job.token { transport.cancel(token: token); await store.releaseDownloadReservation(token: token) }
-        if let assetID = job.assetID { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
-        if job.status != .complete, let descriptor = job.descriptor { try? await store.remove(id: descriptor.identity.id) }
-        try? await persistence.saveResumeData(nil, jobID: id)
+        await cancelJobs([id])
+    }
+
+    func cancelAll() async {
+        await cancelJobs(Set(pendingJobs.map(\.id)))
+    }
+
+    func cancelCollection(_ owner: String) async {
+        await cancelJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)), owner: owner)
+    }
+
+    private func cancelJobs(_ ids: Set<UUID>, owner: String? = nil) async {
+        var cancelled: [DownloadJob] = []
+        var changed = false
+        // Invalidate every selected attempt before yielding so completion and
+        // retry callbacks cannot advance the queue while it is being cancelled.
+        for i in catalog.jobs.indices where ids.contains(catalog.jobs[i].id) && catalog.jobs[i].accountScope == accountScope {
+            let job = catalog.jobs[i]
+            if let owner {
+                guard catalog.jobs[i].owners.remove(owner) != nil else { continue }
+                changed = true
+                if !catalog.jobs[i].owners.isEmpty { continue }
+            }
+            changed = true
+            cancelled.append(job)
+            cancelNetworkRetry(job.id)
+            workers.removeValue(forKey: job.id)?.task.cancel()
+            displayWorkers.removeValue(forKey: job.id)?.cancel()
+            catalog.jobs[i].attempt = nil
+            catalog.jobs[i].status = .cancelled
+            catalog.jobs[i].owners = []
+            if let token = job.token { transport.cancel(token: token) }
+        }
+        guard changed else { return }
+        batchOperations += 1
+        defer { batchOperations -= 1; schedule() }
+        let cancelledIDs = Set(cancelled.map(\.id))
+        progress.values = progress.values.filter { !cancelledIDs.contains($0.key) }
         publish()
         try? await persist()
-        await refreshLibrary()
-        schedule()
+        for job in cancelled {
+            if let token = job.token { await store.releaseDownloadReservation(token: token) }
+            guard let i = index(job.id), catalog.jobs[i].status == .cancelled else { continue }
+            if let assetID = job.assetID { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
+            if job.status != .complete, let descriptor = job.descriptor { try? await store.remove(id: descriptor.identity.id) }
+            try? await persistence.saveResumeData(nil, jobID: job.id)
+        }
+        if !cancelled.isEmpty { await refreshLibrary() }
     }
 
     func removeCollection(_ owner: String) async {
@@ -397,7 +474,7 @@ final class DownloadManager: ObservableObject {
     }
 
     private func schedule() {
-        guard isReady else { return }
+        guard isReady, batchOperations == 0 else { return }
         var running = catalog.jobs.filter { $0.accountScope == accountScope && ($0.status.isWorking || ($0.status == .waitingNetwork && $0.attempt != nil && network.permits($0))) }.count
         let limit = network.expensive ? 1 : 2
         for i in catalog.jobs.indices where running < limit {

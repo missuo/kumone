@@ -126,6 +126,11 @@ struct DownloadTasksView: View {
     @ObservedObject private var downloads = DownloadManager.shared
     @State private var confirmCancelAll = false
 
+    private var displayedJobs: [DownloadJob] {
+        let jobs = downloads.pendingJobs
+        return jobs.filter { $0.status.isWorking } + jobs.filter { !$0.status.isWorking }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -134,14 +139,14 @@ struct DownloadTasksView: View {
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
                     taskButton("全部暂停", icon: "pause.fill", enabled: downloads.pendingJobs.contains { [.queued, .resolving, .downloading, .waitingNetwork].contains($0.status) }) {
-                        Task { for job in downloads.pendingJobs { await downloads.pause(job.id) } }
+                        Task { await downloads.pauseAll() }
                     }
                     taskButton("继续全部", icon: "play.fill", enabled: downloads.pendingJobs.contains { $0.status.canResume }) {
-                        Task { for job in downloads.pendingJobs where job.status.canResume { await downloads.resume(job.id) } }
+                        Task { await downloads.resumeAll() }
                     }
                     Menu {
                         Button("重试失败任务") {
-                            Task { for job in downloads.pendingJobs where [.failed, .unavailable].contains(job.status) { await downloads.resume(job.id) } }
+                            Task { await downloads.resumeAll(failedOnly: true) }
                         }
                         Button("取消未完成任务", role: .destructive) { confirmCancelAll = true }
                     } label: {
@@ -165,7 +170,7 @@ struct DownloadTasksView: View {
                         .frame(minHeight: 300)
                 } else {
                     LazyVStack(spacing: 8) {
-                        ForEach(downloads.pendingJobs) { job in
+                        ForEach(displayedJobs) { job in
                             DownloadTaskRow(job: job, manager: downloads, progress: downloads.progress)
                         }
                     }
@@ -178,8 +183,7 @@ struct DownloadTasksView: View {
         .task { await downloads.start() }
         .alert("取消未完成的下载？", isPresented: $confirmCancelAll) {
             Button("取消下载", role: .destructive) {
-                let ids = downloads.pendingJobs.map(\.id)
-                Task { for id in ids { await downloads.cancel(id) } }
+                Task { await downloads.cancelAll() }
             }
             Button("保留任务", role: .cancel) {}
         } message: { Text("已完成的下载会保留。") }
@@ -286,7 +290,7 @@ struct TrackDownloadActions: View {
         } else if let job, job.status.canResume {
             Button("继续下载") { Task { await downloads.resume(job.id) } }
         } else {
-            Button { enqueue() } label: { Label("下载", systemImage: "arrow.down.circle") }
+            Button("下载") { enqueue() }
         }
     }
 
@@ -303,34 +307,44 @@ struct DownloadCollectionButton: View {
     var enabled = true
     var compact = false
     @ObservedObject private var downloads = DownloadManager.shared
+    @ObservedObject private var progress = DownloadManager.shared.progress
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
     @Environment(\.openLogin) private var openLogin
     @Environment(\.openDestination) private var openDestination
+    @State private var isSubmitting = false
 
     private var collectionJobs: [DownloadJob] { downloads.jobs.filter { $0.owners.contains(owner) } }
     private var isComplete: Bool {
         let saved = Set(collectionJobs.filter { $0.status == .complete }.map { $0.track.id })
         return !tracks.isEmpty && Set(tracks.map(\.id)).isSubset(of: saved)
     }
-    private var hasWholeRequest: Bool {
-        !tracks.isEmpty && Set(tracks.map(\.id)).isSubset(of: Set(collectionJobs.map { $0.track.id }))
+    private var isActive: Bool { collectionJobs.contains { $0.status.isInProgress } }
+    private var canResume: Bool { collectionJobs.contains { $0.status.canResume && $0.status != .waitingNetwork } }
+    private var fraction: Double? {
+        let ids = Set(tracks.map(\.id))
+        guard !ids.isEmpty else { return nil }
+        let jobs = Dictionary(collectionJobs.map { ($0.track.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let total = ids.reduce(0.0) { sum, id in sum + (jobs[id].flatMap { progress.fraction(for: $0) } ?? 0) }
+        return total > 0 ? total / Double(ids.count) : nil
     }
     private var title: String {
+        if isActive || isSubmitting { return String(localized: "停止下载") }
+        if canResume { return String(localized: "继续下载") }
         if isComplete { return String(localized: "已下载") }
-        return hasWholeRequest ? String(localized: "下载任务") : String(localized: "下载全部")
+        return String(localized: "下载全部")
     }
 
     var body: some View {
-        Button {
-            guard account.isLoggedIn else { openLogin(); return }
-            if isComplete { openDestination(.downloaded); return }
-            if hasWholeRequest { openDestination(.downloadTasks); return }
-            Task { await downloads.enqueue(tracks: tracks, owner: owner, name: name,
-                                           quality: settings.audioQuality.rawValue, allowsMetered: false) }
-        } label: {
-            Image(systemName: isComplete ? "checkmark" : "arrow.down")
-                .font(.system(size: compact ? 16 : 14, weight: .medium))
+        Button(action: activate) {
+            Group {
+                if isActive || isSubmitting {
+                    DownloadProgressIcon(progress: fraction, size: compact ? 21 : 19)
+                } else {
+                    Image(systemName: isComplete && !canResume ? "checkmark" : "arrow.down")
+                        .font(.system(size: compact ? 16 : 14, weight: .medium))
+                }
+            }
                 .foregroundStyle(Theme.accent)
                 .frame(width: compact ? 38 : 34, height: compact ? 38 : 34)
                 .background(.primary.opacity(0.06), in: Circle())
@@ -338,7 +352,54 @@ struct DownloadCollectionButton: View {
         }
         .buttonStyle(.pressable)
         .accessibilityLabel(title)
+        .accessibilityIdentifier("collection-download-\(owner)")
         .help(title)
-        .disabled(!enabled || tracks.isEmpty)
+        .disabled(isSubmitting || (!isActive && !canResume && (!enabled || tracks.isEmpty)))
+        .contextMenu {
+            if collectionJobs.contains(where: { [.queued, .resolving, .downloading, .waitingNetwork].contains($0.status) }) {
+                Button("暂停下载") {
+                    Task { [scope = downloads.accountScope] in
+                        guard downloads.accountScope == scope else { return }
+                        await downloads.pauseCollection(owner)
+                    }
+                }
+            }
+            if canResume {
+                Button("继续下载") {
+                    Task { [scope = downloads.accountScope] in
+                        guard downloads.accountScope == scope else { return }
+                        await downloads.resumeCollection(owner)
+                    }
+                }
+            }
+            if isActive || canResume {
+                Button("停止下载") {
+                    Task { [scope = downloads.accountScope] in
+                        guard downloads.accountScope == scope else { return }
+                        await downloads.cancelCollection(owner)
+                    }
+                }
+            }
+            Button("下载任务") { openDestination(.downloadTasks) }
+        }
+    }
+
+    private func activate() {
+        guard account.isLoggedIn else { openLogin(); return }
+        guard !isSubmitting else { return }
+        if !isActive && !canResume && isComplete { openDestination(.downloaded); return }
+        let stop = isActive
+        isSubmitting = true
+        Task { [scope = downloads.accountScope] in
+            defer { isSubmitting = false }
+            guard downloads.accountScope == scope else { return }
+            if stop { await downloads.cancelCollection(owner) }
+            else {
+                await downloads.resumeCollection(owner)
+                guard downloads.accountScope == scope else { return }
+                await downloads.enqueue(tracks: tracks, owner: owner, name: name,
+                                        quality: settings.audioQuality.rawValue, allowsMetered: false)
+            }
+        }
     }
 }

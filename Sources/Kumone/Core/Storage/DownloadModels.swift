@@ -21,6 +21,7 @@ enum DownloadStatus: String, Codable {
     }
 
     var isWorking: Bool { [.resolving, .downloading, .verifying].contains(self) }
+    var isInProgress: Bool { [.queued, .resolving, .downloading, .waitingNetwork, .verifying].contains(self) }
     var canResume: Bool { [.paused, .failed, .unavailable, .cancelled, .waitingNetwork].contains(self) }
 }
 

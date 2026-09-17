@@ -397,3 +397,4 @@
 "歌单暂无歌曲" = "This playlist is empty";
 "已载入 %lld/%lld 首" = "%lld of %lld songs loaded";
 "此歌曲需要联网播放" = "Connect to play this song";
+"停止下载" = "Stop Download";
