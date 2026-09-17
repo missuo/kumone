@@ -11,6 +11,7 @@ private final class FakeDownloadTransport: DownloadTransport {
     var started: [Started] = []
     var cancelled: [String] = []
     var existing: Set<String> = []
+    var restoredReceivedBytes: [String: Int64] = [:]
     var beforeRestore: (() async -> Void)?
 
     init(inbox: URL) {
@@ -19,7 +20,10 @@ private final class FakeDownloadTransport: DownloadTransport {
         events = stream.stream
         continuation = stream.continuation
     }
-    func restoreTasks() async -> Set<String> { await beforeRestore?(); return existing }
+    func restoreTasks() async -> [String: Int64] {
+        await beforeRestore?()
+        return Dictionary(uniqueKeysWithValues: existing.map { ($0, restoredReceivedBytes[$0, default: 0]) })
+    }
     func completedDownloads() throws -> [CompletedDownload] {
         guard FileManager.default.fileExists(atPath: inbox.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)
@@ -65,17 +69,22 @@ private final class DownloadHarness {
     let manager: DownloadManager
 
     init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false,
-         metadataReader: ((Int, String) async -> Track?)? = nil) throws {
+         metadataReader: ((Int, String) async -> Track?)? = nil, freeBytes: Int64? = nil,
+         retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-download-tests-\(UUID())")
         fixture = try OfflineAudioFixture()
         track = try JSONDecoder().decode(Track.self, from: Data("{\"id\":1,\"name\":\"Offline fixture\",\"dt\":3000}".utf8))
-        store = OfflineStore(directory: root.appendingPathComponent("audio"), minimumFreeBytes: 0)
+        if let freeBytes {
+            store = OfflineStore(directory: root.appendingPathComponent("audio"), minimumFreeBytes: 0, freeSpace: { _ in freeBytes })
+        } else {
+            store = OfflineStore(directory: root.appendingPathComponent("audio"), minimumFreeBytes: 0)
+        }
         metadata = OfflineMetadataStore(directory: root.appendingPathComponent("metadata"))
         persistence = DownloadCatalogStore(directory: root.appendingPathComponent("catalog"))
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
                                   accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: { _, _ in },
-                                  metadataReader: metadataReader)
+                                  metadataReader: metadataReader, retrySleep: retrySleep)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
 
@@ -113,9 +122,194 @@ private final class DownloadRestoreGate {
     func open() { continuation?.resume(); continuation = nil }
 }
 
+@MainActor
+private final class DownloadRetryClock {
+    var delays: [Duration] = []
+    var pending: [CheckedContinuation<Void, Never>] = []
+    func sleep(_ delay: Duration) async {
+        delays.append(delay)
+        await withCheckedContinuation { pending.append($0) }
+    }
+    func advance() { if !pending.isEmpty { pending.removeFirst().resume() } }
+    func finish() { while !pending.isEmpty { advance() } }
+}
+
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func connectedNetworkRetriesWithoutAPathChangeAndKeepsResumeData() async throws {
+        let clock = DownloadRetryClock()
+        let h = try DownloadHarness(retrySleep: { await clock.sleep($0) })
+        defer { h.close(); clock.finish() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let first = h.transport.started[0]
+        h.transport.continuation.yield(.failed(token: first.token, domain: NSURLErrorDomain,
+            code: NSURLErrorNetworkConnectionLost, resumeData: Data("resume".utf8)))
+        try await waitForDownload { clock.pending.count == 1 }
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        #expect(clock.delays == [.seconds(1)])
+        #expect(h.transport.started.count == 1)
+        // A duplicate path callback must not skip the backoff.
+        h.manager.setNetwork(h.manager.network)
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        clock.advance()
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.started[1].resumed)
+        #expect(h.transport.started[1].token != first.token)
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test func repeatedNetworkFailuresStopAfterThreeBackoffRetries() async throws {
+        let clock = DownloadRetryClock()
+        let h = try DownloadHarness(retrySleep: { await clock.sleep($0) })
+        defer { h.close(); clock.finish() }
+        await h.enqueue()
+        for attempt in 0...3 {
+            try await waitForDownload { h.transport.started.count == attempt + 1 }
+            h.transport.continuation.yield(.failed(token: h.transport.started[attempt].token,
+                domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost, resumeData: nil))
+            if attempt < 3 {
+                try await waitForDownload { clock.pending.count == 1 }
+                clock.advance()
+            }
+        }
+        try await waitForDownload { h.manager.jobs.first?.status == .failed }
+        #expect(clock.delays == [.seconds(1), .seconds(2), .seconds(4)])
+        #expect(clock.pending.isEmpty)
+        #expect(h.transport.started.count == 4)
+        await h.manager.resume(try #require(h.manager.jobs.first?.id))
+        try await waitForDownload { h.transport.started.count == 5 }
+        h.transport.continuation.yield(.failed(token: h.transport.started[4].token,
+            domain: NSURLErrorDomain, code: NSURLErrorTimedOut, resumeData: nil))
+        try await waitForDownload { clock.pending.count == 1 }
+        #expect(clock.delays.last == .seconds(1))
+    }
+
+    @Test func resolutionConnectivityFailureUsesTheSameRetryBudget() async throws {
+        let clock = DownloadRetryClock()
+        var calls = 0
+        let h = try DownloadHarness(resolver: { track, quality, scope in
+            calls += 1
+            if calls == 1 { throw URLError(.networkConnectionLost) }
+            return try await DownloadHarness.resolve(track: track, quality: quality, scope: scope)
+        }, retrySleep: { await clock.sleep($0) })
+        defer { h.close(); clock.finish() }
+        await h.enqueue()
+        try await waitForDownload { clock.pending.count == 1 }
+        #expect(h.transport.started.isEmpty)
+        clock.advance()
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(calls == 2)
+    }
+
+    @Test(arguments: ["pause", "cancel", "account", "metered", "shutdown", "resume"])
+    func pendingRetryCannotOverrideNewerUserOrNetworkState(action: String) async throws {
+        let clock = DownloadRetryClock()
+        let h = try DownloadHarness(retrySleep: { await clock.sleep($0) })
+        defer { h.close(); clock.finish() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let id = try #require(h.manager.jobs.first?.id)
+        h.transport.continuation.yield(.failed(token: h.transport.started[0].token,
+            domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost, resumeData: nil))
+        try await waitForDownload { clock.pending.count == 1 }
+        switch action {
+        case "pause": await h.manager.pause(id)
+        case "cancel": await h.manager.cancel(id)
+        case "account": h.manager.activate(accountScope: "other-account")
+        case "metered": h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
+        case "shutdown": h.manager.shutdown()
+        default:
+            await h.manager.resume(id)
+            try await waitForDownload { h.transport.started.count == 2 }
+        }
+        let status = h.manager.jobs.first?.status
+        clock.advance()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(h.transport.started.count == (action == "resume" ? 2 : 1))
+        #expect(h.manager.jobs.first?.status == status)
+        if action == "metered" {
+            h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+            try await waitForDownload { h.transport.started.count == 2 }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func restoredTransferReservesSpaceBeforeNewDownloadsOrCache(expensive: Bool) async throws {
+        let h = try DownloadHarness(expensive: expensive, freeBytes: 180_000)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .downloading
+        job.attempt = UUID()
+        job.descriptor = h.fixture.descriptor
+        let token = try #require(job.token)
+        var catalog = DownloadCatalog()
+        catalog.jobs = [job]
+        try await h.persistence.save(catalog)
+        h.transport.existing.insert(token)
+        await h.manager.start()
+        #expect(h.manager.jobs.first?.status == (expensive ? .waitingNetwork : .downloading))
+        // Unknown response length must not discard the restored reservation.
+        h.transport.continuation.yield(.progress(token: token, received: 1_024, expected: -1))
+        try await waitForDownload { h.manager.progress.values[job.id]?.received == 1_024 }
+        let next = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Next\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(track: next, quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.manager.jobs.first { $0.track.id == 2 }?.status == .failed }
+        #expect(h.transport.started.isEmpty)
+        let resource = try await DownloadHarness.resolve(track: next, quality: "exhigh", scope: "test-account")
+        await #expect(throws: OfflineAudioError.insufficientSpace) {
+            try await h.store.beginCaching(resource.descriptor, writer: UUID(), context: .init(policy: .gb1))
+        }
+        await h.manager.pause(job.id)
+        await h.manager.resume(try #require(h.manager.jobs.first { $0.track.id == 2 }?.id))
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.transport.started[0].resource.descriptor.identity.trackID == 2)
+    }
+
+    @Test func restorationUsesActualReceivedBytesRatherThanStaleCatalogProgress() async throws {
+        let h = try DownloadHarness(freeBytes: 180_000)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .downloading
+        job.attempt = UUID()
+        job.descriptor = h.fixture.descriptor
+        let token = try #require(job.token)
+        var catalog = DownloadCatalog()
+        catalog.jobs = [job]
+        try await h.persistence.save(catalog)
+        h.transport.existing.insert(token)
+        h.transport.restoredReceivedBytes[token] = 80_000
+        await h.manager.start()
+        #expect(h.manager.jobs.first?.receivedBytes == 80_000)
+        let next = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Next\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(track: next, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.transport.started[0].resource.descriptor.identity.trackID == 2)
+        #expect(!h.transport.cancelled.contains(token))
+    }
+
+    @Test func restorationCancelsATransferThatNoLongerFits() async throws {
+        let h = try DownloadHarness(freeBytes: 100)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .downloading
+        job.attempt = UUID()
+        job.descriptor = h.fixture.descriptor
+        let token = try #require(job.token)
+        var catalog = DownloadCatalog()
+        catalog.jobs = [job]
+        try await h.persistence.save(catalog)
+        h.transport.existing.insert(token)
+        await h.manager.start()
+        #expect(h.manager.isReady)
+        #expect(h.manager.jobs.first?.status == .failed)
+        #expect(h.manager.jobs.first?.errorMessage == DownloadManager.message(for: OfflineAudioError.insufficientSpace))
+        #expect(h.transport.cancelled.contains(token))
+        try await h.store.reserveDownload(token: "probe", bytes: 100)
+    }
+
     @Test func playbackContextsReuseSavedCollectionsAndCachedMetadata() async throws {
         let h = try DownloadHarness(online: false)
         defer { h.close() }

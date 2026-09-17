@@ -35,7 +35,8 @@ enum DownloadTransportEvent {
 protocol DownloadTransport: AnyObject {
     var events: AsyncStream<DownloadTransportEvent> { get }
     var inbox: URL { get }
-    func restoreTasks() async -> Set<String>
+    /// Active task tokens and the bytes already written by URLSession.
+    func restoreTasks() async -> [String: Int64]
     func completedDownloads() throws -> [CompletedDownload]
     func start(resource: OfflineAudioResource, token: String, allowsMetered: Bool, resumeData: Data?)
     func pause(token: String) async -> Data?
@@ -134,14 +135,16 @@ final class BackgroundDownloadTransport: DownloadTransport {
         session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
     }
 
-    func restoreTasks() async -> Set<String> {
+    func restoreTasks() async -> [String: Int64] {
         let existing = await session.allTasks
+        var received: [String: Int64] = [:]
         for task in existing {
             guard let download = task as? URLSessionDownloadTask, let token = task.taskDescription,
                   DownloadSessionDelegate.validToken(token) else { task.cancel(); continue }
             tasks[token] = download
+            received[token] = max(0, download.countOfBytesReceived)
         }
-        return Set(tasks.keys)
+        return received
     }
 
     func completedDownloads() throws -> [CompletedDownload] {

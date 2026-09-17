@@ -95,7 +95,10 @@ final class DownloadManager: ObservableObject {
     private let metadataReader: (Int, String) async -> Track?
     private let cacheContext: () -> MusicCacheContext
     private let cacheCompletion: CacheCompletion
+    private let retrySleep: (Duration) async throws -> Void
     private var catalog = DownloadCatalog()
+    private var networkRetries: [UUID: Int] = [:]
+    private var networkRetryTasks: [UUID: Task<Void, Never>] = [:]
     private var workers: [UUID: (attempt: UUID, task: Task<Void, Never>)] = [:]
     private var displayWorkers: [UUID: Task<Void, Never>] = [:]
     private var restoration: Task<Void, Never>?
@@ -111,7 +114,8 @@ final class DownloadManager: ObservableObject {
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
          cacheContext: @escaping () -> MusicCacheContext = { .init(policy: .automatic) },
-         cacheCompletion: @escaping CacheCompletion = { _, _, _ in nil }) {
+         cacheCompletion: @escaping CacheCompletion = { _, _, _ in nil },
+         retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.store = store
         self.metadata = metadata
         self.persistence = persistence
@@ -122,6 +126,7 @@ final class DownloadManager: ObservableObject {
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
         self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
         self.cacheContext = cacheContext
+        self.retrySleep = retrySleep
     }
 
     func start() async {
@@ -134,7 +139,8 @@ final class DownloadManager: ObservableObject {
     private func restore() async {
         do {
             catalog = try await persistence.load()
-            let existing = await transport.restoreTasks()
+            let received = await transport.restoreTasks()
+            let existing = Set(received.keys)
             let receipts = try transport.completedDownloads()
             let receiptTokens = Set(receipts.map(\.token))
             let validTokens = Set(catalog.jobs.filter { $0.accountScope == accountScope && !$0.owners.isEmpty }.compactMap(\.token))
@@ -154,6 +160,30 @@ final class DownloadManager: ObservableObject {
             // Existing completed files recover a crash between importing audio
             // and saving a complete job. No second download is necessary.
             await reconcileCompletedAssets()
+            for job in catalog.jobs {
+                guard let token = job.token, let receivedBytes = received[token],
+                      !receiptTokens.contains(token) else { continue }
+                guard current(job), [.resolving, .downloading, .waitingNetwork, .verifying].contains(job.status),
+                      let descriptor = job.descriptor else {
+                    transport.cancel(token: token)
+                    continue
+                }
+                do {
+                    var context = cacheContext()
+                    context.protectedAssetIDs.formUnion(storageAssetIDs)
+                    try await store.reserveDownload(token: token, bytes: max(0, descriptor.byteCount - receivedBytes), context: context)
+                    guard current(job), let i = index(job.id) else {
+                        transport.cancel(token: token)
+                        await store.releaseDownloadReservation(token: token)
+                        continue
+                    }
+                    catalog.jobs[i].receivedBytes = receivedBytes
+                    catalog.jobs[i].expectedBytes = descriptor.byteCount
+                } catch {
+                    transport.cancel(token: token)
+                    await fail(job: job, error: error)
+                }
+            }
             for receipt in receipts { await handle(.finished(receipt)) }
             try await persist()
             isReady = true
@@ -179,6 +209,7 @@ final class DownloadManager: ObservableObject {
         offlineTracks = []
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope != scope && catalog.jobs[i].status != .complete {
             let job = catalog.jobs[i]
+            cancelNetworkRetry(job.id)
             workers.removeValue(forKey: job.id)?.task.cancel()
             displayWorkers.removeValue(forKey: job.id)?.cancel()
             if let token = job.token {
@@ -224,6 +255,7 @@ final class DownloadManager: ObservableObject {
             if let i = catalog.jobs.firstIndex(where: { $0.accountScope == scope && $0.track.id == track.id && $0.quality == quality }) {
                 catalog.jobs[i].owners.insert(owner)
                 if [.cancelled, .failed, .unavailable].contains(catalog.jobs[i].status) {
+                    cancelNetworkRetry(catalog.jobs[i].id)
                     catalog.jobs[i].allowsMetered = allowsMetered
                     catalog.jobs[i].status = .queued
                     catalog.jobs[i].errorMessage = nil
@@ -249,6 +281,7 @@ final class DownloadManager: ObservableObject {
               [.queued, .resolving, .downloading, .waitingNetwork].contains(catalog.jobs[i].status) else { return }
         let token = catalog.jobs[i].token
         let stamp = UUID()
+        cancelNetworkRetry(id)
         workers.removeValue(forKey: id)?.task.cancel()
         catalog.jobs[i].status = .paused
         catalog.jobs[i].attempt = stamp
@@ -267,6 +300,7 @@ final class DownloadManager: ObservableObject {
     func resume(_ id: UUID, allowsMetered: Bool? = nil) async {
         guard let i = index(id), catalog.jobs[i].accountScope == accountScope, catalog.jobs[i].status.canResume else { return }
         let oldToken = catalog.jobs[i].token
+        cancelNetworkRetry(id)
         catalog.jobs[i].attempt = nil
         catalog.jobs[i].status = .queued
         catalog.jobs[i].errorMessage = nil
@@ -286,6 +320,7 @@ final class DownloadManager: ObservableObject {
     func cancel(_ id: UUID) async {
         guard let i = index(id), catalog.jobs[i].accountScope == accountScope else { return }
         let job = catalog.jobs[i]
+        cancelNetworkRetry(id)
         workers.removeValue(forKey: id)?.task.cancel()
         displayWorkers.removeValue(forKey: id)?.cancel()
         catalog.jobs[i].attempt = nil
@@ -330,6 +365,7 @@ final class DownloadManager: ObservableObject {
     func setNetwork(_ value: DownloadNetworkState) {
         network = value
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == accountScope && !catalog.jobs[i].owners.isEmpty {
+            if !value.permits(catalog.jobs[i]) { cancelNetworkRetry(catalog.jobs[i].id) }
             if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .resolving {
                 workers.removeValue(forKey: catalog.jobs[i].id)?.task.cancel()
                 catalog.jobs[i].attempt = nil
@@ -337,7 +373,8 @@ final class DownloadManager: ObservableObject {
             }
             if !value.permits(catalog.jobs[i]), [.queued, .downloading].contains(catalog.jobs[i].status) {
                 catalog.jobs[i].status = .waitingNetwork
-            } else if value.permits(catalog.jobs[i]), catalog.jobs[i].status == .waitingNetwork {
+            } else if value.permits(catalog.jobs[i]), catalog.jobs[i].status == .waitingNetwork,
+                      networkRetryTasks[catalog.jobs[i].id] == nil {
                 catalog.jobs[i].status = catalog.jobs[i].attempt == nil ? .queued : .downloading
             }
         }
@@ -350,6 +387,9 @@ final class DownloadManager: ObservableObject {
     }
 
     func shutdown() {
+        isReady = false
+        networkRetryTasks.values.forEach { $0.cancel() }
+        networkRetryTasks.removeAll()
         eventTask?.cancel()
         workers.values.forEach { $0.task.cancel() }
         displayWorkers.values.forEach { $0.cancel() }
@@ -448,7 +488,8 @@ final class DownloadManager: ObservableObject {
             if catalog.jobs[i].status == .waitingNetwork, network.permits(catalog.jobs[i]) {
                 catalog.jobs[i].status = .downloading; publish()
             }
-            await store.updateDownloadReservation(token: token, remainingBytes: max(0, expected - received))
+            let total = max(expected, catalog.jobs[i].descriptor?.byteCount ?? catalog.jobs[i].expectedBytes)
+            await store.updateDownloadReservation(token: token, remainingBytes: max(0, total - received))
         case let .waiting(token):
             guard let i = index(token: token), [.downloading, .waitingNetwork].contains(catalog.jobs[i].status) else { return }
             catalog.jobs[i].status = .waitingNetwork
@@ -493,10 +534,8 @@ final class DownloadManager: ObservableObject {
             guard current(job) else { return }
             if let resumeData { try? await persistence.saveResumeData(resumeData, jobID: job.id) }
             guard current(job) else { return }
-            if domain == NSURLErrorDomain, [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorDataNotAllowed].contains(code) {
-                catalog.jobs[i].status = .waitingNetwork
-                catalog.jobs[i].attempt = nil
-                publish(); try? await persist(); schedule()
+            if AudioTransferCoordinator.isConnectivityFailure(NSError(domain: domain, code: code)) {
+                await fail(job: job, error: NSError(domain: domain, code: code))
             } else {
                 let hadResumeData = await persistence.resumeData(jobID: job.id) != nil
                 guard current(job) else { return }
@@ -533,6 +572,7 @@ final class DownloadManager: ObservableObject {
             catalog.jobs[i].receivedBytes = descriptor.byteCount
             catalog.jobs[i].expectedBytes = descriptor.byteCount
             catalog.jobs[i].status = .complete
+            cancelNetworkRetry(job.id)
             catalog.jobs[i].errorMessage = nil
             publish()
             try await persist()
@@ -563,13 +603,38 @@ final class DownloadManager: ObservableObject {
         guard current(job), let i = index(job.id) else { return }
         if let token = job.token { await store.releaseDownloadReservation(token: token) }
         guard current(job) else { return }
-        catalog.jobs[i].status = (error as? OfflineAudioError) == .unavailable ? .unavailable : .failed
-        catalog.jobs[i].errorMessage = Self.message(for: error)
+        let delays: [Duration] = [.seconds(1), .seconds(2), .seconds(4)]
+        let retries = networkRetries[job.id, default: 0]
+        let waitsForNetwork = AudioTransferCoordinator.isConnectivityFailure(error)
+            && (!network.permits(catalog.jobs[i]) || retries < delays.count)
+        catalog.jobs[i].status = waitsForNetwork ? .waitingNetwork : ((error as? OfflineAudioError) == .unavailable ? .unavailable : .failed)
+        catalog.jobs[i].errorMessage = waitsForNetwork ? nil : Self.message(for: error)
         catalog.jobs[i].attempt = nil
         if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil }
+        if waitsForNetwork, network.permits(catalog.jobs[i]) {
+            networkRetries[job.id] = retries + 1
+            networkRetryTasks[job.id] = Task { [weak self, retrySleep] in
+                do { try await retrySleep(delays[retries]) } catch { return }
+                guard let self, !Task.isCancelled, self.isReady,
+                      let i = self.index(job.id), self.catalog.jobs[i].accountScope == self.accountScope,
+                      !self.catalog.jobs[i].owners.isEmpty,
+                      self.catalog.jobs[i].status == .waitingNetwork, self.catalog.jobs[i].attempt == nil else { return }
+                self.networkRetryTasks[job.id] = nil
+                guard self.network.permits(self.catalog.jobs[i]) else { return }
+                self.catalog.jobs[i].status = .queued
+                self.publish()
+                try? await self.persist()
+                self.schedule()
+            }
+        }
         publish()
         try? await persist()
         schedule()
+    }
+
+    private func cancelNetworkRetry(_ id: UUID) {
+        networkRetryTasks.removeValue(forKey: id)?.cancel()
+        networkRetries[id] = nil
     }
 
     static func message(for error: Error) -> String {
