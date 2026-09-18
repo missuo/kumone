@@ -5,8 +5,7 @@ struct TrackDownloadButton: View {
     let track: Track
     var isVisible = true
 
-    @ObservedObject private var downloads = DownloadManager.shared
-    @ObservedObject private var progress = DownloadManager.shared.progress
+    @ObservedObject private var state: TrackDownloadState
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
     @Environment(\.openLogin) private var openLogin
@@ -16,19 +15,18 @@ struct TrackDownloadButton: View {
     @State private var removalScope: String?
     @State private var isRemoving = false
 
-    private var job: DownloadJob? {
-        downloads.pendingJobsByTrackID[track.id]
+    init(track: Track, isVisible: Bool = true) {
+        self.track = track
+        self.isVisible = isVisible
+        _state = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
     }
-    private var isDownloaded: Bool {
-        downloads.isDownloaded(trackID: track.id)
-    }
-    private var canResume: Bool { job.map { $0.status.canResume && $0.status != .waitingNetwork } ?? false }
-    private var isActive: Bool { job?.status.isInProgress == true }
-    private var showsControl: Bool { isVisible || isFocused || job != nil || isSubmitting || isDownloaded }
-    private var fraction: Double? {
-        guard let job, job.status.isInProgress else { return nil }
-        return progress.fraction(for: job)
-    }
+
+    private var downloads: DownloadManager { .shared }
+    private var status: DownloadStatus? { state.status }
+    private var isDownloaded: Bool { state.isDownloaded }
+    private var canResume: Bool { status.map { $0.canResume && $0 != .waitingNetwork } ?? false }
+    private var isActive: Bool { status?.isInProgress == true }
+    private var showsControl: Bool { isVisible || isFocused || status != nil || isSubmitting || isDownloaded }
     private var title: String {
         if isActive || isSubmitting { return String(localized: "停止下载") }
         if canResume { return String(localized: "继续下载") }
@@ -37,9 +35,9 @@ struct TrackDownloadButton: View {
     }
     var body: some View {
         Button(action: activate) {
-            DownloadButtonIcon(isActive: isActive || isSubmitting, isComplete: isDownloaded && job == nil,
-                               progress: fraction, size: 16, symbolSize: 12, completedSymbol: "arrow.down.circle.fill")
-                .foregroundStyle(isDownloaded && job == nil && !isSubmitting ? Color.secondary : Theme.accent)
+            TrackDownloadButtonIcon(isActive: isActive || isSubmitting, isComplete: isDownloaded && status == nil,
+                                    showsFraction: isActive, progress: state.progress)
+                .foregroundStyle(isDownloaded && status == nil && !isSubmitting ? Color.secondary : Theme.accent)
                 .frame(width: 24, height: 24)
                 .contentShape(Circle())
         }
@@ -57,19 +55,19 @@ struct TrackDownloadButton: View {
             Button("移除下载", role: .destructive) { removeDownload() }
             Button("取消", role: .cancel) {}
         }
-        .onChange(of: downloads.accountScope) { _ in confirmRemoval = false }
+        .onChange(of: state.accountScope) { _ in confirmRemoval = false }
         .contextMenu {
-            if let job {
-                if [.queued, .resolving, .downloading, .waitingNetwork].contains(job.status) {
-                    Button("暂停下载") { Task { await downloads.pause(job.id) } }
+            if let jobID = state.jobID, let status {
+                if [.queued, .resolving, .downloading, .waitingNetwork].contains(status) {
+                    Button("暂停下载") { Task { await downloads.pause(jobID) } }
                 } else if canResume {
                     Button("继续下载") {
                         MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
-                            Task { await downloads.resume(job.id, allowsMetered: metered) }
+                            Task { await downloads.resume(jobID, allowsMetered: metered) }
                         }
                     }
                 }
-                Button("停止下载") { Task { await downloads.cancel(job.id) } }
+                Button("停止下载") { Task { await downloads.cancel(jobID) } }
             }
         }
     }
@@ -82,7 +80,7 @@ struct TrackDownloadButton: View {
             return
         }
         guard account.isLoggedIn else { openLogin(); return }
-        let jobID = job?.id
+        let jobID = state.jobID
         if isActive, let jobID { submit { await downloads.cancel(jobID) }; return }
         MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
             submit {
@@ -112,5 +110,19 @@ struct TrackDownloadButton: View {
             guard downloads.accountScope == scope else { return }
             if !succeeded { ToastCenter.shared.show(String(localized: "部分下载未能移除，请重试")) }
         }
+    }
+}
+
+/// The ring is the only part that follows the byte counter, so it observes the
+/// per-track fraction on its own and leaves the button's body alone.
+private struct TrackDownloadButtonIcon: View {
+    let isActive: Bool
+    let isComplete: Bool
+    let showsFraction: Bool
+    @ObservedObject var progress: TrackProgressState
+
+    var body: some View {
+        DownloadButtonIcon(isActive: isActive, isComplete: isComplete, progress: showsFraction ? progress.fraction : nil,
+                           size: 16, symbolSize: 12, completedSymbol: "arrow.down.circle.fill")
     }
 }

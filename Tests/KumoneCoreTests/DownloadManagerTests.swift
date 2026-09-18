@@ -449,6 +449,34 @@ struct DownloadManagerTests {
         #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75)
     }
 
+    @Test func aTransferOnlyNotifiesItsOwnTrackState() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        let other = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Second fixture\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(tracks: [h.track, other], owner: "playlist:two", name: "two",
+                                quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 2 }
+        let mine = h.manager.trackState(for: h.track.id), theirs = h.manager.trackState(for: other.id)
+        try await waitForDownload { mine.status == .downloading && theirs.status == .downloading }
+        var myTicks = 0, theirTicks = 0, theirRowTicks = 0, aggregateTicks = 0
+        let observers = [
+            mine.progress.objectWillChange.sink { _ in myTicks += 1 },
+            theirs.progress.objectWillChange.sink { _ in theirTicks += 1 },
+            theirs.objectWillChange.sink { _ in theirRowTicks += 1 },
+            h.manager.progress.objectWillChange.sink { _ in aggregateTicks += 1 },
+        ]
+        defer { observers.forEach { $0.cancel() } }
+        let transfer = try #require(h.transport.started.first { $0.resource.descriptor.identity.trackID == h.track.id })
+        let total = transfer.resource.descriptor.byteCount
+        h.transport.continuation.yield(.progress(token: transfer.token, received: total / 2, expected: total))
+        try await waitForDownload { mine.progress.fraction == 0.5 }
+        #expect(myTicks == 1)
+        #expect(theirTicks == 0)
+        #expect(theirRowTicks == 0)
+        #expect(aggregateTicks >= 1)
+        #expect(h.manager.progress.values[try #require(mine.jobID)]?.received == total / 2)
+    }
+
     @Test(arguments: [false, true])
     func finishingAFileKeepsTheRingFullUntilValidationEnds(corrupt: Bool) async throws {
         let h = try DownloadHarness()

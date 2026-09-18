@@ -19,6 +19,42 @@ final class DownloadProgress: ObservableObject {
     }
 }
 
+/// One track's transfer fraction, split off `TrackDownloadState` so the byte
+/// counter that ticks four times a second only redraws its own progress ring.
+@MainActor
+final class TrackProgressState: ObservableObject {
+    @Published private(set) var fraction: Double?
+    fileprivate func apply(_ value: Double?) { if value != fraction { fraction = value } }
+}
+
+/// One track's download state. Rows observe this instead of the whole manager,
+/// so another track's progress event cannot re-evaluate every visible row.
+@MainActor
+final class TrackDownloadState: ObservableObject {
+    struct Value: Equatable {
+        var jobID: UUID?
+        var status: DownloadStatus?
+        var isDownloaded = false
+        var isOffline = false
+        var needsNetwork = false
+        var accountScope: String?
+    }
+    let trackID: Int
+    let progress = TrackProgressState()
+    @Published private(set) var value = Value()
+
+    var jobID: UUID? { value.jobID }
+    /// The pending job's status, or nil when the track has no unfinished job.
+    var status: DownloadStatus? { value.status }
+    var isDownloaded: Bool { value.isDownloaded }
+    var isOffline: Bool { value.isOffline }
+    var needsNetwork: Bool { value.needsNetwork }
+    var accountScope: String? { value.accountScope }
+
+    fileprivate init(trackID: Int) { self.trackID = trackID }
+    fileprivate func apply(_ new: Value) { if new != value { value = new } }
+}
+
 @MainActor
 final class DownloadManager: ObservableObject {
     static let shared: DownloadManager = {
@@ -131,6 +167,10 @@ final class DownloadManager: ObservableObject {
     private var batchOperations = 0
     private var preparationSuspended = false
     private var foregroundObserver: NSObjectProtocol?
+    /// Weak so an entry dies with the last row showing it; the view that asked
+    /// for it holds the only strong reference.
+    private struct WeakTrackState { weak var state: TrackDownloadState? }
+    private var trackStates: [Int: WeakTrackState] = [:]
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
@@ -685,6 +725,8 @@ final class DownloadManager: ObservableObject {
             if catalog.jobs[i].status == .waitingNetwork, network.permits(catalog.jobs[i]) {
                 catalog.jobs[i].status = .downloading; publish()
             }
+            // Only this track's ring, so a transfer cannot redraw the whole list.
+            trackStates[catalog.jobs[i].track.id]?.state?.progress.apply(progress.fraction(for: catalog.jobs[i]))
             let total = max(expected, catalog.jobs[i].descriptor?.byteCount ?? catalog.jobs[i].expectedBytes)
             await store.updateDownloadReservation(token: token, remainingBytes: max(0, total - received))
         case let .waiting(token):
@@ -1006,6 +1048,34 @@ final class DownloadManager: ObservableObject {
         downloadedTracks = offlineTracks.filter(\.isDownloaded)
         downloadedTrackIDs = Set(downloadedTracks.map(\.id))
         downloadedTrackIDs.formUnion(jobs.filter { $0.status == .complete && !$0.owners.isEmpty }.map { $0.track.id })
+        refreshTrackStates()
+    }
+
+    /// The observable state a single track's rows watch. Created on demand and
+    /// seeded right away, since the previous entry is gone once its rows are.
+    func trackState(for trackID: Int) -> TrackDownloadState {
+        if let existing = trackStates[trackID]?.state { return existing }
+        let state = TrackDownloadState(trackID: trackID)
+        trackStates[trackID] = WeakTrackState(state: state)
+        refresh(state)
+        return state
+    }
+
+    private func refreshTrackStates() {
+        var dropped: [Int] = []
+        for (trackID, box) in trackStates {
+            if let state = box.state { refresh(state) } else { dropped.append(trackID) }
+        }
+        for trackID in dropped { trackStates.removeValue(forKey: trackID) }
+    }
+
+    private func refresh(_ state: TrackDownloadState) {
+        let job = pendingJobsByTrackID[state.trackID]
+        let isOffline = offlineTracksByID[state.trackID] != nil
+        state.apply(.init(jobID: job?.id, status: job?.status, isDownloaded: downloadedTrackIDs.contains(state.trackID),
+                          isOffline: isOffline, needsNetwork: network.isKnown && !network.connected && !isOffline,
+                          accountScope: accountScope))
+        state.progress.apply(job.flatMap { progress.fraction(for: $0) })
     }
     private func persist() async throws {
         catalog.revision += 1

@@ -39,12 +39,29 @@ struct TrackRow: View {
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
     @State private var isReducingRecommendation = false
-    @ObservedObject private var downloads = DownloadManager.shared
+    /// Only this track's download state, so another row's transfer cannot
+    /// re-evaluate this body four times a second.
+    @ObservedObject private var downloadState: TrackDownloadState
+
+    init(track: Track, index: Int, style: TrackRowStyle = .full, playability: TrackPlayability = .playable,
+         trailingText: String? = nil, removableFromPlaylistID: Int? = nil, onRemoved: (() -> Void)? = nil,
+         onRecommendationReduced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
+        self.track = track
+        self.index = index
+        self.style = style
+        self.playability = playability
+        self.trailingText = trailingText
+        self.removableFromPlaylistID = removableFromPlaylistID
+        self.onRemoved = onRemoved
+        self.onRecommendationReduced = onRecommendationReduced
+        self.onPlay = onPlay
+        _downloadState = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
+    }
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracksByID[track.id] }
-    private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
-    private var needsNetwork: Bool { downloads.network.isKnown && !downloads.network.connected && offlineTrack == nil }
+    private var isOffline: Bool { downloadState.isOffline }
+    private var isPlayable: Bool { playability == .playable || isOffline }
+    private var needsNetwork: Bool { downloadState.needsNetwork }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -115,7 +132,7 @@ struct TrackRow: View {
                 }
             }
 
-            if let reason = playability.reason, offlineTrack == nil {
+            if let reason = playability.reason, !isOffline {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -267,9 +284,10 @@ struct TrackRow: View {
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
             #if os(macOS)
-            TrackDownloadButton(track: track, isVisible: isHovering || offlineTrack?.isDownloaded == true)
+            // A saved track already keeps the button visible through its own state.
+            TrackDownloadButton(track: track, isVisible: isHovering)
             #else
-            TrackDownloadButton(track: track, isVisible: offlineTrack?.isDownloaded == true)
+            TrackDownloadButton(track: track, isVisible: false)
             #endif
             let liked = account.isLiked(track.id)
             Button {
