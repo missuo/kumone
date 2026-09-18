@@ -50,7 +50,10 @@ public struct IOSMainWindow: View {
                 }
             }
             .onChange(of: scenePhase) { phase in
-                if phase != .active { player.checkpointPosition() }
+                if phase != .active {
+                    player.checkpointPosition()
+                    Task { await OfflineStore.shared.flushPendingWrites() }
+                }
                 else {
                     Task {
                         await DownloadManager.shared.refreshLibrary()

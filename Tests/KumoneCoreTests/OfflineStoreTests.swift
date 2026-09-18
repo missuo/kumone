@@ -213,6 +213,91 @@ struct OfflineStoreTests {
         #expect(try await store.record(id: id)?.ranges.byteCount == 0)
     }
 
+    /// Streaming must not pay an fsync plus an index write per 64 KiB chunk,
+    /// and the index must never claim bytes the file does not hold.
+    @Test func streamedChunksCommitInBatches() async throws {
+        let descriptor = OfflineAudioDescriptor(
+            identity: .init(accountScope: "test-account", trackID: 7, source: "netease", quality: "exhigh",
+                            format: .mp3, contentMD5: String(repeating: "a", count: 32)),
+            byteCount: 4 * 1024 * 1024, duration: 3)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = OfflineStore(directory: root, minimumFreeBytes: 0)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = UUID(), id = descriptor.identity.id, chunk = 64 * 1024
+        func persistedRanges() throws -> AudioByteRanges {
+            try OfflineAudioDatabase(url: root.appendingPathComponent("index.sqlite")).record(id: id)?.ranges ?? .init()
+        }
+        try await store.begin(descriptor, writer: writer)
+        var written = Data()
+        func stream(_ count: Int) async throws {
+            for _ in 0..<count {
+                let data = Data((0..<chunk).map { UInt8(truncatingIfNeeded: written.count &+ $0) })
+                try await store.write(data, at: Int64(written.count), id: id, writer: writer)
+                written.append(data)
+            }
+        }
+        try await stream(8)
+        // Below one batch: nothing is published yet, but the session serves reads.
+        #expect(try persistedRanges().byteCount == 0)
+        #expect(try await store.record(id: id)?.ranges.byteCount == Int64(written.count))
+        #expect(try await store.read(id: id, at: 0, maximum: 4_096) == Data(written.prefix(4_096)))
+        #expect(try await store.read(id: id, at: Int64(written.count) - 8, maximum: 64) == Data(written.suffix(8)))
+        try await stream(25)
+        let batched = try persistedRanges().byteCount
+        #expect(batched >= OfflineStore.commitInterval && batched < Int64(written.count))
+        await store.releaseWriter(id: id, writer: writer)
+        #expect(try persistedRanges().ranges == [0..<Int64(written.count)])
+
+        // A fresh store on the same directory never claims more than the file
+        // holds, and every claimed byte reads back exactly as written.
+        let reopened = OfflineStore(directory: root, minimumFreeBytes: 0)
+        let record = try #require(try await reopened.record(id: id))
+        let staging = root.appendingPathComponent(descriptor.identity.scopeDirectory)
+            .appendingPathComponent("staging/\(id).mp3")
+        let onDisk = try Data(contentsOf: staging)
+        #expect(record.state == .partial)
+        #expect(record.ranges.byteCount <= Int64(onDisk.count))
+        for range in record.ranges.ranges {
+            #expect(onDisk[Int(range.lowerBound)..<Int(range.upperBound)] == written[Int(range.lowerBound)..<Int(range.upperBound)])
+        }
+    }
+
+    @Test func chunkedWritesStillVerifyAndPromote() async throws {
+        let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
+        let writer = UUID(), id = fixture.descriptor.identity.id
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        try await store.begin(fixture.descriptor, writer: writer)
+        var offset = 0
+        while offset < fixture.data.count {
+            let end = min(fixture.data.count, offset + 64 * 1024)
+            try await store.write(fixture.data[offset..<end], at: Int64(offset), id: id, writer: writer)
+            offset = end
+        }
+        try await store.finalize(id: id, writer: writer)
+        await store.releaseWriter(id: id, writer: writer)
+        let lease = try #require(try await store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh"))
+        #expect(try Data(contentsOf: lease.url) == fixture.data)
+        try await store.release(lease)
+    }
+
+    @Test func removalDuringAnOpenSessionClosesTheStagingFile() async throws {
+        let fixture = try OfflineAudioFixture(), store = fixture.store()
+        let writer = UUID(), id = fixture.descriptor.identity.id
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        try await store.begin(fixture.descriptor, writer: writer)
+        try await store.write(fixture.data.prefix(4_096), at: 0, id: id, writer: writer)
+        let staging = store.directory.appendingPathComponent(fixture.descriptor.identity.scopeDirectory)
+            .appendingPathComponent("staging/\(id).mp3")
+        #expect(FileManager.default.fileExists(atPath: staging.path))
+        try await store.remove(id: id)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(try await store.record(id: id) == nil)
+        await #expect(throws: OfflineAudioError.unavailable) {
+            try await store.write(fixture.data.prefix(4_096), at: 0, id: id, writer: writer)
+        }
+        #expect(try await store.read(id: id, at: 0, maximum: 16) == nil)
+    }
+
     @Test func cleansOrphansAndRecoversCommitAfterRename() async throws {
         let fixture = try OfflineAudioFixture(), store = fixture.store()
         let writer = UUID(), id = fixture.descriptor.identity.id

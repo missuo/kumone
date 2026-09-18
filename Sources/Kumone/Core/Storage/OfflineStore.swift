@@ -3,11 +3,32 @@ import Foundation
 
 actor OfflineStore {
     static let shared = OfflineStore(directory: KumonePaths.applicationSupport.appendingPathComponent("Offline", isDirectory: true))
+    /// Durable commit granularity for streamed chunks. Losing at most this much
+    /// of a partial cache after a crash costs a refetch, never correctness.
+    static let commitInterval: Int64 = 2 * 1024 * 1024
+
+    /// One open staging handle per streaming entry. Chunks reach the file
+    /// immediately; the index claims them only after an fsync, so a crash can
+    /// lose ranges but can never publish ranges the file does not hold.
+    private final class CacheWriteSession {
+        let handle: FileHandle
+        let byteCount: Int64
+        var ranges: AudioByteRanges
+        var pending: Int64 = 0
+        var headroom: Int64 = 0
+
+        init(handle: FileHandle, ranges: AudioByteRanges, byteCount: Int64) {
+            self.handle = handle
+            self.ranges = ranges
+            self.byteCount = byteCount
+        }
+    }
 
     nonisolated let directory: URL
     nonisolated let cacheCompletions = PassthroughSubject<OfflineAudioDescriptor, Never>()
     private let minimumFreeBytes: Int64
     private var database: OfflineAudioDatabase?
+    private var sessions: [String: CacheWriteSession] = [:]
     private var writers: [String: UUID] = [:]
     private var leases: [UUID: String] = [:]
     private var validating: Set<String> = []
@@ -64,31 +85,44 @@ actor OfflineStore {
     }
 
     func releaseWriter(id: String, writer: UUID) {
-        if writers[id] == writer { writers[id] = nil; cacheReservations[id] = nil }
+        guard writers[id] == writer else { return }
+        // Skipping a track keeps whatever was streamed, so make it durable now.
+        try? flushWrites(id: id)
+        closeWriteSession(id: id)
+        writers[id] = nil
+        cacheReservations[id] = nil
     }
 
+    /// Chunks land in the staging file immediately and are visible to readers
+    /// in this process; only every `commitInterval` bytes does the store pay an
+    /// fsync plus an index upsert, always in that order.
     func write(_ data: Data, at offset: Int64, id: String, writer: UUID) throws {
         let db = try preparedDatabase()
-        guard writers[id] == writer, var record = try db.record(id: id), record.state == .partial else { throw OfflineAudioError.unavailable }
-        guard offset >= 0, offset <= record.descriptor.byteCount,
-              Int64(data.count) <= record.descriptor.byteCount - offset else { throw OfflineAudioError.invalidResponse }
-        let reserved = cacheReservations[id] == nil ? 0 : downloadReservations.values.reduce(0, +)
-        guard try freeSpace(directory) - reserved - Int64(data.count) >= minimumFreeBytes else { throw OfflineAudioError.insufficientSpace }
-        let file = try FileHandle(forWritingTo: stagingURL(record))
-        defer { try? file.close() }
-        try file.seek(toOffset: UInt64(offset))
-        try file.write(contentsOf: data)
-        try file.synchronize()
-        record.ranges.insert(offset..<(offset + Int64(data.count)))
-        try db.save(record)
-        if cacheReservations[id] != nil {
-            cacheReservations[id] = max(0, record.descriptor.byteCount - record.ranges.byteCount)
+        guard writers[id] == writer else { throw OfflineAudioError.unavailable }
+        let session = try writeSession(id: id, database: db)
+        let count = Int64(data.count)
+        guard offset >= 0, offset <= session.byteCount, count <= session.byteCount - offset else { throw OfflineAudioError.invalidResponse }
+        if session.headroom < count {
+            let reserved = cacheReservations[id] == nil ? 0 : downloadReservations.values.reduce(0, +)
+            session.headroom = try freeSpace(directory) - reserved - minimumFreeBytes
+            guard session.headroom >= count else { throw OfflineAudioError.insufficientSpace }
         }
+        do {
+            try session.handle.seek(toOffset: UInt64(offset))
+            try session.handle.write(contentsOf: data)
+        } catch { throw Self.isOutOfSpace(error) ? OfflineAudioError.insufficientSpace : error }
+        session.headroom -= count
+        session.pending += count
+        session.ranges.insert(offset..<(offset + count))
+        if cacheReservations[id] != nil {
+            cacheReservations[id] = max(0, session.byteCount - session.ranges.byteCount)
+        }
+        if session.pending >= Self.commitInterval { try commit(id: id, session: session, database: db) }
     }
 
     func read(id: String, at offset: Int64, maximum: Int) throws -> Data? {
         guard maximum > 0, offset >= 0,
-              let record = try preparedDatabase().record(id: id),
+              let record = try streamed(preparedDatabase().record(id: id)),
               [.partial, .verifying, .complete].contains(record.state)
                 || (record.state == .deleting && leases.values.contains(id)) else { return nil }
         let count = record.ranges.availableLength(at: offset, maximum: maximum)
@@ -103,7 +137,63 @@ actor OfflineStore {
         return data
     }
 
-    func record(id: String) throws -> OfflineAudioRecord? { try preparedDatabase().record(id: id) }
+    func record(id: String) throws -> OfflineAudioRecord? { try streamed(preparedDatabase().record(id: id)) }
+
+    /// Make every streamed range durable without waiting for the next batch.
+    func flushPendingWrites() {
+        for id in sessions.keys { try? flushWrites(id: id) }
+    }
+
+    /// The in-memory range set is the truth while a session streams; the index
+    /// trails it by at most one batch.
+    private func streamed(_ record: OfflineAudioRecord?) -> OfflineAudioRecord? {
+        guard var record, let session = sessions[record.id] else { return record }
+        record.ranges = session.ranges
+        return record
+    }
+
+    private func writeSession(id: String, database db: OfflineAudioDatabase) throws -> CacheWriteSession {
+        if let session = sessions[id] { return session }
+        guard let record = try db.record(id: id), record.state == .partial else { throw OfflineAudioError.unavailable }
+        let session = CacheWriteSession(handle: try FileHandle(forWritingTo: stagingURL(record)),
+                                        ranges: record.ranges, byteCount: record.descriptor.byteCount)
+        sessions[id] = session
+        return session
+    }
+
+    private func commit(id: String, session: CacheWriteSession, database db: OfflineAudioDatabase) throws {
+        guard session.pending > 0 else { return }
+        do { try session.handle.synchronize() }
+        catch { throw Self.isOutOfSpace(error) ? OfflineAudioError.insufficientSpace : error }
+        if var record = try db.record(id: id), record.state == .partial {
+            record.ranges = session.ranges
+            try db.save(record)
+        }
+        session.pending = 0
+        session.headroom = 0
+    }
+
+    private func flushWrites(id: String) throws {
+        guard let session = sessions[id], let database else { return }
+        try commit(id: id, session: session, database: database)
+    }
+
+    /// Drops the handle without committing: callers either flushed already or
+    /// are about to delete the file.
+    private func closeWriteSession(id: String) {
+        try? sessions.removeValue(forKey: id)?.handle.close()
+    }
+
+    private static func isOutOfSpace(_ error: Error) -> Bool {
+        var value = error as NSError
+        for _ in 0..<4 {
+            if value.domain == NSPOSIXErrorDomain, value.code == Int(ENOSPC) { return true }
+            if value.domain == NSCocoaErrorDomain, value.code == NSFileWriteOutOfSpaceError { return true }
+            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+            value = underlying
+        }
+        return false
+    }
 
     func metadataTrackIDs() throws -> [String: Set<Int>] {
         var result: [String: Set<Int>] = [:]
@@ -300,6 +390,7 @@ actor OfflineStore {
         record.ranges = AudioByteRanges()
         try db.save(record)
         let staging = stagingURL(record)
+        closeWriteSession(id: id)
         if FileManager.default.fileExists(atPath: staging.path) { try FileManager.default.removeItem(at: staging) }
         try FileManager.default.moveItem(at: url, to: staging)
         record.ranges.insert(0..<descriptor.byteCount)
@@ -309,7 +400,10 @@ actor OfflineStore {
 
     func finalize(id: String, writer: UUID) async throws {
         let db = try preparedDatabase()
-        guard writers[id] == writer, var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
+        guard writers[id] == writer else { throw OfflineAudioError.unavailable }
+        try flushWrites(id: id)
+        closeWriteSession(id: id)
+        guard var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
         if record.state == .complete { return }
         guard record.state == .partial, !validating.contains(id), record.ranges.covers(record.descriptor.byteCount) else {
             throw OfflineAudioError.incomplete
@@ -443,6 +537,7 @@ actor OfflineStore {
         guard record.retainedBy.isEmpty else { throw OfflineAudioError.retained }
         record.state = .deleting
         try db.save(record)
+        closeWriteSession(id: id)
         writers[id] = nil
         cacheReservations[id] = nil
         guard !leases.values.contains(id), !validating.contains(id) else { return }
@@ -467,6 +562,7 @@ actor OfflineStore {
         var removed: [String] = []
         var failure: Error?
         for record in records {
+            closeWriteSession(id: record.id)
             writers[record.id] = nil
             cacheReservations[record.id] = nil
             guard !leases.values.contains(record.id), !validating.contains(record.id) else { continue }
@@ -540,6 +636,7 @@ actor OfflineStore {
     }
 
     private func removeFiles(_ record: OfflineAudioRecord) throws {
+        closeWriteSession(id: record.id)
         for url in [stagingURL(record), audioURL(record)] where FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
