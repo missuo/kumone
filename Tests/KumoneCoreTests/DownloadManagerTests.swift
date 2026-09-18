@@ -1033,6 +1033,47 @@ struct DownloadManagerTests {
         try await waitForDownload { h.manager.jobs.first?.status == .complete }
         #expect(h.transport.started.count == 1)
     }
+
+    @Test func waitingForWiFiHoldsDownloadsUntilTheNetworkIsUnmetered() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        #expect(h.transport.started.isEmpty)
+        await h.manager.resumeAll()
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        #expect(h.transport.started.isEmpty)
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(!h.transport.started[0].metered)
+    }
+
+    @Test func bulkResumeCanSendApprovedJobsBackToWaitForWiFi() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        await h.manager.pause(try #require(h.manager.jobs.first?.id))
+        await h.manager.resumeAll(allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        #expect(h.transport.started.count == 1)
+        #expect(try await h.persistence.load().jobs.allSatisfy { !$0.allowsMetered })
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        try await waitForDownload { h.transport.started.count == 2 }
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test func meteredConfirmationOnlyCoversBulkDownloadsAndLowDataMode() {
+        let wifi = DownloadNetworkState(connected: true, expensive: false, constrained: false)
+        #expect(!wifi.needsMeteredConfirmation(bulk: true) && !wifi.needsMeteredConfirmation(bulk: false))
+        let cellular = DownloadNetworkState(connected: true, expensive: true, constrained: false)
+        #expect(cellular.needsMeteredConfirmation(bulk: true) && !cellular.needsMeteredConfirmation(bulk: false))
+        let lowData = DownloadNetworkState(connected: true, expensive: false, constrained: true)
+        #expect(lowData.needsMeteredConfirmation(bulk: true) && lowData.needsMeteredConfirmation(bulk: false))
+        #expect(!DownloadNetworkState.unknown.needsMeteredConfirmation(bulk: true))
+    }
+
     @Test func failedTransferFreesTheSlotAndKeepsResumeData() async throws {
         let h = try DownloadHarness(expensive: true)
         defer { h.close() }

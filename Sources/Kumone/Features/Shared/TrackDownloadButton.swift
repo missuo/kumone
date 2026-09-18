@@ -63,7 +63,11 @@ struct TrackDownloadButton: View {
                 if [.queued, .resolving, .downloading, .waitingNetwork].contains(job.status) {
                     Button("暂停下载") { Task { await downloads.pause(job.id) } }
                 } else if canResume {
-                    Button("继续下载") { Task { await downloads.resume(job.id, allowsMetered: true) } }
+                    Button("继续下载") {
+                        MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
+                            Task { await downloads.resume(job.id, allowsMetered: metered) }
+                        }
+                    }
                 }
                 Button("停止下载") { Task { await downloads.cancel(job.id) } }
             }
@@ -78,14 +82,22 @@ struct TrackDownloadButton: View {
             return
         }
         guard account.isLoggedIn else { openLogin(); return }
-        let selectedJob = job
+        let jobID = job?.id
+        if isActive, let jobID { submit { await downloads.cancel(jobID) }; return }
+        MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
+            submit {
+                if let jobID { await downloads.resume(jobID, allowsMetered: metered) }
+                else { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: metered) }
+            }
+        }
+    }
+
+    private func submit(_ operation: @escaping () async -> Void) {
         isSubmitting = true
         Task { [scope = downloads.accountScope] in
             defer { isSubmitting = false }
             guard downloads.accountScope == scope else { return }
-            if let job = selectedJob, job.status.isInProgress { await downloads.cancel(job.id) }
-            else if let job = selectedJob { await downloads.resume(job.id, allowsMetered: true) }
-            else { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: true) }
+            await operation()
         }
     }
 

@@ -217,11 +217,17 @@ struct DownloadTasksView: View {
                         Task { await downloads.pauseAll() }
                     }
                     taskButton("继续全部", icon: "play.fill", enabled: downloads.pendingJobs.contains { $0.status.canResume }) {
-                        Task { await downloads.resumeAll(allowsMetered: true) }
+                        let count = downloads.pendingJobs.filter { $0.status.canResume }.count
+                        MeteredDownloadCenter.shared.request(bulk: true, count: count, network: downloads.network) { metered in
+                            Task { await downloads.resumeAll(allowsMetered: metered) }
+                        }
                     }
                     Menu {
                         Button("重试失败任务") {
-                            Task { await downloads.resumeAll(failedOnly: true, allowsMetered: true) }
+                            let count = downloads.pendingJobs.filter { [.failed, .unavailable].contains($0.status) }.count
+                            MeteredDownloadCenter.shared.request(bulk: true, count: count, network: downloads.network) { metered in
+                                Task { await downloads.resumeAll(failedOnly: true, allowsMetered: metered) }
+                            }
                         }
                         Button("取消未完成任务", role: .destructive) { confirmCancelAll = true }
                     } label: {
@@ -300,7 +306,9 @@ private struct DownloadTaskRow: View {
                     Spacer(minLength: 8)
                     if job.status.canResume {
                         control(job.status == .paused ? "play.fill" : "arrow.clockwise", title: "继续下载") {
-                            Task { await manager.resume(job.id, allowsMetered: true) }
+                            MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: manager.network) { metered in
+                                Task { await manager.resume(job.id, allowsMetered: metered) }
+                            }
                         }
                     } else if [.queued, .resolving, .downloading].contains(job.status) {
                         control("pause.fill", title: "暂停下载") { Task { await manager.pause(job.id) } }
@@ -373,7 +381,7 @@ struct TrackDownloadActions: View {
                 actionLabel("取消下载", systemImage: "xmark")
             }
         } else if let job, job.status.canResume {
-            Button { Task { await downloads.resume(job.id, allowsMetered: true) } } label: { actionLabel("继续下载", systemImage: "play") }
+            Button { resume(job) } label: { actionLabel("继续下载", systemImage: "play") }
         } else {
             Button { enqueue() } label: { actionLabel("下载", systemImage: "arrow.down.circle") }
         }
@@ -385,9 +393,17 @@ struct TrackDownloadActions: View {
         else { Text(title) }
     }
 
+    private func resume(_ job: DownloadJob) {
+        MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
+            Task { await downloads.resume(job.id, allowsMetered: metered) }
+        }
+    }
+
     private func enqueue() {
         guard account.isLoggedIn else { openLogin(); return }
-        Task { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: true) }
+        MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
+            Task { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: metered) }
+        }
     }
 }
 
@@ -477,9 +493,12 @@ struct DownloadCollectionButton: View {
             }
             if canResume {
                 Button("继续下载") {
-                    Task { [scope = downloads.accountScope] in
-                        guard downloads.accountScope == scope else { return }
-                        await downloads.resumeCollection(owner, allowsMetered: true)
+                    let count = collectionJobs.filter { $0.status.canResume }.count
+                    MeteredDownloadCenter.shared.request(bulk: true, count: count, network: downloads.network) { metered in
+                        Task { [scope = downloads.accountScope] in
+                            guard downloads.accountScope == scope else { return }
+                            await downloads.resumeCollection(owner, allowsMetered: metered)
+                        }
                     }
                 }
             }
@@ -502,17 +521,24 @@ struct DownloadCollectionButton: View {
         guard !isSubmitting, !isRemoving else { return }
         if !isActive && !canResume && isComplete { requestRemoval(); return }
         guard account.isLoggedIn else { openLogin(); return }
-        let stop = isActive
-        isSubmitting = true
-        Task { [scope = downloads.accountScope] in
-            defer { isSubmitting = false }
-            guard downloads.accountScope == scope else { return }
-            if stop { await downloads.cancelCollection(owner) }
-            else {
-                await downloads.resumeCollection(owner, allowsMetered: true)
+        if isActive {
+            isSubmitting = true
+            Task { [scope = downloads.accountScope] in
+                defer { isSubmitting = false }
+                guard downloads.accountScope == scope else { return }
+                await downloads.cancelCollection(owner)
+            }
+            return
+        }
+        MeteredDownloadCenter.shared.request(bulk: true, count: tracks.count, network: downloads.network) { metered in
+            isSubmitting = true
+            Task { [scope = downloads.accountScope] in
+                defer { isSubmitting = false }
+                guard downloads.accountScope == scope else { return }
+                await downloads.resumeCollection(owner, allowsMetered: metered)
                 guard downloads.accountScope == scope else { return }
                 await downloads.enqueue(tracks: tracks, owner: owner, name: name,
-                                        quality: settings.audioQuality.rawValue, allowsMetered: true)
+                                        quality: settings.audioQuality.rawValue, allowsMetered: metered)
             }
         }
     }

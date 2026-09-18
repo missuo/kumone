@@ -32,6 +32,7 @@ public struct IOSMainWindow: View {
     public var body: some View {
         presentationRoot
             .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }, enabled: !player.showNowPlaying))
+            .modifier(MeteredDownloadAlert(enabled: !player.showNowPlaying))
             .environmentObject(player)
             .environmentObject(account)
             .environmentObject(settings)

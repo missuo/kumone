@@ -105,6 +105,7 @@ struct MainWindow: View {
         .playerChrome(detailWidth: detailWidth)
         #if os(macOS)
         .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }))
+        .modifier(MeteredDownloadAlert())
         #endif
         .environment(\.openLogin, { showLogin = true })
         .environment(\.openDestination, openDestination)

@@ -99,6 +99,8 @@ struct DownloadNetworkState: Equatable {
     var constrained: Bool
     var isKnown = true
     func permits(_ job: DownloadJob) -> Bool { connected && (job.allowsMetered || (!expensive && !constrained)) }
+    /// Whole albums and queues confirm on any metered path; one song only asks in Low Data Mode.
+    func needsMeteredConfirmation(bulk: Bool) -> Bool { bulk ? expensive || constrained : constrained }
     static let unknown = Self(connected: false, expensive: false, constrained: false, isKnown: false)
 }
 

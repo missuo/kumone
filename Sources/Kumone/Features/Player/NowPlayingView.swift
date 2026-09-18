@@ -99,6 +99,7 @@ struct NowPlayingView: View {
         #if os(iOS)
         .modifier(OfflinePlaybackAlert(player: player, onDownloads: { onOpenDestination(.downloaded) },
             enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
+        .modifier(MeteredDownloadAlert(enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
         #endif
         #if os(iOS)
         .task(id: player.currentTrack?.id) {
@@ -2146,6 +2147,7 @@ private struct MinimalTransportControls: View {
                     showQueue = false
                     onOpenDestination(.downloaded)
                 }, enabled: showQueue && player.showNowPlaying))
+                .modifier(MeteredDownloadAlert(enabled: showQueue && player.showNowPlaying))
         }
     }
 
