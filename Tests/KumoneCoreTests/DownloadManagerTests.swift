@@ -1005,6 +1005,35 @@ struct DownloadManagerTests {
         #expect(h.manager.downloadedSongs().isEmpty)
     }
 
+    @Test func eachCompletionReadsOnlyItsOwnSongAndLandsWhereAFullScanWould() async throws {
+        var reads: [Int] = []
+        let h = try DownloadHarness(metadataReader: { id, _ in reads.append(id); return nil })
+        defer { h.close() }
+        let names = ["Cherry", "apple", "Banana"]
+        let tracks = try names.enumerated().map { index, name in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(index + 1),\"name\":\"\(name)\",\"dt\":3000}".utf8))
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:sorted", name: "Sorted", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 2 }
+        func transfer(_ trackID: Int) throws -> FakeDownloadTransport.Started {
+            try #require(h.transport.started.first { $0.resource.descriptor.identity.trackID == trackID })
+        }
+        try h.transport.finish(try transfer(2))
+        try await waitForDownload { h.transport.started.count == 3 && h.manager.offlineTracks.count == 1 }
+        try h.transport.finish(try transfer(1))
+        try h.transport.finish(try transfer(3))
+        try await waitForDownload { h.manager.offlineTracks.count == 3 }
+        // A rescan per finished song would read every earlier song again.
+        #expect(reads == [2, 1, 3])
+        #expect(h.manager.offlineTracks.map(\.track.name) == ["apple", "Banana", "Cherry"])
+        let incremental = h.manager.offlineTracks
+        await h.manager.refreshLibrary()
+        #expect(h.manager.offlineTracks.map(\.id) == incremental.map(\.id))
+        #expect(h.manager.offlineTracks.map { $0.assets.map(\.id) } == incremental.map { $0.assets.map(\.id) })
+        #expect(h.manager.offlineTracks.map(\.isDownloaded) == incremental.map(\.isDownloaded))
+        #expect(h.manager.downloadedTrackIDs == Set(tracks.map(\.id)))
+    }
+
     @Test func queuedResumeKeepsItsPlaceAndResumeDataAcrossNetworkChanges() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

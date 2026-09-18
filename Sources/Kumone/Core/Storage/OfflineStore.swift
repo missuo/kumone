@@ -263,6 +263,13 @@ actor OfflineStore {
             .compactMap { try availableRecord($0, database: db) }
     }
 
+    /// Same filtering as the whole-library scan, for one song only.
+    func availableRecords(accountScope: String, trackID: Int) throws -> [OfflineAudioRecord] {
+        let db = try preparedDatabase()
+        return try db.records(scope: accountScope, trackID: trackID).filter { $0.state == .complete }
+            .compactMap { try availableRecord($0, database: db) }
+    }
+
     func reusableDescriptor(accountScope: String, trackID: Int, quality: String, retainingFor owner: String? = nil) throws -> OfflineAudioDescriptor? {
         let db = try preparedDatabase()
         let rank = AudioQuality.allCases.map(\.rawValue)

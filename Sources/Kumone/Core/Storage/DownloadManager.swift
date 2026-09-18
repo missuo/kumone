@@ -127,6 +127,7 @@ final class DownloadManager: ObservableObject {
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
     private var libraryRefreshID = UUID()
+    private var libraryScanID = UUID()
     private var batchOperations = 0
     private var preparationSuspended = false
     private var foregroundObserver: NSObjectProtocol?
@@ -155,7 +156,7 @@ final class DownloadManager: ObservableObject {
                 guard let self, self.accountScope == descriptor.identity.accountScope else { return }
                 await self.start()
                 guard self.isReady, self.accountScope == descriptor.identity.accountScope else { return }
-                await self.refreshLibrary()
+                await self.mergeLibraryEntry(trackID: descriptor.identity.trackID, scope: descriptor.identity.accountScope)
             }
         }
     }
@@ -253,6 +254,7 @@ final class DownloadManager: ObservableObject {
     func activate(accountScope scope: String?) {
         guard accountScope != scope else { return }
         libraryRefreshID = UUID()
+        libraryScanID = libraryRefreshID
         accountScope = scope
         offlineTracks = []
         for job in catalog.jobs where job.accountScope != scope {
@@ -792,7 +794,7 @@ final class DownloadManager: ObservableObject {
             try await persist()
             try? await persistence.saveResumeData(nil, jobID: job.id)
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
-            await refreshLibrary()
+            await mergeLibraryEntry(trackID: job.track.id, scope: job.accountScope)
             guard current(job), let i = index(job.id) else { return }
             fetchMetadata(catalog.jobs[i])
             if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil }
@@ -894,6 +896,7 @@ final class DownloadManager: ObservableObject {
     func refreshLibrary() async {
         let requestID = UUID()
         libraryRefreshID = requestID
+        libraryScanID = requestID
         guard let scope = accountScope else { offlineTracks = []; return }
         let completedAtStart = Dictionary(uniqueKeysWithValues: catalog.jobs.filter {
             $0.accountScope == scope && $0.status == .complete
@@ -910,7 +913,7 @@ final class DownloadManager: ObservableObject {
             }
         }
         guard libraryRefreshID == requestID, accountScope == scope, !Task.isCancelled else { return }
-        offlineTracks = result.sorted { $0.track.name.localizedStandardCompare($1.track.name) == .orderedAscending }
+        offlineTracks = result.sorted(by: Self.precedes)
         let availableIDs = Set(available.map(\.id))
         var changed = false
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == scope && catalog.jobs[i].status == .complete {
@@ -928,6 +931,29 @@ final class DownloadManager: ObservableObject {
         }
         if changed { publish(); try? await persist() }
         await pruneCollections()
+    }
+
+    nonisolated private static func precedes(_ lhs: OfflineLibraryTrack, _ rhs: OfflineLibraryTrack) -> Bool {
+        lhs.track.name.localizedStandardCompare(rhs.track.name) == .orderedAscending
+    }
+
+    /// One finished song must not rescan the library: read that song's records
+    /// and merge its entry where a full refresh would have sorted it. The merge
+    /// supersedes an older scan, which cannot see this song's retention yet, and
+    /// steps aside for a newer one, whose own snapshot already covers the song.
+    private func mergeLibraryEntry(trackID: Int, scope: String) async {
+        libraryRefreshID = UUID()
+        let scanID = libraryScanID
+        guard let records = try? await store.availableRecords(accountScope: scope, trackID: trackID) else { return }
+        guard libraryScanID == scanID, accountScope == scope, !Task.isCancelled else { return }
+        guard !records.isEmpty else { offlineTracks.removeAll { $0.id == trackID }; return }
+        let stored = await metadataReader(trackID, scope)
+        guard libraryScanID == scanID, accountScope == scope, !Task.isCancelled else { return }
+        guard let track = stored ?? catalog.jobs.first(where: { $0.accountScope == scope && $0.track.id == trackID })?.track else { return }
+        let entry = OfflineLibraryTrack(track: track, assets: records)
+        var merged = offlineTracks.filter { $0.id != trackID }
+        merged.insert(entry, at: merged.firstIndex { Self.precedes(entry, $0) } ?? merged.endIndex)
+        offlineTracks = merged
     }
 
     func registerBackgroundCompletion(_ completion: @escaping () -> Void) {
