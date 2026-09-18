@@ -407,3 +407,7 @@
 "歌曲仍会保留在歌单中。" = "The songs will remain in your playlists.";
 "部分下载未能移除，请重试" = "Some downloads could not be removed. Please try again.";
 "要移除此下载吗？" = "Do you want to remove the download?";
+"要移除此歌单的所有下载吗？" = "Do you want to remove all downloads from this playlist?";
+"要移除此专辑的所有下载吗？" = "Do you want to remove all downloads from this album?";
+"移除歌单下载" = "Remove Playlist Downloads";
+"移除专辑下载" = "Remove Album Downloads";
