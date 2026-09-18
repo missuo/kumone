@@ -518,8 +518,10 @@ struct DownloadManagerTests {
         #expect(!counts.isEmpty && counts.allSatisfy { $0 == 1 })
         #expect(h.manager.downloadedSongs().map(\.id) == [3])
         #expect(Set(h.manager.offlineTracks.map(\.id)) == [3, 4])
+        // A partly removed collection keeps every song, so the missing ones can
+        // be downloaded again; one with nothing left stops claiming a page.
         #expect(h.manager.collections.first { $0.id == "playlist:a" }?.tracks.map(\.id) == [1, 2, 3])
-        #expect(h.manager.collections.first { $0.id == "playlist:b" }?.tracks.map(\.id) == [1, 2])
+        #expect(h.manager.collections.first { $0.id == "playlist:b" } == nil)
         #expect(h.manager.jobs.filter { [1, 2].contains($0.track.id) }.isEmpty)
         #expect(try await h.store.record(id: descriptors[1].identity.id) == nil)
         #expect(try await h.store.availableRecords(accountScope: "other-account").count == 1)
@@ -527,6 +529,47 @@ struct DownloadManagerTests {
         #expect(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh") == nil)
         try await h.store.release(playing)
         #expect(!FileManager.default.fileExists(atPath: playing.url.path))
+    }
+
+    @Test func aSavedCollectionDoesNotOutliveItsDownloads() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        let tracks = try (1...2).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
+        }
+        try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+        for track in tracks {
+            let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account")
+            let input = h.root.appendingPathComponent("input.mp3")
+            try h.fixture.data.write(to: input)
+            try await h.store.importDownload(at: input, descriptor: resource.descriptor)
+            try await h.metadata.save(track: track, scope: "test-account")
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:a", name: "A", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.downloadedTracks.count == 2 && h.manager.pendingJobs.isEmpty }
+        #expect(await h.manager.deleteLocalAudio(trackIDs: [1]))
+        #expect(h.manager.collections.first { $0.id == "playlist:a" }?.tracks.map(\.id) == [1, 2])
+        #expect(await h.manager.deleteLocalAudio(trackIDs: [2]))
+        #expect(h.manager.collections.isEmpty && h.manager.downloadedSongs(in: "playlist:a").isEmpty)
+        #expect(try await h.persistence.load().collections.isEmpty)
+    }
+
+    @Test func restoringDropsCollectionsThatLostEverySongAndKeepsQueuedOnes() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "playlist:queued", allowsMetered: false)
+        job.status = .paused
+        let collections = [
+            DownloadCollection(id: "album:9", accountScope: "test-account", name: "Gone", tracks: [h.track], savedAt: Date()),
+            DownloadCollection(id: "playlist:queued", accountScope: "test-account", name: "Queued", tracks: [h.track], savedAt: Date()),
+            DownloadCollection(id: "album:9", accountScope: "other-account", name: "Other", tracks: [h.track], savedAt: Date()),
+        ]
+        try await h.persistence.save(DownloadCatalog(jobs: [job], collections: collections))
+        await h.manager.start()
+        #expect(h.manager.collections.map(\.id) == ["playlist:queued"])
+        let saved = try await h.persistence.load()
+        #expect(saved.collections.map(\.id) == ["playlist:queued", "album:9"])
+        #expect(saved.collections.map(\.accountScope) == ["test-account", "other-account"])
     }
 
     @Test func removingDownloadWithoutACatalogJobStillRemovesItsAudio() async throws {

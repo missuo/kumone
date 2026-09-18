@@ -25,21 +25,24 @@ struct AlbumDetailView: View {
         #endif
     }
 
+    /// Only a collection with songs to show may replace the online page,
+    /// otherwise an empty list would hide the error and its retry button.
+    private var savedCollectionID: String? {
+        let id = "album:\(albumID)"
+        return downloads.downloadedSongs(in: id).isEmpty ? nil : id
+    }
+
     var body: some View {
         Group {
-            if downloads.collections.contains(where: { $0.id == "album:\(albumID)" }),
-               !downloads.network.connected || errorMessage != nil {
-                DownloadedMusicView(collectionID: "album:\(albumID)")
+            if let savedCollectionID, !downloads.network.connected || errorMessage != nil {
+                DownloadedMusicView(collectionID: savedCollectionID)
             } else { onlineContent }
         }
         .task(id: "\(albumID):\(downloads.network.connected)") {
-            if downloads.network.connected || !downloads.collections.contains(where: { $0.id == "album:\(albumID)" }) {
-                await load()
-            }
+            if downloads.network.connected || savedCollectionID == nil { await load() }
         }
         .toolbar {
-            if errorMessage != nil, downloads.network.connected,
-               album != nil || downloads.collections.contains(where: { $0.id == "album:\(albumID)" }) {
+            if errorMessage != nil, downloads.network.connected, album != nil || savedCollectionID != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("重试")

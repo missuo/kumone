@@ -483,7 +483,23 @@ final class DownloadManager: ObservableObject {
             catch { succeeded = false }
         }
         if !cancelled.isEmpty || !deletingTracks.isEmpty { await refreshLibrary() }
+        await pruneCollections()
         return succeeded
+    }
+
+    /// A saved collection must not outlive its content: once none of its songs
+    /// has a job of its own or audio on disk, its page would only ever be empty.
+    private func pruneCollections() async {
+        guard let scope = accountScope else { return }
+        let owners = Set(catalog.jobs.filter { $0.accountScope == scope }.flatMap(\.owners))
+        let stale = Set(catalog.collections.filter {
+            $0.accountScope == scope && !owners.contains($0.id)
+                && !$0.tracks.contains { downloadedTrackIDs.contains($0.id) }
+        }.map(\.id))
+        guard !stale.isEmpty else { return }
+        catalog.collections.removeAll { $0.accountScope == scope && stale.contains($0.id) }
+        publish()
+        try? await persist()
     }
 
     func removeDownloads(trackID: Int) async {
@@ -911,6 +927,7 @@ final class DownloadManager: ObservableObject {
             if catalog.jobs[i].metadataPending { fetchMetadata(catalog.jobs[i]) }
         }
         if changed { publish(); try? await persist() }
+        await pruneCollections()
     }
 
     func registerBackgroundCompletion(_ completion: @escaping () -> Void) {
