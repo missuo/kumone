@@ -40,15 +40,18 @@ final class DownloadManager: ObservableObject {
     typealias MetadataFetcher = (Track, String) async -> Void
     @Published private(set) var jobs: [DownloadJob] = []
     @Published private(set) var collections: [DownloadCollection] = []
-    @Published private(set) var offlineTracks: [OfflineLibraryTrack] = []
+    @Published private(set) var offlineTracks: [OfflineLibraryTrack] = [] {
+        didSet { rebuildDownloadIndex() }
+    }
     @Published private(set) var isReady = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var network = DownloadNetworkState.unknown
-    var downloadedTracks: [OfflineLibraryTrack] { offlineTracks.filter(\.isDownloaded) }
-    func isDownloaded(trackID: Int) -> Bool {
-        jobs.contains { $0.track.id == trackID && $0.status == .complete && !$0.owners.isEmpty }
-            || downloadedTracks.contains { $0.id == trackID }
-    }
+    private(set) var downloadedTracks: [OfflineLibraryTrack] = []
+    private(set) var downloadedTrackIDs: Set<Int> = []
+    private(set) var offlineTracksByID: [Int: OfflineLibraryTrack] = [:]
+    private(set) var jobsByTrackID: [Int: DownloadJob] = [:]
+    private(set) var pendingJobsByTrackID: [Int: DownloadJob] = [:]
+    func isDownloaded(trackID: Int) -> Bool { downloadedTrackIDs.contains(trackID) }
     var pendingJobs: [DownloadJob] {
         jobs.filter { !$0.owners.isEmpty && $0.status != .complete && $0.status != .cancelled }
     }
@@ -148,8 +151,28 @@ final class DownloadManager: ObservableObject {
 
     func start() async {
         if let restoration { await restoration.value; return }
-        let task = Task { await self.restore() }
+        guard !isReady else { return }
+        let task = Task {
+            await self.restore()
+            self.restoration = nil
+        }
         restoration = task
+        if eventTask == nil {
+            let events = transport.events
+            eventTask = Task { [weak self] in
+                for await event in events {
+                    guard let self, !Task.isCancelled else { return }
+                    await self.restoration?.value
+                    if self.isReady { await self.handle(event) }
+                    else if case .backgroundEventsFinished = event {
+                        self.backgroundEventsDelivered = true
+                        self.finishBackgroundEventsIfPossible()
+                    }
+                    // Completed receipts remain on disk until restoration can
+                    // read the catalog. Drain transient progress in the meantime.
+                }
+            }
+        }
         await task.value
     }
 
@@ -204,18 +227,12 @@ final class DownloadManager: ObservableObject {
             for receipt in receipts { await handle(.finished(receipt)) }
             try await persist()
             isReady = true
+            errorMessage = nil
             publish()
-            let events = transport.events
-            eventTask = Task { [weak self] in
-                for await event in events {
-                    guard let self else { return }
-                    await self.handle(event)
-                }
-            }
             await refreshLibrary()
             setNetwork(network)
         } catch {
-            errorMessage = String(localized: "无法读取下载记录，请重新打开应用")
+            errorMessage = String(localized: "无法读取下载记录，请重试")
         }
     }
 
@@ -257,7 +274,8 @@ final class DownloadManager: ObservableObject {
     func enqueue(tracks: [Track], owner: String, name: String?, quality: String, allowsMetered: Bool) async -> Bool {
         let requestedScope = accountScope
         await start()
-        guard isReady, let scope = accountScope, scope == requestedScope else {
+        guard isReady else { return false }
+        guard let scope = accountScope, scope == requestedScope else {
             if accountScope == requestedScope { errorMessage = String(localized: "登录后即可下载歌曲") }
             return false
         }
@@ -438,21 +456,14 @@ final class DownloadManager: ObservableObject {
 
     func removeCollection(_ owner: String) async {
         guard let scope = accountScope else { return }
-        let ids = catalog.jobs.filter { $0.accountScope == scope && $0.owners.contains(owner) }.map(\.id)
-        for id in ids {
-            guard accountScope == scope else { return }
-            guard let i = index(id) else { continue }
-            catalog.jobs[i].owners.remove(owner)
-            if catalog.jobs[i].owners.isEmpty { await cancel(id) }
-        }
-        guard accountScope == scope else { return }
+        let ids = Set(catalog.jobs.filter { $0.accountScope == scope && $0.owners.contains(owner) }.map(\.id))
         catalog.collections.removeAll { $0.accountScope == scope && $0.id == owner }
-        publish()
-        try? await persist()
+        if ids.isEmpty { publish(); try? await persist() }
+        else { await cancelJobs(ids, owner: owner) }
     }
 
     func removeDownloads(trackID: Int) async {
-        for id in jobs.filter({ $0.track.id == trackID && !$0.owners.isEmpty }).map(\.id) { await cancel(id) }
+        await cancelJobs(Set(jobs.filter { $0.track.id == trackID && !$0.owners.isEmpty }.map(\.id)))
     }
 
     func deleteLocalAudio(trackID: Int) async {
@@ -519,6 +530,7 @@ final class DownloadManager: ObservableObject {
 
     func resumeAfterForeground() {
         preparationSuspended = false
+        if !isReady { Task { await start() }; return }
         setNetwork(network)
     }
 
@@ -526,6 +538,7 @@ final class DownloadManager: ObservableObject {
         guard isReady, batchOperations == 0, !preparationSuspended else { return }
         var running = catalog.jobs.filter { $0.accountScope == accountScope && ($0.status.isWorking || ($0.status == .waitingNetwork && $0.attempt != nil && network.permits($0))) }.count
         let limit = network.expensive ? 1 : 2
+        var changed = false
         for i in catalog.jobs.indices where running < limit {
             let job = catalog.jobs[i]
             guard job.accountScope == accountScope, !job.owners.isEmpty,
@@ -536,9 +549,10 @@ final class DownloadManager: ObservableObject {
             catalog.jobs[i].attempt = attempt
             let scheduled = catalog.jobs[i]
             running += 1
+            changed = true
             workers[job.id] = (attempt, Task { await self.prepare(scheduled) })
         }
-        publish()
+        if changed { publish() }
     }
 
     private func prepare(_ job: DownloadJob) async {
@@ -903,7 +917,16 @@ final class DownloadManager: ObservableObject {
     private func index(token: String) -> Int? { catalog.jobs.firstIndex { $0.token == token } }
     private func publish() {
         jobs = catalog.jobs.filter { $0.accountScope == accountScope }.sorted { $0.createdAt > $1.createdAt }
+        jobsByTrackID = Dictionary(jobs.filter { !$0.owners.isEmpty }.map { ($0.track.id, $0) }, uniquingKeysWith: { first, _ in first })
+        pendingJobsByTrackID = Dictionary(jobs.filter { !$0.owners.isEmpty && $0.status != .complete }.map { ($0.track.id, $0) }, uniquingKeysWith: { first, _ in first })
+        rebuildDownloadIndex()
         collections = catalog.collections.filter { $0.accountScope == accountScope }
+    }
+    private func rebuildDownloadIndex() {
+        offlineTracksByID = Dictionary(offlineTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        downloadedTracks = offlineTracks.filter(\.isDownloaded)
+        downloadedTrackIDs = Set(downloadedTracks.map(\.id))
+        downloadedTrackIDs.formUnion(jobs.filter { $0.status == .complete && !$0.owners.isEmpty }.map { $0.track.id })
     }
     private func persist() async throws {
         catalog.revision += 1

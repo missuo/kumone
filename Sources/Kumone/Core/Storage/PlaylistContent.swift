@@ -85,9 +85,15 @@ final class PlaylistContent: ObservableObject {
             let response = try await detailLoader(playlistID)
             guard await current(generation, scope: scope, token: token) else { return }
             var loaded = response.playlist
+            // Some responses include songs but omit membership IDs. Preserve
+            // that order without treating a partial response as a complete list.
+            if loaded.trackIds.isEmpty, !loaded.tracks.isEmpty {
+                loaded.trackIds = loaded.tracks.map { TrackIDRef(id: $0.id) }
+            }
             // A truncated membership response cannot remove the tail of a saved list.
             if loaded.trackIds.count < loaded.trackCount, !tracks.isEmpty {
-                throw OfflineAudioError.incomplete
+                errorMessage = String(localized: "歌单数据不完整，请重试")
+                return
             }
             if !removedTrackIDs.isEmpty {
                 loaded.tracks.removeAll { removedTrackIDs.contains($0.id) }
@@ -106,7 +112,8 @@ final class PlaylistContent: ObservableObject {
             try await loadRemainingTracks(generation: generation, scope: scope, token: token)
         } catch {
             guard await current(generation, scope: scope, token: token) else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = error is OfflineAudioError
+                ? String(localized: "无法加载歌单，请重试") : error.localizedDescription
         }
     }
 

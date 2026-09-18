@@ -139,6 +139,80 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func catalogReadFailureCanBeRetriedWithoutMisreportingLogin() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        try FileManager.default.createDirectory(at: h.persistence.directory, withIntermediateDirectories: true)
+        let file = h.persistence.directory.appendingPathComponent("downloads.json")
+        try Data("invalid".utf8).write(to: file)
+        await h.enqueue()
+        #expect(!h.manager.isReady && h.manager.errorMessage == String(localized: "无法读取下载记录，请重试"))
+        // Events must still drain while protected/unreadable catalog data is unavailable.
+        var finished = false
+        h.manager.registerBackgroundCompletion { finished = true }
+        h.transport.continuation.yield(.backgroundEventsFinished)
+        try await waitForDownload { finished }
+        try JSONEncoder().encode(DownloadCatalog()).write(to: file, options: .atomic)
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.manager.isReady && h.manager.errorMessage == nil)
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.isDownloaded(trackID: 1) }
+        #expect(h.manager.jobsByTrackID[1]?.status == .complete)
+        #expect(h.manager.pendingJobsByTrackID[1] == nil)
+        await h.manager.deleteLocalAudio(trackID: 1)
+        #expect(!h.manager.isDownloaded(trackID: 1) && h.manager.offlineTracksByID[1] == nil)
+        h.manager.activate(accountScope: "another")
+        #expect(h.manager.jobsByTrackID.isEmpty && h.manager.downloadedTrackIDs.isEmpty)
+    }
+
+    @Test func failedRestorationRetainsCompletedReceiptsUntilRetry() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        let resource = try await DownloadHarness.resolve(track: h.track, quality: "exhigh", scope: "test-account")
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: true)
+        job.attempt = UUID()
+        job.descriptor = resource.descriptor
+        job.status = .downloading
+        let token = try #require(job.token)
+        try FileManager.default.createDirectory(at: h.persistence.directory, withIntermediateDirectories: true)
+        let file = h.persistence.directory.appendingPathComponent("downloads.json")
+        try Data("unreadable catalog".utf8).write(to: file)
+        await h.manager.start()
+        #expect(!h.manager.isReady)
+        h.transport.start(resource: resource, token: token, allowsMetered: true, resumeData: nil)
+        try h.transport.finish(h.transport.started[0])
+        var drained = false
+        h.manager.registerBackgroundCompletion { drained = true }
+        h.transport.continuation.yield(.backgroundEventsFinished)
+        try await waitForDownload { drained }
+        #expect(try h.transport.completedDownloads().count == 1)
+        try JSONEncoder().encode(DownloadCatalog(jobs: [job])).write(to: file, options: .atomic)
+        await h.manager.start()
+        #expect(h.manager.isDownloaded(trackID: 1))
+        #expect(try h.transport.completedDownloads().isEmpty)
+        #expect(h.transport.started.count == 1)
+    }
+
+    @Test func removingLargeCollectionPublishesOneBatchAndPreservesOtherOwners() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        let tracks = try (1...300).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track\"}".utf8))
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:1", name: "Large", quality: "exhigh", allowsMetered: true)
+        await h.manager.enqueue(track: tracks[0], quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .waitingNetwork } }
+        var publications = 0
+        let observation = h.manager.$jobs.dropFirst().sink { _ in publications += 1 }
+        await h.manager.removeCollection("playlist:1")
+        observation.cancel()
+        #expect(publications == 1)
+        #expect(h.manager.jobsByTrackID[1]?.owners == ["single:1"])
+        #expect(h.manager.pendingJobs.count == 1 && h.manager.collections.isEmpty)
+        #expect(try await h.persistence.load().jobs.filter { !$0.owners.isEmpty }.count == 1)
+    }
+
     @Test func cellularApprovalSurvivesDisconnectionAndRestartsTheQueue() async throws {
         let h = try DownloadHarness(expensive: true)
         defer { h.close() }

@@ -358,7 +358,7 @@ struct TrackDownloadActions: View {
     @EnvironmentObject private var settings: SettingsManager
     @Environment(\.openLogin) private var openLogin
 
-    private var job: DownloadJob? { downloads.jobs.first { $0.track.id == track.id && !$0.owners.isEmpty } }
+    private var job: DownloadJob? { downloads.jobsByTrackID[track.id] }
 
     var body: some View {
         if let job, job.status == .complete {
@@ -411,9 +411,7 @@ struct DownloadCollectionButton: View {
 
     private var collectionJobs: [DownloadJob] { downloads.jobs.filter { $0.owners.contains(owner) } }
     private var downloadedIDs: Set<Int> {
-        let completed = downloads.jobs.filter { $0.status == .complete && !$0.owners.isEmpty }.map { $0.track.id }
-        let saved = Set(downloads.downloadedTracks.map(\.id)).union(completed)
-        return saved.intersection(tracks.map(\.id))
+        downloads.downloadedTrackIDs.intersection(tracks.map(\.id))
     }
     private var isComplete: Bool {
         !tracks.isEmpty && Set(tracks.map(\.id)).count == downloadedIDs.count

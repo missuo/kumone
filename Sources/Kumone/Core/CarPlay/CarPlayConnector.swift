@@ -405,7 +405,7 @@ public final class CarPlayConnector: NSObject {
                   generation == loadGeneration,
                   interfaceController != nil else { return }
 
-            let nextContent = CarPlayContentStore()
+            let nextContent = content.copyForReload()
             let loggedIn = AccountStore.shared.isLoggedIn
             await loadAllTabs(into: nextContent, loggedIn: loggedIn)
             guard !Task.isCancelled,

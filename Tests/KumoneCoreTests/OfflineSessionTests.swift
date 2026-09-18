@@ -57,6 +57,32 @@ struct OfflineSessionTests {
         #expect(store.load(scope: "a")?.progress == 0)
     }
 
+    @Test func advancingALargeQueueOnlyRewritesTheSmallPositionFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaybackSessionStore(directory: root)
+        let tracks = try (1...10_000).map { try track($0) }
+        let snapshot = PlaybackSessionSnapshot(sessionID: UUID(), accountScope: "a", queue: tracks,
+            shuffledQueue: tracks.reversed(), playNextList: [], fmUpcoming: [], currentIndex: 0,
+            currentTrack: tracks.last, progress: 0, source: .playlist(9), repeatMode: "all", shuffle: true, isFM: false, recentContexts: [])
+        try await store.save(snapshot, revision: 1)
+        let file = root.appendingPathComponent("\(OfflineMetadataStore.key("a")).json")
+        let original = try Data(contentsOf: file)
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        for index in 1...20 {
+            let current = snapshot.shuffledQueue[index]
+            try await store.savePosition(.init(sessionID: snapshot.sessionID, trackID: current.id, progress: 1.5,
+                                               currentIndex: index, currentTrack: current), scope: "a", revision: UInt64(index + 1))
+        }
+        let restored = try #require(store.load(scope: "a"))
+        #expect(restored.currentIndex == 20 && restored.currentTrack?.id == 9980 && restored.progress == 1.5)
+        #expect(restored.queue.count == 10_000 && restored.shuffledQueue.count == 10_000)
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date == attributes[.modificationDate] as? Date)
+        let position = root.appendingPathComponent("\(OfflineMetadataStore.key("a")).position.json")
+        #expect(try Data(contentsOf: position).count < 4096)
+    }
+
     @Test func metadataPersistsLyricsAcrossReopening() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-metadata-test-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -29,6 +29,8 @@ final class NeteaseClient: @unchecked Sendable {
 
     private let session: URLSession
     private let cookieLock = NSLock()
+    // Serialize mutations and disk snapshots without blocking cookie readers.
+    private let cookieWriteLock = NSLock()
     private var cookies: [String: String] = [:]
     private static let bindingKey = "__kumone_session_binding"
     private var sessionBinding: String?
@@ -89,15 +91,18 @@ final class NeteaseClient: @unchecked Sendable {
 
     @discardableResult
     func setCookies(_ new: [String: String], expectedEpoch: UInt64? = nil, preservingSession: Bool = false) -> Bool {
+        cookieWriteLock.lock(); defer { cookieWriteLock.unlock() }
         cookieLock.lock()
-        defer { cookieLock.unlock() }
-        if let expectedEpoch, expectedEpoch != authEpoch { return false }
+        if let expectedEpoch, expectedEpoch != authEpoch { cookieLock.unlock(); return false }
         if let token = new["MUSIC_U"], token != cookies["MUSIC_U"] {
             authEpoch += 1
             if !preservingSession || sessionBinding == nil { sessionBinding = Self.fingerprint(token) }
         }
         for (k, v) in new where k != Self.bindingKey { cookies[k] = v }
-        persist(cookies)
+        var snapshot = cookies
+        snapshot[Self.bindingKey] = sessionBinding
+        cookieLock.unlock()
+        persist(snapshot)
         return true
     }
 
@@ -116,19 +121,19 @@ final class NeteaseClient: @unchecked Sendable {
     }
 
     func clearAuthCookies() {
+        cookieWriteLock.lock(); defer { cookieWriteLock.unlock() }
         cookieLock.lock()
-        defer { cookieLock.unlock() }
         authEpoch += 1
         sessionBinding = nil
         cookies.removeValue(forKey: "MUSIC_U")
         cookies.removeValue(forKey: "__csrf")
-        persist(cookies)
+        let snapshot = cookies
+        cookieLock.unlock()
+        persist(snapshot)
     }
 
     private func persist(_ snapshot: [String: String]) {
-        var stored = snapshot
-        stored[Self.bindingKey] = sessionBinding
-        if let data = try? JSONEncoder().encode(stored) {
+        if let data = try? JSONEncoder().encode(snapshot) {
             try? data.write(to: cookieFileURL, options: .atomic)
         }
     }

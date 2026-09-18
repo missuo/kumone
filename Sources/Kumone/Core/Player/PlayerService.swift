@@ -131,12 +131,12 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Observable state
 
-    @Published private(set) var queue: [Track] = []
-    @Published private(set) var shuffledQueue: [Track] = []
-    @Published private(set) var playNextList: [Track] = []
+    @Published private(set) var queue: [Track] = [] { didSet { sessionSnapshotDirty = true } }
+    @Published private(set) var shuffledQueue: [Track] = [] { didSet { sessionSnapshotDirty = true } }
+    @Published private(set) var playNextList: [Track] = [] { didSet { sessionSnapshotDirty = true } }
     @Published private(set) var currentIndex = -1
     @Published private(set) var currentTrack: Track?
-    @Published private(set) var source: PlaySource = .none
+    @Published private(set) var source: PlaySource = .none { didSet { sessionSnapshotDirty = true } }
     @Published private(set) var isPlaying = false
     @Published private(set) var isBuffering = false
     @Published private(set) var duration: TimeInterval = 0
@@ -155,11 +155,11 @@ final class PlayerService: ObservableObject {
     @Published var repeatMode: RepeatMode = .off {
         didSet {
             UserDefaults.standard.set(repeatMode.rawValue, forKey: "player.repeat")
-            if !isRestoringState { persistState() }
+            if !isRestoringState { sessionSnapshotDirty = true; persistState() }
         }
     }
 
-    @Published private(set) var shuffleEnabled = false
+    @Published private(set) var shuffleEnabled = false { didSet { sessionSnapshotDirty = true } }
     @Published var volume: Float = 1 {
         didSet {
             engine.volume = volume
@@ -167,11 +167,11 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    @Published private(set) var isFMMode = false
-    @Published private(set) var fmUpcoming: [Track] = []
+    @Published private(set) var isFMMode = false { didSet { sessionSnapshotDirty = true } }
+    @Published private(set) var fmUpcoming: [Track] = [] { didSet { sessionSnapshotDirty = true } }
     /// Where playback was most recently started from, newest first —
     /// surfaced as "Recently Played" in the Dock menu.
-    @Published private(set) var recentContexts: [PlayContext] = []
+    @Published private(set) var recentContexts: [PlayContext] = [] { didSet { sessionSnapshotDirty = true } }
     @Published private(set) var lyrics: ParsedLyrics?
     @Published var activePanel: RightPanel?
     @Published var showNowPlaying = false
@@ -204,6 +204,7 @@ final class PlayerService: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var stateScope: String?
     private var sessionID = UUID()
+    private var sessionSnapshotDirty = true
     private var persistenceRevision: UInt64 = 0
     private var lastCheckpoint: TimeInterval = 0
     private var isRestoringState = false
@@ -516,7 +517,9 @@ final class PlayerService: ObservableObject {
         let selected = candidates[index]
         switch selected.origin {
         case .inserted(let offset): playNextList.removeSubrange(0...offset)
-        case .queue(let offset): playNextList.removeAll(); currentIndex = offset
+        case .queue(let offset):
+            if !playNextList.isEmpty { playNextList.removeAll() }
+            currentIndex = offset
         case .fm(let offset): fmUpcoming.removeSubrange(0...offset)
         }
         startPlaying(selected.track)
@@ -698,7 +701,9 @@ final class PlayerService: ObservableObject {
             }
             switch selected.candidate.origin {
             case .inserted(let index): self.playNextList.removeSubrange(0...index)
-            case .queue(let index): self.playNextList.removeAll(); self.currentIndex = index
+            case .queue(let index):
+                if !self.playNextList.isEmpty { self.playNextList.removeAll() }
+                self.currentIndex = index
             case .fm(let index): self.fmUpcoming.removeSubrange(0...index)
             }
             let skipped = initialSkipped + selected.skipped
@@ -728,7 +733,10 @@ final class PlayerService: ObservableObject {
         if !isFMMode, playNextList.isEmpty, repeatMode != .all,
            currentIndex + 1 >= activeQueue.count {
             if userInitiated { ToastCenter.shared.show(String(localized: "已经是最后一首了")) }
-            else { pause() }
+            else {
+                isPlaying = false
+                NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+            }
             return
         }
         if usesOfflineQueue { advanceOffline(); return }
@@ -744,15 +752,6 @@ final class PlayerService: ObservableObject {
         guard !activeQueue.isEmpty else { return }
         var idx = currentIndex + 1
         if idx >= activeQueue.count {
-            guard repeatMode == .all else {
-                if userInitiated {
-                    ToastCenter.shared.show(String(localized: "已经是最后一首了"))
-                } else {
-                    isPlaying = false
-                    NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-                }
-                return
-            }
             idx = 0
         }
         currentIndex = idx
@@ -1170,7 +1169,7 @@ final class PlayerService: ObservableObject {
         let generation = resolveGeneration
         Task {
             do {
-                guard let resolved = try await resolve(context) else { return }
+                guard let resolved = try await resolve(context, reusingPlaybackQueue: true) else { return }
                 guard scope == offlineAccountScope, generation == resolveGeneration else { return }
                 play(tracks: resolved.tracks, source: resolved.source, context: context)
             } catch {
@@ -1180,15 +1179,14 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    func resolve(_ context: PlayContext) async throws -> (tracks: [Track], source: PlaySource)? {
+    func resolve(_ context: PlayContext, reusingPlaybackQueue: Bool = false) async throws -> (tracks: [Track], source: PlaySource)? {
         let scope = offlineAccountScope
-        if scope != nil, stateScope == scope, !isFMMode, context.source != .none,
+        if reusingPlaybackQueue, scope != nil, stateScope == scope, !isFMMode, context.source != .none,
            source == context.source, !queue.isEmpty {
             return (queue, source)
         }
         let downloads = DownloadManager.shared
         await downloads.start()
-        await downloads.refreshLibrary()
         guard scope == offlineAccountScope, downloads.accountScope == scope else { throw CancellationError() }
         if context.kind == .playlist, let scope,
            let saved = await PlaylistSnapshotStore.shared.load(id: context.id, scope: scope) {
@@ -1250,6 +1248,8 @@ final class PlayerService: ObservableObject {
         queueRevision += 1
         refreshPrefetchSoon()
         guard let scope = stateScope else { return }
+        guard sessionSnapshotDirty else { checkpointPosition(); return }
+        sessionSnapshotDirty = false
         sessionID = UUID()
         persistenceRevision += 1
         let revision = persistenceRevision
@@ -1263,7 +1263,7 @@ final class PlayerService: ObservableObject {
     private func restoreState() {
         guard let scope = stateScope, let state = PlaybackSessionStore.shared.load(scope: scope) else { return }
         isRestoringState = true
-        defer { isRestoringState = false }
+        defer { isRestoringState = false; sessionSnapshotDirty = false }
         sessionID = state.sessionID
         recentContexts = Array(state.recentContexts.prefix(Self.recentContextsLimit))
         queue = state.queue
@@ -1294,7 +1294,8 @@ final class PlayerService: ObservableObject {
         persistenceRevision += 1
         let revision = persistenceRevision
         lastCheckpoint = progress
-        let position = PlaybackPositionSnapshot(sessionID: sessionID, trackID: track.id, progress: progress)
+        let position = PlaybackPositionSnapshot(sessionID: sessionID, trackID: track.id, progress: progress,
+                                                currentIndex: currentIndex, currentTrack: track)
         Task { try? await PlaybackSessionStore.shared.savePosition(position, scope: scope, revision: revision) }
     }
 

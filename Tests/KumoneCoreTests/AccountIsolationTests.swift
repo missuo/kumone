@@ -31,6 +31,20 @@ private final class DeferredAPIProtocol: URLProtocol, @unchecked Sendable {
 
 @Suite("Account response isolation", .serialized)
 struct AccountIsolationTests {
+    @Test func concurrentCookieWritesPersistTheLatestCompleteSnapshot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = NeteaseClient(cookieDirectory: root)
+        DispatchQueue.concurrentPerform(iterations: 100) { index in
+            client.setCookies(["fixture-\(index)": String(index)])
+        }
+        client.setCookies(["MUSIC_U": "synthetic-session"])
+        client.clearAuthCookies()
+        let reopened = NeteaseClient(cookieDirectory: root)
+        #expect(!reopened.isLoggedIn && reopened.authenticationFingerprint == nil)
+        for index in 0..<100 { #expect(reopened.cookie(named: "fixture-\(index)") == String(index)) }
+    }
+
     @Test func rejectedRenewalCannotBindANewCookieToThePreviousIdentity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-rejected-renewal-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

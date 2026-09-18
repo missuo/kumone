@@ -17,6 +17,42 @@ import Testing
         return try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    @Test(arguments: [false, true])
+    func missingMembershipUsesReturnedSongsAndPersistsThem(emptyIDs: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var json: [String: Any] = ["id": 1, "name": "Fixture", "trackCount": 2,
+                                  "tracks": [["id": 7, "name": "First"], ["id": 3, "name": "Second"]]]
+        if emptyIDs { json["trackIds"] = [] }
+        let response = try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self,
+            from: JSONSerialization.data(withJSONObject: ["playlist": json]))
+        let snapshots = PlaylistSnapshotStore(directory: root)
+        let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in response })
+        await model.load()
+        #expect(model.tracks.map(\.id) == [7, 3] && model.canDownloadAll)
+        let reopened = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" })
+        await reopened.load(allowNetwork: false)
+        #expect(reopened.tracks.map(\.id) == [7, 3] && reopened.canDownloadAll)
+    }
+
+    @Test func truncatedMembershipRetainsSnapshotAndShowsReadableError() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshots = PlaylistSnapshotStore(directory: root)
+        let complete = try response(ids: [1, 2, 3], loaded: [1, 2, 3])
+        var detail = complete.playlist
+        detail.trackIds = []
+        detail.tracks = Array(complete.playlist.tracks.prefix(1))
+        let partial = NeteaseAPI.PlaylistDetailResponse(playlist: detail, privileges: [])
+        let online = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in complete })
+        await online.load()
+        let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in partial })
+        await model.load()
+        #expect(model.tracks.map(\.id) == [1, 2, 3])
+        #expect(model.errorMessage == String(localized: "歌单数据不完整，请重试"))
+        #expect(await snapshots.load(id: 1, scope: "a")?.isComplete == true)
+    }
+
     @Test func coldOfflineOpenRestores747SongsWithoutNetwork() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

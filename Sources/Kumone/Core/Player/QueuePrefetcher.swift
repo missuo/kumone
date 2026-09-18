@@ -102,8 +102,11 @@ final class QueuePrefetcher {
                     bytes += local.byteCount
                     continue
                 }
-                guard isCurrent(ticket), !pendingDownloadTrackIDs.contains(track.id) else { return }
+                guard isCurrent(ticket) else { return }
+                guard !pendingDownloadTrackIDs.contains(track.id) else { continue }
                 let resource = try await resolver(track, request.quality, request.scope)
+                guard isCurrent(ticket) else { return }
+                guard !pendingDownloadTrackIDs.contains(track.id) else { continue }
                 try resource.descriptor.validate()
                 guard isCurrent(ticket), resource.descriptor.identity.accountScope == request.scope,
                       resource.descriptor.identity.trackID == track.id,

@@ -17,7 +17,7 @@ struct TrackDownloadButton: View {
     @State private var isRemoving = false
 
     private var job: DownloadJob? {
-        downloads.jobs.first { $0.track.id == track.id && !$0.owners.isEmpty && $0.status != .complete }
+        downloads.pendingJobsByTrackID[track.id]
     }
     private var isDownloaded: Bool {
         downloads.isDownloaded(trackID: track.id)

@@ -42,7 +42,7 @@ struct TrackRow: View {
     @ObservedObject private var downloads = DownloadManager.shared
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracks.first { $0.id == track.id } }
+    private var offlineTrack: OfflineLibraryTrack? { downloads.offlineTracksByID[track.id] }
     private var isPlayable: Bool { playability == .playable || offlineTrack != nil }
     private var needsNetwork: Bool { downloads.network.isKnown && !downloads.network.connected && offlineTrack == nil }
     private var showsArtwork: Bool { style != .albumTrack }
@@ -606,7 +606,7 @@ struct TrackListView: View {
     }
 
     private func playability(of track: Track) -> TrackPlayability {
-        if downloads.offlineTracks.contains(where: { $0.id == track.id }) { return .playable }
+        if downloads.offlineTracksByID[track.id] != nil { return .playable }
         // With unblock enabled, gray tracks resolve from third-party sources.
         if SettingsManager.shared.enableUnblock { return .playable }
         return track.playability(

@@ -8,8 +8,8 @@ struct PlaybackSessionSnapshot: Codable {
     let shuffledQueue: [Track]
     let playNextList: [Track]
     let fmUpcoming: [Track]
-    let currentIndex: Int
-    let currentTrack: Track?
+    var currentIndex: Int
+    var currentTrack: Track?
     var progress: TimeInterval
     let source: PlaySource
     let repeatMode: String
@@ -22,6 +22,8 @@ struct PlaybackPositionSnapshot: Codable {
     let sessionID: UUID
     let trackID: Int
     let progress: TimeInterval
+    var currentIndex: Int? = nil
+    var currentTrack: Track? = nil
 }
 
 actor PlaybackSessionStore {
@@ -38,8 +40,13 @@ actor PlaybackSessionStore {
               snapshot.version == 1, snapshot.accountScope == scope else { return nil }
         if let data = try? Data(contentsOf: url(scope: scope, position: true)),
            let position = try? JSONDecoder().decode(PlaybackPositionSnapshot.self, from: data),
-           position.sessionID == snapshot.sessionID, position.trackID == snapshot.currentTrack?.id {
-            snapshot.progress = position.progress
+           position.sessionID == snapshot.sessionID {
+            if let index = position.currentIndex, let track = position.currentTrack,
+               track.id == position.trackID {
+                snapshot.currentIndex = index
+                snapshot.currentTrack = track
+            }
+            if position.trackID == snapshot.currentTrack?.id { snapshot.progress = position.progress }
         }
         if !snapshot.progress.isFinite || snapshot.progress < 0 { snapshot.progress = 0 }
         return snapshot

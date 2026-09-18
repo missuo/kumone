@@ -83,6 +83,22 @@ struct QueuePrefetchTests {
               context: .init(policy: .automatic, protectedTracks: [scope: [1]]), pendingDownloadTrackIDs: pending)
     }
 
+    @Test func pendingDownloadDoesNotBlockLaterSongsInTheWindow() async throws {
+        let fixture = try OfflineAudioFixture(), store = fixture.store()
+        let server = try await AudioFixtureServer(fixture: fixture)
+        defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
+        var resolved: [Int] = []
+        let scheduler = QueuePrefetcher(store: store, metadata: .init(directory: store.directory.appendingPathComponent("metadata")),
+            resolver: { track, _, scope in
+                resolved.append(track.id)
+                return resource(fixture, track: track, scope: scope, url: server.url)
+            }, metadataFetcher: { _, _ in })
+        scheduler.update(try request([2, 3, 4, 5, 6], pending: [2, 4]))
+        try await waitForPrefetch { scheduler.completedTrackIDs == [3, 5, 6] }
+        #expect(resolved == [3, 5, 6])
+        await scheduler.cancel().value
+    }
+
     @Test func byteLimitDoesNotSkipOversizedEntryOrMarkPrefetchAsPlayed() async throws {
         let fixture = try OfflineAudioFixture(), store = fixture.store()
         let server = try await AudioFixtureServer(fixture: fixture)

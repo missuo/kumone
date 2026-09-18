@@ -327,7 +327,6 @@
 "下载失败" = "Download Failed";
 "暂不可下载" = "Download Unavailable";
 "已取消" = "Cancelled";
-"无法读取下载记录，请重新打开应用" = "Unable to read downloads. Reopen the app.";
 "登录后即可下载歌曲" = "Sign in to download songs.";
 "无法保存下载任务" = "Unable to save the download.";
 "此歌曲或所选音质暂不可下载" = "This song or quality is not available for download.";
@@ -412,3 +411,6 @@
 "移除歌单下载" = "Remove Playlist Downloads";
 "移除专辑下载" = "Remove Album Downloads";
 "等待 Wi-Fi" = "Waiting for Wi-Fi";
+"歌单数据不完整，请重试" = "Playlist data is incomplete. Please try again.";
+"无法加载歌单，请重试" = "Unable to load the playlist. Please try again.";
+"无法读取下载记录，请重试" = "Unable to read download records. Please try again.";

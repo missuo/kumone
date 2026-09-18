@@ -4,6 +4,48 @@ import CarPlay
 import UIKit
 @testable import KumoneCore
 
+@Suite("CarPlay personal content cache")
+@MainActor struct CarPlayPersonalContentTests {
+    @Test func reconnectUsesCachedListsIncludingEmptyResults() async {
+        var calls = 0
+        let store = CarPlayContentStore(resolveTracks: { _ in calls += 1; return [] }, isOnline: { true })
+        await store.fetchDailyTracks(loggedIn: true)
+        await store.fetchRecentsTracks(loggedIn: true)
+        await store.fetchCloudTracks(loggedIn: true)
+        let reconnect = store.copyForReload()
+        await reconnect.fetchDailyTracks(loggedIn: true)
+        await reconnect.fetchRecentsTracks(loggedIn: true)
+        await reconnect.fetchCloudTracks(loggedIn: true)
+        #expect(calls == 3)
+        await reconnect.fetchDailyTracks(loggedIn: true, force: true)
+        #expect(calls == 4)
+        await reconnect.fetchCloudTracks(loggedIn: false)
+        await reconnect.fetchCloudTracks(loggedIn: true)
+        #expect(calls == 5)
+    }
+
+    @Test func offlineFallbackDoesNotDelayOnlineRefresh() async throws {
+        var online = false, calls = 0
+        let track = try JSONDecoder().decode(Track.self, from: Data("{\"id\":1,\"name\":\"Local\"}".utf8))
+        let store = CarPlayContentStore(resolveTracks: { _ in calls += 1; return online ? [track, track] : [track] },
+                                       isOnline: { online })
+        await store.fetchDailyTracks(loggedIn: true)
+        #expect(store.dailyTracks.count == 1)
+        online = true
+        let reconnect = store.copyForReload()
+        await reconnect.fetchDailyTracks(loggedIn: true)
+        #expect(reconnect.dailyTracks.count == 2 && calls == 2)
+    }
+
+    @Test func expiredCacheReloads() async {
+        var calls = 0
+        let store = CarPlayContentStore(ttl: 0, resolveTracks: { _ in calls += 1; return [] }, isOnline: { true })
+        await store.fetchDailyTracks(loggedIn: true)
+        await store.fetchDailyTracks(loggedIn: true)
+        #expect(calls == 2)
+    }
+}
+
 /// Covers the playback-queue template that backs CarPlay's Up Next button.
 ///
 /// The rest of the CarPlay stack (CarPlayConnector) drives CPInterfaceController and

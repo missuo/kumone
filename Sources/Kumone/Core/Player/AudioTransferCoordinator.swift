@@ -69,7 +69,7 @@ actor AudioTransferCoordinator {
     }
 
     /// Returns a contiguous available prefix, never sparse/unreceived bytes.
-    func read(at offset: Int64, maximum: Int, forCompletion: Bool = false, allowsMetered: Bool = true) async throws -> Data {
+    func read(at offset: Int64, maximum: Int, forCompletion: Bool = false) async throws -> Data {
         try Task.checkCancellation()
         guard !closed, offset >= 0, offset < resource.descriptor.byteCount, maximum > 0 else {
             throw OfflineAudioError.unavailable
@@ -97,18 +97,17 @@ actor AudioTransferCoordinator {
                 let nextReceivedOffset = record?.ranges.ranges.first(where: { $0.lowerBound > offset })?.lowerBound
                     ?? resource.descriptor.byteCount
                 let end = min(nextReceivedOffset, offset + 256 * 1024)
-                let restrictedNetwork = forCompletion || !allowsMetered
-                activeIsCompletion = restrictedNetwork
-                active = Task { try await self.fetch(offset..<end, restrictedNetwork: restrictedNetwork) }
+                activeIsCompletion = forCompletion
+                active = Task { try await self.fetch(offset..<end, forCompletion: forCompletion) }
             }
             try await waitForProgress()
         }
     }
 
-    func download(forCompletion: Bool = false, allowsMetered: Bool = true) async throws {
+    func download(forCompletion: Bool = false) async throws {
         var offset: Int64 = 0
         while offset < resource.descriptor.byteCount {
-            offset += Int64(try await read(at: offset, maximum: 256 * 1024, forCompletion: forCompletion, allowsMetered: allowsMetered).count)
+            offset += Int64(try await read(at: offset, maximum: 256 * 1024, forCompletion: forCompletion).count)
         }
         if let active { try await active.value }
         if let failure { throw failure }
@@ -128,10 +127,10 @@ actor AudioTransferCoordinator {
         try? await store.releasePlaybackRead(token: writer)
     }
 
-    private func fetch(_ range: Range<Int64>, restrictedNetwork: Bool) async throws {
+    private func fetch(_ range: Range<Int64>, forCompletion: Bool) async throws {
         do {
             var request = URLRequest(url: resource.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-            if restrictedNetwork {
+            if forCompletion {
                 // Additional completion is Wi-Fi-only. Playback-driven reads
                 // keep following the listener's ordinary streaming behavior.
                 request.allowsExpensiveNetworkAccess = false
@@ -170,7 +169,7 @@ actor AudioTransferCoordinator {
             wakeWaiters()
         } catch {
             active = nil
-            if restrictedNetwork, Task.isCancelled, !completionAllowed, !closed {
+            if forCompletion, Task.isCancelled, !completionAllowed, !closed {
                 wakeWaiters()
                 return
             }
