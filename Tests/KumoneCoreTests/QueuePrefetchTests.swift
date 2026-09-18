@@ -48,6 +48,28 @@ struct PlaybackQueuePlanTests {
         #expect(fm.map(\.track.id) == Array(queue.prefix(limit)).map(\.id))
     }
 
+    @Test func replayingAPlaceReusesOnlyAnUntouchedSameDayQueue() throws {
+        let playlist = PlayContext.playlist(id: 7, name: "Fixture")
+        let token = ResolvedQueueToken(context: playlist, resolvedAt: Date())
+        #expect(token.reusable(for: playlist, source: .playlist(7), isFM: false, queueIsEmpty: false))
+        // Another place, another source, FM, or a queue emptied since.
+        #expect(!token.reusable(for: .album(id: 7, name: "Fixture"), source: .playlist(7), isFM: false, queueIsEmpty: false))
+        #expect(!token.reusable(for: playlist, source: .playlist(8), isFM: false, queueIsEmpty: false))
+        #expect(!token.reusable(for: playlist, source: .playlist(7), isFM: true, queueIsEmpty: false))
+        #expect(!token.reusable(for: playlist, source: .playlist(7), isFM: false, queueIsEmpty: true))
+        // Places without a source of their own never match a playback queue.
+        let recents = PlayContext.recents
+        #expect(!ResolvedQueueToken(context: recents, resolvedAt: Date())
+            .reusable(for: recents, source: .none, isFM: false, queueIsEmpty: false))
+        // Yesterday's recommendations are not today's.
+        let yesterday = Date().addingTimeInterval(-26 * 3600)
+        let daily = ResolvedQueueToken(context: .daily, resolvedAt: yesterday)
+        #expect(daily.reusable(for: .daily, source: .daily, isFM: false, queueIsEmpty: false, now: yesterday))
+        #expect(!daily.reusable(for: .daily, source: .daily, isFM: false, queueIsEmpty: false))
+        #expect(ResolvedQueueToken(context: .cloud, resolvedAt: yesterday)
+            .reusable(for: .cloud, source: .cloud, isFM: false, queueIsEmpty: false))
+    }
+
     @Test func countAndDurationLimitsStopAtFirstExcess() throws {
         let limits = PrefetchLimits()
         #expect(limits.window(try (1...8).map { try queueTrack($0) }).count == 5)

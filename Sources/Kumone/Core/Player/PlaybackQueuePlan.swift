@@ -6,6 +6,24 @@ struct PlaybackQueueCandidate: Equatable {
     let origin: Origin
 }
 
+/// Stamped on the playback queue when it is installed straight from resolving a
+/// place, and dropped again the moment the queue changes. Replaying the place
+/// you are already listening to skips the refetch (and works offline), but only
+/// while the queue is still exactly what that place resolved to.
+struct ResolvedQueueToken: Equatable {
+    let context: PlayContext
+    let resolvedAt: Date
+
+    func reusable(for context: PlayContext, source: PlaySource, isFM: Bool,
+                  queueIsEmpty: Bool, now: Date = Date()) -> Bool {
+        guard self.context == context, !isFM, !queueIsEmpty,
+              context.source != .none, source == context.source else { return false }
+        // Daily recommendations are a different list tomorrow.
+        guard context.kind == .daily else { return true }
+        return Calendar.current.isDate(resolvedAt, inSameDayAs: now)
+    }
+}
+
 enum PlaybackQueuePlan {
     /// One bounded pass through the actual order. The original queue is never
     /// sorted or filtered to produce an offline/prefetch view of it.

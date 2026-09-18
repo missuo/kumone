@@ -132,7 +132,7 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Observable state
 
-    @Published private(set) var queue: [Track] = [] { didSet { sessionSnapshotDirty = true } }
+    @Published private(set) var queue: [Track] = [] { didSet { sessionSnapshotDirty = true; resolvedQueue = nil } }
     @Published private(set) var shuffledQueue: [Track] = [] { didSet { sessionSnapshotDirty = true } }
     @Published private(set) var playNextList: [Track] = [] { didSet { sessionSnapshotDirty = true } }
     @Published private(set) var currentIndex = -1
@@ -194,6 +194,13 @@ final class PlayerService: ObservableObject {
     private var offlineScan: Task<Void, Never>?
     private var offlineScanID = UUID()
     private var queueRevision = 0
+    /// Stamped when a resolved place becomes the queue, cleared by every edit to
+    /// it (see `queue`'s observer) and by restoring a session.
+    private var resolvedQueue: ResolvedQueueToken?
+    /// Bumped by each explicit "play this" the listener asks for, so a slow
+    /// context resolve is dropped only for a newer request of their own, never
+    /// for an auto-advance or a caching failure, which move `resolveGeneration`.
+    private var playIntent = 0
     private var currentWasAdvanced = false
     private var networkState = DownloadNetworkState.unknown
     private var networkObservation: AnyCancellable?
@@ -343,10 +350,12 @@ final class PlayerService: ObservableObject {
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
               context: PlayContext? = nil) {
         guard !tracks.isEmpty else { return }
+        playIntent += 1
         if let context { recordRecent(context) }
         isFMMode = false
         queue = tracks
         self.source = source
+        resolvedQueue = context.map { .init(context: $0, resolvedAt: Date()) }
         playNextList.removeAll()
         let startTrack = track ?? tracks[0]
         if shuffleEnabled {
@@ -548,6 +557,7 @@ final class PlayerService: ObservableObject {
 
     func startFM() {
         guard !isFMMode || !isPlaying else { return }
+        playIntent += 1
         recordRecent(.fm)
         isFMMode = true
         shuffleEnabled = false
@@ -562,11 +572,13 @@ final class PlayerService: ObservableObject {
 
     func fmNext() {
         guard isFMMode else { return }
+        playIntent += 1
         Task { await fmAdvance() }
     }
 
     func fmTrash() {
         guard isFMMode, let track = currentTrack else { return }
+        playIntent += 1
         Task {
             await fmAdvance()
             try? await NeteaseAPI.fmTrash(id: track.id)
@@ -576,15 +588,17 @@ final class PlayerService: ObservableObject {
     private func fmAdvance() async {
         if usesOfflineQueue { advanceOffline(); return }
         let scope = offlineAccountScope
-        let generation = resolveGeneration
+        // Fetching the next batch is the listener's request, not per-track asset
+        // work: only a newer request of theirs may drop it.
+        let intent = playIntent
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
                 do {
                     let tracks = try await NeteaseAPI.personalFM()
-                    guard scope == offlineAccountScope, generation == resolveGeneration, isFMMode else { return }
+                    guard scope == offlineAccountScope, intent == playIntent, isFMMode else { return }
                     if !tracks.isEmpty { fmUpcoming = tracks; break }
                 } catch {
-                    guard scope == offlineAccountScope, generation == resolveGeneration, isFMMode else { return }
+                    guard scope == offlineAccountScope, intent == playIntent, isFMMode else { return }
                     if Self.isConnectivityFailure(error) { advanceOffline(); return }
                 }
                 if attempt == 2 {
@@ -826,7 +840,7 @@ final class PlayerService: ObservableObject {
             await resolveAndLoad(track, generation: generation, resumeAt: resumeAt, autoAdvance: autoAdvance, localLease: localLease)
         }
         Task {
-            await loadLyrics(for: track, generation: generation)
+            await loadLyrics(for: track)
         }
     }
 
@@ -1097,17 +1111,20 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    private func loadLyrics(for track: Track, generation: Int) async {
+    /// Guarded by the track itself, not by `resolveGeneration`: dropping the
+    /// caching loader mid-song invalidates the asset work, never the lyrics of
+    /// the song still playing.
+    private func loadLyrics(for track: Track) async {
         let scope = offlineAccountScope
         if let scope,
            let cached = await OfflineMetadataStore.shared.lyrics(trackID: track.id, scope: scope) {
-            guard generation == resolveGeneration, offlineAccountScope == scope else { return }
+            guard currentTrack?.id == track.id, offlineAccountScope == scope else { return }
             lyrics = LyricsParser.parse(cached)
             updateLyricsCursor(at: progress)
         }
-        guard generation == resolveGeneration, offlineAccountScope == scope, !usesOfflineQueue else { return }
+        guard currentTrack?.id == track.id, offlineAccountScope == scope, !usesOfflineQueue else { return }
         let response = try? await NeteaseAPI.lyric(id: track.id)
-        guard generation == resolveGeneration, offlineAccountScope == scope else { return }
+        guard currentTrack?.id == track.id, offlineAccountScope == scope else { return }
         guard let response else { return }
         lyrics = LyricsParser.parse(response)
         if let scope { try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope) }
@@ -1162,23 +1179,33 @@ final class PlayerService: ObservableObject {
         // Personal FM is a stream, not a fixed list — restart it in place.
         guard context.kind != .fm else { return startFM() }
         let scope = offlineAccountScope
-        let generation = resolveGeneration
+        playIntent += 1
+        let intent = playIntent
         Task {
             do {
                 guard let resolved = try await resolve(context, reusingPlaybackQueue: true) else { return }
-                guard scope == offlineAccountScope, generation == resolveGeneration else { return }
+                guard scope == offlineAccountScope, intent == playIntent else { return }
                 play(tracks: resolved.tracks, source: resolved.source, context: context)
             } catch {
-                guard scope == offlineAccountScope, generation == resolveGeneration else { return }
+                guard scope == offlineAccountScope, intent == playIntent else { return }
                 ToastCenter.shared.show(error.localizedDescription)
             }
         }
     }
 
+    /// Whether the queue in memory is the one this place last put there. It may
+    /// since have been edited, or gone stale against the server.
+    private func playbackQueueMatches(_ context: PlayContext, scope: String?) -> Bool {
+        scope != nil && stateScope == scope && !isFMMode && context.source != .none
+            && source == context.source && !queue.isEmpty
+    }
+
     func resolve(_ context: PlayContext, reusingPlaybackQueue: Bool = false) async throws -> (tracks: [Track], source: PlaySource)? {
         let scope = offlineAccountScope
-        if reusingPlaybackQueue, scope != nil, stateScope == scope, !isFMMode, context.source != .none,
-           source == context.source, !queue.isEmpty {
+        // Replaying the place already playing skips the refetch, but only while
+        // the queue is still exactly what resolving it produced this run.
+        if reusingPlaybackQueue, playbackQueueMatches(context, scope: scope),
+           resolvedQueue?.reusable(for: context, source: source, isFM: isFMMode, queueIsEmpty: queue.isEmpty) == true {
             return (queue, source)
         }
         let downloads = DownloadManager.shared
@@ -1205,6 +1232,8 @@ final class PlayerService: ObservableObject {
         } catch {
             guard scope == offlineAccountScope, !Task.isCancelled else { throw CancellationError() }
             if !local.isEmpty { return (local, context.source) }
+            // Nothing online and nothing stored: the queue in hand beats an error.
+            if reusingPlaybackQueue, playbackQueueMatches(context, scope: scope) { return (queue, source) }
             throw error
         }
     }
@@ -1290,8 +1319,7 @@ final class PlayerService: ObservableObject {
             duration = track.duration
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
             NowPlayingManager.shared.updateElapsed(progress, rate: 0)
-            let generation = resolveGeneration
-            Task { await loadLyrics(for: track, generation: generation) }
+            Task { await loadLyrics(for: track) }
         }
     }
 
@@ -1309,6 +1337,7 @@ final class PlayerService: ObservableObject {
         guard stateScope != scope else { return }
         persistState()
         resolveGeneration += 1
+        playIntent += 1
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
