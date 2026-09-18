@@ -179,12 +179,7 @@ final class PlayerService: ObservableObject {
     /// The list the player is walking through (shuffled or ordered).
     var activeQueue: [Track] { shuffleEnabled ? shuffledQueue : queue }
 
-    var upcomingTracks: [Track] {
-        if isFMMode { return fmUpcoming }
-        guard !activeQueue.isEmpty, currentIndex >= 0 else { return playNextList }
-        let rest = activeQueue.suffix(from: min(currentIndex + 1, activeQueue.count))
-        return playNextList + Array(rest.prefix(200))
-    }
+    var upcomingTracks: [Track] { nextCandidates.prefix(200).map(\.track) }
 
     var hasCurrentTrack: Bool { currentTrack != nil }
 

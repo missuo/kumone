@@ -24,6 +24,7 @@ final class AccountStore: ObservableObject {
     private var profileBinding: String?
     private var bootstrapGeneration = 0
     private var playlistSyncTask: Task<Void, Never>?
+    private var playlistSyncID = UUID()
     private var networkObserver: AnyCancellable?
 
     var likedSongsPlaylist: PlaylistSummary? {
@@ -90,15 +91,23 @@ final class AccountStore: ObservableObject {
             .sink { [weak self] connected in
                 guard let self else { return }
                 if connected { Task { await self.refreshLibrary() } }
-                else { self.playlistSyncTask?.cancel() }
+                else { self.cancelPlaylistSync() }
             }
     }
 
-    private func syncPlaylistContents() {
+    private func cancelPlaylistSync() {
+        playlistSyncID = UUID()
         playlistSyncTask?.cancel()
-        guard let scope = offlineScope, profile != nil else { return }
+        playlistSyncTask = nil
+    }
+
+    private func syncPlaylistContents() {
+        guard playlistSyncTask == nil, let scope = offlineScope, profile != nil else { return }
+        let ticket = UUID()
+        playlistSyncID = ticket
         let playlists = userPlaylists.sorted { $0.isLikedSongsList && !$1.isLikedSongsList }
         playlistSyncTask = Task(priority: .utility) { [weak self] in
+            defer { if self?.playlistSyncID == ticket { self?.playlistSyncTask = nil } }
             for playlist in playlists {
                 guard !Task.isCancelled, self?.offlineScope == scope else { return }
                 let network = DownloadManager.shared.network
@@ -158,7 +167,7 @@ final class AccountStore: ObservableObject {
         profile = value
         profileBinding = binding
         if oldID != value?.userId {
-            playlistSyncTask?.cancel()
+            cancelPlaylistSync()
             likedTrackIDs = []
             userPlaylists = []
             likedAlbums = []

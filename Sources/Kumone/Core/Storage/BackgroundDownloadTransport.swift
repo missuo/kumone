@@ -47,7 +47,7 @@ protocol DownloadTransport: AnyObject {
 /// The delegate first moves system temporary files into a durable inbox. The
 /// receipt lets the manager recover a completion even if the app dies before
 /// importing the audio or saving its final job state.
-private final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let inbox: URL
     let continuation: AsyncStream<DownloadTransportEvent>.Continuation
     private var progressDates: [String: Date] = [:]
@@ -58,8 +58,11 @@ private final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegat
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let token = downloadTask.taskDescription, Self.validToken(token),
-              let response = downloadTask.response as? HTTPURLResponse else { return }
+        guard let token = downloadTask.taskDescription, Self.validToken(token) else { return }
+        guard let response = downloadTask.response as? HTTPURLResponse else {
+            continuation.yield(.failed(token: token, domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, resumeData: nil))
+            return
+        }
         do {
             try DownloadFileProtection.prepareDirectory(inbox)
             let fileName = "\(token).audio"

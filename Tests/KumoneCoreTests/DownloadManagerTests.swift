@@ -178,6 +178,46 @@ struct DownloadManagerTests {
         await prefetcher.cancel().value
     }
 
+    @Test func removingAnEarlierJobDuringPreparationKeepsTheRemainingJobIdentity() async throws {
+        let gate = DownloadRestoreGate()
+        let h = try DownloadHarness(prepareResource: { resource in
+            if resource.descriptor.identity.trackID == 2 { await gate.wait() }
+        })
+        defer { gate.open(); h.close() }
+        let tracks = try (1...3).map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track\"}".utf8))
+        }
+        await h.manager.enqueue(tracks: tracks, owner: "playlist:1", name: "Fixture", quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { gate.entered && h.transport.started.count == 1 }
+        let firstID = try #require(h.manager.jobs.first { $0.track.id == 1 }?.id)
+        await h.manager.cancel(firstID)
+        #expect(h.manager.jobs.count == 2)
+        gate.open()
+        try await waitForDownload { h.transport.started.count == 3 }
+        for transfer in h.transport.started.dropFirst() { try h.transport.finish(transfer) }
+        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .complete } && h.manager.downloadedTracks.count == 2 }
+        #expect(Set(h.manager.downloadedTracks.map(\.id)) == [2, 3])
+        #expect(h.manager.jobs.allSatisfy { $0.track.id == $0.descriptor?.identity.trackID })
+    }
+
+    @Test func restoringCatalogDiscardsCancelledJobsAndTheirResumeFiles() async throws {
+        let h = try DownloadHarness(online: false)
+        defer { h.close() }
+        var catalog = DownloadCatalog()
+        for _ in 0..<100 {
+            var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: true)
+            job.owners = []
+            job.status = .cancelled
+            catalog.jobs.append(job)
+            try await h.persistence.saveResumeData(Data("resume".utf8), jobID: job.id)
+        }
+        try await h.persistence.save(catalog)
+        await h.manager.start()
+        #expect(h.manager.jobs.isEmpty)
+        #expect(try await h.persistence.load().jobs.isEmpty)
+        for job in catalog.jobs { #expect(await h.persistence.resumeData(jobID: job.id) == nil) }
+    }
+
     @Test func catalogReadFailureCanBeRetriedWithoutMisreportingLogin() async throws {
         let h = try DownloadHarness()
         defer { h.close() }
@@ -304,8 +344,7 @@ struct DownloadManagerTests {
         #expect(h.transport.started.isEmpty && h.manager.pendingJobs.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func redownloadingAfterRemovalStartsWithFreshProgress(useResume: Bool) async throws {
+    @Test func redownloadingAfterRemovalStartsWithFreshProgress() async throws {
         let gate = DownloadRestoreGate()
         var resolutions = 0
         let h = try DownloadHarness(resolver: { track, quality, scope in
@@ -328,7 +367,10 @@ struct DownloadManagerTests {
             }
         }
         defer { observer.cancel() }
-        if useResume { await h.manager.resume(id) } else { await h.enqueue() }
+        await h.manager.resume(id)
+        #expect(h.manager.jobs.isEmpty)
+        await h.enqueue()
+        #expect(h.manager.jobs.first?.id != id)
         try await waitForDownload { gate.entered }
         #expect(!startupProgress.isEmpty && startupProgress.allSatisfy { $0 == nil })
         #expect(h.manager.jobs.first?.receivedBytes == 0)
@@ -431,7 +473,7 @@ struct DownloadManagerTests {
         #expect(Set(h.manager.offlineTracks.map(\.id)) == [3, 4])
         #expect(h.manager.collections.first { $0.id == "playlist:a" }?.tracks.map(\.id) == [1, 2, 3])
         #expect(h.manager.collections.first { $0.id == "playlist:b" }?.tracks.map(\.id) == [1, 2])
-        #expect(h.manager.jobs.filter { [1, 2].contains($0.track.id) }.allSatisfy { $0.owners.isEmpty && $0.status == .cancelled })
+        #expect(h.manager.jobs.filter { [1, 2].contains($0.track.id) }.isEmpty)
         #expect(try await h.store.record(id: descriptors[1].identity.id) == nil)
         #expect(try await h.store.availableRecords(accountScope: "other-account").count == 1)
         #expect(try Data(contentsOf: playing.url) == h.fixture.data)
@@ -488,7 +530,7 @@ struct DownloadManagerTests {
         #expect(!counts.isEmpty && counts.allSatisfy { $0 == 0 })
         let saved = try await h.persistence.load()
         #expect(saved.revision == revision + 1)
-        #expect(saved.jobs.allSatisfy { $0.status == .cancelled && $0.owners.isEmpty })
+        #expect(saved.jobs.isEmpty)
         #expect(try await h.store.storageFiles().isEmpty)
     }
 
@@ -513,7 +555,7 @@ struct DownloadManagerTests {
         #expect(!h.transport.cancelled.contains(shared.token))
         #expect(h.transport.cancelled.contains(stopped.token))
         #expect(h.manager.jobs.first { $0.track.id == 2 }?.owners == ["playlist:b"])
-        #expect(h.manager.jobs.first { $0.track.id == 3 }?.status == .cancelled)
+        #expect(h.manager.jobs.first { $0.track.id == 3 } == nil)
         #expect(h.manager.pendingJobs.allSatisfy { !$0.owners.contains("playlist:a") })
         #expect(h.manager.downloadedSongs().map(\.id) == [1])
         #expect(h.manager.jobs.first { $0.track.id == 1 }?.owners == ["playlist:a"])
@@ -550,7 +592,7 @@ struct DownloadManagerTests {
         #expect(!h.manager.jobs.contains { $0.status == .paused })
         await h.manager.cancelCollection("playlist:600")
         #expect(h.manager.pendingJobs.isEmpty)
-        #expect(h.manager.jobs.allSatisfy { $0.status == .cancelled })
+        #expect(h.manager.jobs.isEmpty)
     }
 
     @Test func cancelling600TasksPublishesOneEmptyQueueAndPreservesCompletedAudio() async throws {
@@ -579,7 +621,7 @@ struct DownloadManagerTests {
         #expect(h.transport.started.count == 3)
         #expect(h.manager.pendingJobs.isEmpty && h.manager.downloadedSongs().map(\.id) == [1])
         let saved = try await h.persistence.load()
-        #expect(saved.jobs.filter { $0.status == .cancelled }.count == 600)
+        #expect(saved.jobs.count == 1 && saved.jobs.first?.status == .complete)
         // Metadata callbacks may also save, but cancelling must not save per song.
         #expect(saved.revision - revision < 10)
         for transfer in h.transport.started.dropFirst() {
@@ -1091,7 +1133,7 @@ struct DownloadManagerTests {
         gate.continuation?.resume()
         try await Task.sleep(for: .milliseconds(40))
         #expect(h.transport.started.isEmpty)
-        #expect(h.manager.jobs.first?.status == .cancelled)
+        #expect(h.manager.jobs.isEmpty)
     }
 
     @Test func recoversFinishedFileWithoutStartingAnotherDownload() async throws {
@@ -1137,9 +1179,9 @@ struct DownloadManagerTests {
         await h.enqueue(quality: "lossless")
         try await waitForDownload { h.transport.started.count == 2 }
         try h.transport.finish(h.transport.started[1])
-        try await waitForDownload { h.manager.jobs.contains { $0.quality == "exhigh" && $0.owners.isEmpty } }
+        try await waitForDownload { h.manager.jobs.count == 1 && h.manager.jobs.first?.quality == "lossless" && h.manager.jobs.first?.status == .complete }
         let saved = try await h.persistence.load()
-        #expect(saved.jobs.first { $0.quality == "exhigh" }?.owners.isEmpty == true)
+        #expect(saved.jobs.first { $0.quality == "exhigh" } == nil)
         #expect(saved.jobs.first { $0.quality == "lossless" }?.status == .complete)
     }
 

@@ -70,6 +70,7 @@ final class PlaylistContent: ObservableObject {
             tracks = saved.detail.tracks
             privileges = saved.privileges
             isLoading = false
+            if background, !saved.needsBackgroundRefresh(summary: summary) { return }
         }
         guard valid(generation, scope: scope) else { return }
         if detail == nil, let summary { detail = PlaylistDetail(summary: summary) }

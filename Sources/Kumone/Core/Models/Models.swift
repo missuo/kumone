@@ -52,6 +52,7 @@ struct PlaylistSummary: Codable, Hashable, Identifiable {
     let coverURL: String?
     let playCount: Int
     let trackCount: Int
+    let updateTime: Int?
     let copywriter: String?
     let creator: PlaylistCreator?
     let specialType: Int
@@ -60,7 +61,7 @@ struct PlaylistSummary: Codable, Hashable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, picUrl, coverImgUrl, playCount, playcount, trackCount
-        case copywriter, creator, specialType, privacy, subscribed
+        case copywriter, creator, specialType, privacy, subscribed, updateTime
     }
 
     init(from decoder: Decoder) throws {
@@ -73,6 +74,7 @@ struct PlaylistSummary: Codable, Hashable, Identifiable {
             ?? (try? c.decode(Double.self, forKey: .playcount)) ?? 0
         playCount = Int(count)
         trackCount = (try? c.decode(Int.self, forKey: .trackCount)) ?? 0
+        updateTime = try? c.decode(Int.self, forKey: .updateTime)
         copywriter = try? c.decode(String.self, forKey: .copywriter)
         creator = try? c.decode(PlaylistCreator.self, forKey: .creator)
         specialType = (try? c.decode(Int.self, forKey: .specialType)) ?? 0
@@ -90,6 +92,7 @@ struct PlaylistSummary: Codable, Hashable, Identifiable {
         try c.encodeIfPresent(coverURL, forKey: .coverImgUrl)
         try c.encode(playCount, forKey: .playCount)
         try c.encode(trackCount, forKey: .trackCount)
+        try c.encodeIfPresent(updateTime, forKey: .updateTime)
         try c.encodeIfPresent(copywriter, forKey: .copywriter)
         try c.encodeIfPresent(creator, forKey: .creator)
         try c.encode(specialType, forKey: .specialType)

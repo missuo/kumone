@@ -17,6 +17,41 @@ import Testing
         return try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    @Test func freshBackgroundSnapshotSkipsTheNetworkButForegroundStillRefreshes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshots = PlaylistSnapshotStore(directory: root)
+        let data = try response(ids: [1, 2], loaded: [1, 2])
+        var calls = 0
+        let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in calls += 1; return data })
+        await model.load(background: true)
+        await model.load(background: true)
+        #expect(calls == 1 && model.tracks.count == 2)
+        await model.load()
+        #expect(calls == 2)
+    }
+
+    @Test func backgroundFreshnessHonorsVersionCountAgeAndCompleteness() throws {
+        let now = Date()
+        func summary(count: Int = 2, version: Int? = nil) throws -> PlaylistSummary {
+            var json: [String: Any] = ["id": 1, "name": "Fixture", "trackCount": count]
+            if let version { json["updateTime"] = version }
+            return try JSONDecoder().decode(PlaylistSummary.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        var snapshot = PlaylistSnapshot(detail: try response(ids: [1, 2], loaded: [1, 2]).playlist, privileges: [:], savedAt: now)
+        #expect(!snapshot.needsBackgroundRefresh(summary: try summary(), now: now))
+        #expect(snapshot.needsBackgroundRefresh(summary: try summary(count: 3), now: now))
+        #expect(snapshot.needsBackgroundRefresh(summary: try summary(), now: now.addingTimeInterval(301)))
+        snapshot.detail.tracks.removeLast()
+        #expect(snapshot.needsBackgroundRefresh(summary: try summary(), now: now))
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot.detail)) as? [String: Any])
+        json["updateTime"] = 100
+        json["tracks"] = [["id": 1, "name": "One"], ["id": 2, "name": "Two"]]
+        snapshot.detail = try JSONDecoder().decode(PlaylistDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(!snapshot.needsBackgroundRefresh(summary: try summary(version: 100), now: now.addingTimeInterval(3600)))
+        #expect(snapshot.needsBackgroundRefresh(summary: try summary(version: 101), now: now))
+    }
+
     @Test(arguments: [false, true])
     func missingMembershipUsesReturnedSongsAndPersistsThem(emptyIDs: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -10,6 +10,18 @@ struct PlaylistSnapshot: Codable {
             && Set(detail.tracks.map(\.id)) == Set(detail.trackIds.map(\.id))
     }
 
+    func needsBackgroundRefresh(summary: PlaylistSummary?, now: Date = .now) -> Bool {
+        guard isComplete else { return true }
+        if let summary {
+            guard summary.trackCount == detail.trackCount, summary.name == detail.name else { return true }
+            if let updated = summary.updateTime, updated > 0, detail.updateTime > 0 {
+                return updated != detail.updateTime
+            }
+        }
+        let age = now.timeIntervalSince(savedAt)
+        return age < 0 || age >= 5 * 60
+    }
+
     mutating func remove(_ ids: Set<Int>) {
         detail.tracks.removeAll { ids.contains($0.id) }
         detail.trackIds.removeAll { ids.contains($0.id) }

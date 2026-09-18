@@ -189,6 +189,9 @@ final class DownloadManager: ObservableObject {
     private func restore() async {
         do {
             catalog = try await persistence.load()
+            let discarded = catalog.jobs.filter { $0.owners.isEmpty && $0.status == .cancelled }
+            catalog.jobs.removeAll { $0.owners.isEmpty && $0.status == .cancelled }
+            for job in discarded { try? await persistence.saveResumeData(nil, jobID: job.id) }
             let received = await transport.restoreTasks()
             let existing = Set(received.keys)
             let receipts = try transport.completedDownloads()
@@ -442,13 +445,13 @@ final class DownloadManager: ObservableObject {
         batchOperations += 1
         defer { batchOperations -= 1; schedule() }
         let cancelledIDs = Set(cancelled.map(\.id))
+        catalog.jobs.removeAll { cancelledIDs.contains($0.id) }
         progress.values = progress.values.filter { !cancelledIDs.contains($0.key) }
         if !deletingTracks.isEmpty { offlineTracks.removeAll { deletingTracks.contains($0.id) } }
         publish()
         try? await persist()
         for job in cancelled {
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
-            guard let i = index(job.id), catalog.jobs[i].status == .cancelled else { continue }
             if deletingTracks.isEmpty {
                 if let assetID = job.assetID { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
                 if job.status != .complete, let descriptor = job.descriptor { try? await store.remove(id: descriptor.identity.id) }
@@ -612,7 +615,7 @@ final class DownloadManager: ObservableObject {
             }
             guard current(job) else { return }
             var resumeData = await persistence.resumeData(jobID: job.id)
-            guard current(job) else { return }
+            guard current(job), let i = index(job.id) else { return }
             if catalog.jobs[i].descriptor != resource.descriptor { resumeData = nil }
             if resumeData == nil {
                 catalog.jobs[i].receivedBytes = 0
@@ -622,13 +625,13 @@ final class DownloadManager: ObservableObject {
             context.protectedAssetIDs.formUnion(storageAssetIDs)
             context.protectedAssetIDs.insert(resource.descriptor.identity.id)
             try await store.reserveDownload(token: token, bytes: resource.descriptor.byteCount, context: context)
-            guard current(job) else { await store.releaseDownloadReservation(token: token); return }
+            guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
             catalog.jobs[i].descriptor = resource.descriptor
             catalog.jobs[i].expectedBytes = resource.descriptor.byteCount
             catalog.jobs[i].status = .downloading
             publish()
             try await persist()
-            guard current(job) else { await store.releaseDownloadReservation(token: token); return }
+            guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
             transport.start(resource: resource, token: token, allowsMetered: catalog.jobs[i].allowsMetered, resumeData: resumeData)
             fetchMetadata(job)
         } catch {
@@ -664,6 +667,7 @@ final class DownloadManager: ObservableObject {
                 transport.acknowledge(receipt)
                 if [401, 403, 404, 416].contains(receipt.statusCode), job.retries < 1 {
                     try? await persistence.saveResumeData(nil, jobID: job.id)
+                    guard current(job), let i = index(job.id) else { return }
                     catalog.jobs[i].retries += 1
                     catalog.jobs[i].attempt = nil
                     catalog.jobs[i].status = .queued
@@ -701,7 +705,7 @@ final class DownloadManager: ObservableObject {
                 guard current(job) else { return }
                 if hadResumeData, job.retries < 1 {
                     try? await persistence.saveResumeData(nil, jobID: job.id)
-                    guard current(job) else { return }
+                    guard current(job), let i = index(job.id) else { return }
                     catalog.jobs[i].retries += 1
                     catalog.jobs[i].attempt = nil
                     catalog.jobs[i].status = .queued
@@ -736,6 +740,7 @@ final class DownloadManager: ObservableObject {
             catalog.jobs[i].errorMessage = nil
             publish()
             try await persist()
+            guard current(job), let i = index(job.id) else { return }
             // Move only the overlapping collection/single-song intentions to
             // the new version after it is complete. Other collections keep
             // their existing download, and failed upgrades leave it intact.
@@ -753,6 +758,7 @@ final class DownloadManager: ObservableObject {
             try? await persistence.saveResumeData(nil, jobID: job.id)
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
             await refreshLibrary()
+            guard current(job), let i = index(job.id) else { return }
             fetchMetadata(catalog.jobs[i])
             if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil }
             schedule()
@@ -760,9 +766,9 @@ final class DownloadManager: ObservableObject {
     }
 
     private func fail(job: DownloadJob, error: Error) async {
-        guard current(job), let i = index(job.id) else { return }
-        if let token = job.token { await store.releaseDownloadReservation(token: token) }
         guard current(job) else { return }
+        if let token = job.token { await store.releaseDownloadReservation(token: token) }
+        guard current(job), let i = index(job.id) else { return }
         let delays: [Duration] = [.seconds(1), .seconds(2), .seconds(4)]
         let retries = networkRetries[job.id, default: 0]
         let waitsForNetwork = AudioTransferCoordinator.isConnectivityFailure(error)
@@ -831,12 +837,15 @@ final class DownloadManager: ObservableObject {
         let available = (try? await store.availableRecords(accountScope: scope)) ?? []
         guard accountScope == scope else { return }
         let ids = Set(available.map(\.id))
-        for i in catalog.jobs.indices where catalog.jobs[i].accountScope == scope && !catalog.jobs[i].owners.isEmpty {
-            guard let assetID = catalog.jobs[i].assetID ?? catalog.jobs[i].descriptor?.identity.id else { continue }
+        for job in catalog.jobs where job.accountScope == scope && !job.owners.isEmpty {
+            guard accountScope == scope else { return }
+            guard let i = index(job.id), !catalog.jobs[i].owners.isEmpty,
+                  let assetID = catalog.jobs[i].assetID ?? catalog.jobs[i].descriptor?.identity.id else { continue }
             if ids.contains(assetID) {
                 catalog.jobs[i].assetID = assetID
                 catalog.jobs[i].status = .complete
-                try? await store.retain(id: assetID, owner: catalog.jobs[i].retentionOwner)
+                try? await store.retain(id: assetID, owner: job.retentionOwner)
+                if index(job.id) == nil { try? await store.removeRetention(id: assetID, owner: job.retentionOwner) }
             } else if catalog.jobs[i].status == .complete {
                 catalog.jobs[i].status = .failed
                 catalog.jobs[i].errorMessage = String(localized: "本地文件缺失，请重新下载")

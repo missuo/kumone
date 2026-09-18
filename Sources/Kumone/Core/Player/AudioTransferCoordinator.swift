@@ -140,28 +140,49 @@ actor AudioTransferCoordinator {
             request.setValue("bytes=\(range.lowerBound)-\(range.upperBound - 1)", forHTTPHeaderField: "Range")
             request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             if let etag { request.setValue(etag, forHTTPHeaderField: "If-Range") }
-            let (bytes, response) = try await session.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw OfflineAudioError.invalidResponse }
-            let info = try AudioHTTPResponse(response: http, requested: range, descriptor: resource.descriptor, previousETag: etag)
-            etag = info.etag
-            var offset = info.offset
-            var buffer = Data()
-            buffer.reserveCapacity(64 * 1024)
-            for try await byte in bytes {
+            let stream = AudioChunkStream(session: session, request: request)
+            defer { stream.cancel() }
+            try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                guard offset + Int64(buffer.count) < info.offset + info.length else { throw OfflineAudioError.invalidResponse }
-                buffer.append(byte)
-                if buffer.count == 64 * 1024 {
+                stream.task.resume()
+                var info: AudioHTTPResponse?
+                var offset: Int64 = 0
+                var buffer = Data()
+                buffer.reserveCapacity(64 * 1024)
+                for try await event in stream.events {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .response(let response):
+                        guard info == nil, let http = response as? HTTPURLResponse else { throw OfflineAudioError.invalidResponse }
+                        let received = try AudioHTTPResponse(response: http, requested: range, descriptor: resource.descriptor, previousETag: etag)
+                        info = received
+                        etag = received.etag
+                        offset = received.offset
+                    case .data(let data):
+                        guard let info, Int64(data.count) <= info.offset + info.length - offset - Int64(buffer.count) else {
+                            throw OfflineAudioError.invalidResponse
+                        }
+                        var remaining = data.startIndex
+                        while remaining < data.endIndex {
+                            let end = min(data.endIndex, remaining + 64 * 1024 - buffer.count)
+                            buffer.append(contentsOf: data[remaining..<end])
+                            remaining = end
+                            if buffer.count == 64 * 1024 {
+                                try await append(buffer, at: offset)
+                                offset += Int64(buffer.count)
+                                buffer.removeAll(keepingCapacity: true)
+                            }
+                        }
+                        stream.task.resume()
+                    }
+                }
+                guard let info else { throw OfflineAudioError.invalidResponse }
+                if !buffer.isEmpty {
                     try await append(buffer, at: offset)
                     offset += Int64(buffer.count)
-                    buffer.removeAll(keepingCapacity: true)
                 }
-            }
-            if !buffer.isEmpty {
-                try await append(buffer, at: offset)
-                offset += Int64(buffer.count)
-            }
-            guard offset == info.offset + info.length else { throw OfflineAudioError.incomplete }
+                guard offset == info.offset + info.length else { throw OfflineAudioError.incomplete }
+            } onCancel: { stream.cancel() }
             if let record = try await store.record(id: resource.descriptor.identity.id), record.ranges.covers(record.descriptor.byteCount) {
                 try await store.finalize(id: record.id, writer: writer)
             }
