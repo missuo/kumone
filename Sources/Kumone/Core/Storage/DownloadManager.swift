@@ -1,5 +1,8 @@
 import Foundation
 import Network
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor
 final class DownloadProgress: ObservableObject {
@@ -27,7 +30,7 @@ final class DownloadManager: ObservableObject {
                                           return .init(policy: SettingsManager.shared.musicCachePolicy,
                                               likedTracks: account.offlineScope.map { [$0: account.likedTrackIDs] } ?? [:])
                                       },
-                                      cacheCompletion: { try await PlaybackCacheController.shared.completeForDownload(resource: $0, owner: $1, allowsMetered: $2) })
+                                      prepareResource: { await PlaybackCacheController.shared.prepareForBackgroundDownload($0) })
         manager.monitorNetwork()
         Task { await manager.start() }
         return manager
@@ -35,7 +38,6 @@ final class DownloadManager: ObservableObject {
 
     typealias Resolver = (Track, String, String) async throws -> OfflineAudioResource
     typealias MetadataFetcher = (Track, String) async -> Void
-    typealias CacheCompletion = (OfflineAudioResource, String, Bool) async throws -> OfflineAudioDescriptor?
     @Published private(set) var jobs: [DownloadJob] = []
     @Published private(set) var collections: [DownloadCollection] = []
     @Published private(set) var offlineTracks: [OfflineLibraryTrack] = []
@@ -106,7 +108,7 @@ final class DownloadManager: ObservableObject {
     private let metadataFetcher: MetadataFetcher
     private let metadataReader: (Int, String) async -> Track?
     private let cacheContext: () -> MusicCacheContext
-    private let cacheCompletion: CacheCompletion
+    private let prepareResource: (OfflineAudioResource) async -> Void
     private let retrySleep: (Duration) async throws -> Void
     private var catalog = DownloadCatalog()
     private var networkRetries: [UUID: Int] = [:]
@@ -120,6 +122,8 @@ final class DownloadManager: ObservableObject {
     private var backgroundEventsDelivered = false
     private var libraryRefreshID = UUID()
     private var batchOperations = 0
+    private var preparationSuspended = false
+    private var foregroundObserver: NSObjectProtocol?
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
@@ -127,7 +131,7 @@ final class DownloadManager: ObservableObject {
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
          cacheContext: @escaping () -> MusicCacheContext = { .init(policy: .automatic) },
-         cacheCompletion: @escaping CacheCompletion = { _, _, _ in nil },
+         prepareResource: @escaping (OfflineAudioResource) async -> Void = { _ in },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.store = store
         self.metadata = metadata
@@ -135,7 +139,7 @@ final class DownloadManager: ObservableObject {
         self.transport = transport
         self.accountScope = accountScope
         self.resolver = resolver
-        self.cacheCompletion = cacheCompletion
+        self.prepareResource = prepareResource
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
         self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
         self.cacheContext = cacheContext
@@ -331,13 +335,13 @@ final class DownloadManager: ObservableObject {
         await resumeJobs([id], allowsMetered: allowsMetered)
     }
 
-    func resumeAll(failedOnly: Bool = false) async {
+    func resumeAll(failedOnly: Bool = false, allowsMetered: Bool? = nil) async {
         let jobs = pendingJobs.filter { !failedOnly || [.failed, .unavailable].contains($0.status) }
-        await resumeJobs(Set(jobs.map(\.id)))
+        await resumeJobs(Set(jobs.map(\.id)), allowsMetered: allowsMetered)
     }
 
-    func resumeCollection(_ owner: String) async {
-        await resumeJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)))
+    func resumeCollection(_ owner: String, allowsMetered: Bool? = nil) async {
+        await resumeJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)), allowsMetered: allowsMetered)
     }
 
     private func resumeJobs(_ ids: Set<UUID>, allowsMetered: Bool? = nil) async {
@@ -364,7 +368,9 @@ final class DownloadManager: ObservableObject {
         for job in resumed {
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
             // Resume blobs contain the previous request's network restrictions.
-            if allowsMetered != nil { try? await persistence.saveResumeData(nil, jobID: job.id) }
+            if let allowsMetered, allowsMetered != job.allowsMetered {
+                try? await persistence.saveResumeData(nil, jobID: job.id)
+            }
         }
     }
 
@@ -492,10 +498,32 @@ final class DownloadManager: ObservableObject {
         workers.values.forEach { $0.task.cancel() }
         displayWorkers.values.forEach { $0.cancel() }
         monitor?.cancel()
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+    }
+
+    func preparationExpired(jobID: UUID, attempt: UUID) {
+        guard let i = index(jobID), catalog.jobs[i].accountScope == accountScope,
+              [.resolving, .downloading].contains(catalog.jobs[i].status),
+              catalog.jobs[i].attempt == attempt, workers[jobID]?.attempt == attempt else { return }
+        preparationSuspended = true
+        let token = catalog.jobs[i].token
+        workers.removeValue(forKey: jobID)?.task.cancel()
+        catalog.jobs[i].attempt = nil
+        catalog.jobs[i].status = network.permits(catalog.jobs[i]) ? .queued : .waitingNetwork
+        publish()
+        Task {
+            if let token { await store.releaseDownloadReservation(token: token) }
+            try? await persist()
+        }
+    }
+
+    func resumeAfterForeground() {
+        preparationSuspended = false
+        setNetwork(network)
     }
 
     private func schedule() {
-        guard isReady, batchOperations == 0 else { return }
+        guard isReady, batchOperations == 0, !preparationSuspended else { return }
         var running = catalog.jobs.filter { $0.accountScope == accountScope && ($0.status.isWorking || ($0.status == .waitingNetwork && $0.attempt != nil && network.permits($0))) }.count
         let limit = network.expensive ? 1 : 2
         for i in catalog.jobs.indices where running < limit {
@@ -518,6 +546,13 @@ final class DownloadManager: ObservableObject {
             if workers[job.id]?.attempt == job.attempt { workers[job.id] = nil; schedule() }
         }
         guard let token = job.token else { return }
+        #if os(iOS)
+        let activity = DownloadPreparationActivity { [weak self] in
+            if let attempt = job.attempt { self?.preparationExpired(jobID: job.id, attempt: attempt) }
+        }
+        defer { activity.end() }
+        #endif
+        guard current(job) else { return }
         do {
             try await persist()
             try await metadata.save(track: job.track, scope: job.accountScope)
@@ -547,7 +582,10 @@ final class DownloadManager: ObservableObject {
                 try await persist()
                 return
             }
-            if let local = try await cacheCompletion(resource, job.retentionOwner, catalog.jobs[i].allowsMetered) {
+            await prepareResource(resource)
+            guard current(job) else { return }
+            if let local = try await store.reusableDescriptor(accountScope: job.accountScope, trackID: job.track.id,
+                                                               quality: job.quality, retainingFor: job.retentionOwner) {
                 guard current(job) else {
                     try? await store.removeRetention(id: local.identity.id, owner: job.retentionOwner)
                     return
@@ -840,6 +878,13 @@ final class DownloadManager: ObservableObject {
     }
 
     private func monitorNetwork() {
+        #if os(iOS)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.resumeAfterForeground() }
+        }
+        #endif
         if KumonePaths.isOfflineUITest { setNetwork(.unknown); return }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in

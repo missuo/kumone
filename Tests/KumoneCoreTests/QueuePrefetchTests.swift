@@ -142,7 +142,7 @@ struct QueuePrefetchTests {
         await player.close()
     }
 
-    @Test func aUserDownloadCanKeepThePrefetchTransferAlive() async throws {
+    @Test func explicitDownloadReleasesMatchingPrefetchForBackgroundImport() async throws {
         let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
         let server = try await AudioFixtureServer(fixture: fixture, delay: 0.01)
         defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
@@ -152,11 +152,14 @@ struct QueuePrefetchTests {
         scheduler.update(try request([2]))
         try await waitForPrefetch { !server.ranges.isEmpty }
         scheduler.update(try request([2], pending: [2]))
-        let download = Task { try await scheduler.finishForDownload(resource: source, owner: "download", allowsMetered: false) }
-        await Task.yield()
-        await scheduler.cancel().value
-        let retained = try #require(try await download.value)
-        #expect(try await store.record(id: retained.identity.id)?.retainedBy == ["download"])
+        let closing = scheduler.cancel()
+        await scheduler.prepareForBackgroundDownload(source)
+        let input = store.directory.appendingPathComponent("system-download.flac")
+        try fixture.data.write(to: input)
+        try await store.importDownload(at: input, descriptor: source.descriptor)
+        try await store.retain(id: source.descriptor.identity.id, owner: "download")
+        #expect(try await store.record(id: source.descriptor.identity.id)?.retainedBy == ["download"])
+        await closing.value
     }
 
     @Test func sameFailedWindowDoesNotRetryOnEveryPlaybackTick() async throws {

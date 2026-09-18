@@ -217,11 +217,11 @@ struct DownloadTasksView: View {
                         Task { await downloads.pauseAll() }
                     }
                     taskButton("继续全部", icon: "play.fill", enabled: downloads.pendingJobs.contains { $0.status.canResume }) {
-                        Task { await downloads.resumeAll() }
+                        Task { await downloads.resumeAll(allowsMetered: true) }
                     }
                     Menu {
                         Button("重试失败任务") {
-                            Task { await downloads.resumeAll(failedOnly: true) }
+                            Task { await downloads.resumeAll(failedOnly: true, allowsMetered: true) }
                         }
                         Button("取消未完成任务", role: .destructive) { confirmCancelAll = true }
                     } label: {
@@ -282,6 +282,9 @@ private struct DownloadTaskRow: View {
     @ObservedObject var progress: DownloadProgress
     @State private var isHovering = false
     @ScaledMetric(relativeTo: .body) private var artworkSize: CGFloat = 42
+    private var waitsForWiFi: Bool {
+        job.status == .waitingNetwork && manager.network.connected && !manager.network.permits(job)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -297,7 +300,7 @@ private struct DownloadTaskRow: View {
                     Spacer(minLength: 8)
                     if job.status.canResume {
                         control(job.status == .paused ? "play.fill" : "arrow.clockwise", title: "继续下载") {
-                            Task { await manager.resume(job.id) }
+                            Task { await manager.resume(job.id, allowsMetered: true) }
                         }
                     } else if [.queued, .resolving, .downloading].contains(job.status) {
                         control("pause.fill", title: "暂停下载") { Task { await manager.pause(job.id) } }
@@ -312,14 +315,14 @@ private struct DownloadTaskRow: View {
                         .tint(Theme.accent).controlSize(.small)
                 }
                 HStack {
-                    Text(job.errorMessage ?? job.status.label)
+                    Text(job.errorMessage ?? (waitsForWiFi ? String(localized: "等待 Wi-Fi") : job.status.label))
                     Spacer(minLength: 8)
                     if expected > 0 {
                         Text("\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: expected, countStyle: .file))")
                             .monospacedDigit()
                     }
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
-                if job.status == .waitingNetwork, !job.allowsMetered, manager.network.connected {
+                if waitsForWiFi {
                     Button("使用当前网络下载") { Task { await manager.resume(job.id, allowsMetered: true) } }
                         .font(.system(size: 11.5)).buttonStyle(.plain).foregroundStyle(Theme.accent)
                 }
@@ -370,7 +373,7 @@ struct TrackDownloadActions: View {
                 actionLabel("取消下载", systemImage: "xmark")
             }
         } else if let job, job.status.canResume {
-            Button { Task { await downloads.resume(job.id) } } label: { actionLabel("继续下载", systemImage: "play") }
+            Button { Task { await downloads.resume(job.id, allowsMetered: true) } } label: { actionLabel("继续下载", systemImage: "play") }
         } else {
             Button { enqueue() } label: { actionLabel("下载", systemImage: "arrow.down.circle") }
         }
@@ -384,7 +387,7 @@ struct TrackDownloadActions: View {
 
     private func enqueue() {
         guard account.isLoggedIn else { openLogin(); return }
-        Task { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: false) }
+        Task { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: true) }
     }
 }
 
@@ -476,7 +479,7 @@ struct DownloadCollectionButton: View {
                 Button("继续下载") {
                     Task { [scope = downloads.accountScope] in
                         guard downloads.accountScope == scope else { return }
-                        await downloads.resumeCollection(owner)
+                        await downloads.resumeCollection(owner, allowsMetered: true)
                     }
                 }
             }
@@ -506,10 +509,10 @@ struct DownloadCollectionButton: View {
             guard downloads.accountScope == scope else { return }
             if stop { await downloads.cancelCollection(owner) }
             else {
-                await downloads.resumeCollection(owner)
+                await downloads.resumeCollection(owner, allowsMetered: true)
                 guard downloads.accountScope == scope else { return }
                 await downloads.enqueue(tracks: tracks, owner: owner, name: name,
-                                        quality: settings.audioQuality.rawValue, allowsMetered: false)
+                                        quality: settings.audioQuality.rawValue, allowsMetered: true)
             }
         }
     }

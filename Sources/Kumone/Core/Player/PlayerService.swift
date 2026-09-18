@@ -980,10 +980,11 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    /// Cache failures and disabling caching preserve the current queue,
-    /// position and paused state while returning to the ordinary stream.
-    func stopAutomaticCaching() {
-        guard let session = playbackCacheSession, let track = currentTrack else { return }
+    /// Return to the ordinary stream while preserving queue, position and pause.
+    /// The returned task releases the cache writer; playback reloads separately.
+    @discardableResult
+    func stopAutomaticCaching() -> Task<Void, Never>? {
+        guard let session = playbackCacheSession, let track = currentTrack else { return nil }
         let position = engine.currentItem == nil ? progress : livePlaybackTime
         playbackCacheSession = nil
         resolveGeneration += 1
@@ -1012,6 +1013,7 @@ final class PlayerService: ObservableObject {
             await loadPlaybackAsset(AVURLAsset(url: session.fallbackURL), track: track, generation: generation,
                                     resolvedDuration: duration, resumeAt: position)
         }
+        return stopped
     }
 
     private func loadPlaybackAsset(_ asset: AVURLAsset, track: Track, generation: Int,

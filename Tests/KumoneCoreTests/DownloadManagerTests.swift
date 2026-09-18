@@ -71,6 +71,7 @@ private final class DownloadHarness {
 
     init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false,
          metadataReader: ((Int, String) async -> Track?)? = nil, freeBytes: Int64? = nil,
+         prepareResource: @escaping (OfflineAudioResource) async -> Void = { _ in },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-download-tests-\(UUID())")
         fixture = try OfflineAudioFixture()
@@ -85,7 +86,7 @@ private final class DownloadHarness {
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
                                   accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: { _, _ in },
-                                  metadataReader: metadataReader, retrySleep: retrySleep)
+                                  metadataReader: metadataReader, prepareResource: prepareResource, retrySleep: retrySleep)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
 
@@ -138,6 +139,77 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func cellularApprovalSurvivesDisconnectionAndRestartsTheQueue() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        let second = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Second\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(tracks: [h.track, second], owner: "playlist:1", name: "Saved", quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .waitingNetwork } }
+        await h.manager.resumeAll(allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let first = h.transport.started[0]
+        h.manager.setNetwork(.init(connected: false, expensive: true, constrained: false))
+        h.transport.continuation.yield(.failed(token: first.token, domain: NSURLErrorDomain,
+            code: NSURLErrorNetworkConnectionLost, resumeData: Data("resume".utf8)))
+        try await waitForDownload { h.manager.jobs.first { $0.track.id == 1 }?.token == nil }
+        h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.started[1].metered && h.transport.started[1].resumed)
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.transport.started.count == 3 }
+        #expect(h.transport.started[2].metered)
+        try h.transport.finish(h.transport.started[2])
+        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .complete } }
+        #expect(try await h.persistence.load().jobs.allSatisfy { $0.allowsMetered })
+    }
+
+    @Test func backgroundPreparationExpirationRecoversOnForeground() async throws {
+        let gate = DownloadRestoreGate()
+        var preparations = 0
+        let h = try DownloadHarness(prepareResource: { _ in
+            preparations += 1
+            if preparations == 1 { await gate.wait() }
+        })
+        defer { gate.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { gate.entered }
+        let job = try #require(h.manager.jobs.first), attempt = try #require(job.attempt)
+        h.manager.preparationExpired(jobID: job.id, attempt: attempt)
+        #expect(h.manager.jobs.first?.status == .queued && h.manager.jobs.first?.attempt == nil)
+        h.manager.setNetwork(h.manager.network)
+        #expect(h.transport.started.isEmpty)
+        h.manager.resumeAfterForeground()
+        try await waitForDownload { h.transport.started.count == 1 }
+        gate.open()
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+        #expect(preparations == 2)
+    }
+
+    @Test func preparationExpirationCannotUndoACompletedCachePromotion() async throws {
+        let gate = DownloadRestoreGate()
+        var blockRead = false
+        let h = try DownloadHarness(metadataReader: { _, _ in
+            if blockRead { await gate.wait() }
+            return nil
+        })
+        defer { gate.open(); h.close() }
+        await h.manager.start()
+        let input = h.root.appendingPathComponent("completed.mp3")
+        try h.fixture.data.write(to: input)
+        try await h.store.importDownload(at: input, descriptor: h.fixture.descriptor)
+        blockRead = true
+        await h.enqueue()
+        try await waitForDownload { gate.entered }
+        let job = try #require(h.manager.jobs.first), attempt = try #require(job.attempt)
+        #expect(job.status == .complete)
+        h.manager.preparationExpired(jobID: job.id, attempt: attempt)
+        #expect(h.manager.jobs.first?.status == .complete)
+        gate.open()
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        #expect(h.transport.started.isEmpty && h.manager.pendingJobs.isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func redownloadingAfterRemovalStartsWithFreshProgress(useResume: Bool) async throws {
         let gate = DownloadRestoreGate()
@@ -182,13 +254,13 @@ struct DownloadManagerTests {
     @Test func pausingAndResumingStillKeepsValidPartialProgress() async throws {
         let h = try DownloadHarness()
         defer { h.close() }
-        await h.enqueue()
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
         try await waitForDownload { h.transport.started.count == 1 }
         let id = try #require(h.manager.jobs.first?.id), total = h.fixture.descriptor.byteCount
         h.transport.continuation.yield(.progress(token: h.transport.started[0].token, received: total * 3 / 4, expected: total))
         try await waitForDownload { h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75 }
         await h.manager.pause(id)
-        await h.manager.resume(id)
+        await h.manager.resume(id, allowsMetered: true)
         try await waitForDownload { h.transport.started.count == 2 }
         #expect(h.transport.started[1].resumed)
         #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75)
@@ -817,28 +889,27 @@ struct DownloadManagerTests {
         #expect(saved.collections.isEmpty && saved.jobs.isEmpty && h.transport.started.isEmpty)
     }
 
-    @Test func downloadingCurrentStreamSharesItsTransfer() async throws {
+    @Test func partialPlaybackCacheDoesNotBlockBackgroundDownload() async throws {
         let h = try DownloadHarness()
         defer { h.close() }
-        let server = try await AudioFixtureServer(fixture: h.fixture, delay: 0.01)
+        let server = try await AudioFixtureServer(fixture: h.fixture, delay: 0.05)
         defer { server.stop() }
         let resource = h.fixture.resource(url: server.url)
         let source = AudioTransferCoordinator(resource: resource, store: h.store, cacheContext: .init(policy: .automatic))
         _ = try await source.read(at: 0, maximum: 1_024)
         let manager = DownloadManager(store: h.store, metadata: h.metadata, persistence: h.persistence,
             transport: h.transport, accountScope: "test-account", resolver: { _, _, _ in resource }, metadataFetcher: { _, _ in },
-            cacheCompletion: { requested, owner, allowsMetered in
+            prepareResource: { requested in
                 #expect(requested.descriptor == resource.descriptor)
-                try await source.download(allowsMetered: allowsMetered)
-                try await h.store.retain(id: resource.descriptor.identity.id, owner: owner)
-                return resource.descriptor
+                await source.close()
             })
         defer { manager.shutdown() }
         manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
         await manager.enqueue(tracks: [h.track], owner: "single:1", name: nil, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(await source.receivedByteCount < h.fixture.descriptor.byteCount)
+        try h.transport.finish(h.transport.started[0])
         try await waitForDownload { manager.jobs.first?.status == .complete }
-        #expect(h.transport.started.isEmpty)
-        #expect(await source.receivedByteCount == h.fixture.descriptor.byteCount)
         #expect(try await h.store.record(id: resource.descriptor.identity.id)?.retainedBy.isEmpty == false)
         await source.close()
     }

@@ -43,8 +43,7 @@ final class QueuePrefetcher {
     }
 
     func update(_ next: QueuePrefetchRequest?) {
-        // A newly requested download may attach to the active transfer. Update
-        // admission for later tracks without cancelling that shared resource.
+        // Pending explicit downloads are handled by the background session.
         let pending = next?.pendingDownloadTrackIDs ?? []
         let pendingChanged = pending != pendingDownloadTrackIDs
         pendingDownloadTrackIDs = pending
@@ -79,9 +78,10 @@ final class QueuePrefetcher {
         return task
     }
 
-    func finishForDownload(resource: OfflineAudioResource, owner: String, allowsMetered: Bool) async throws -> OfflineAudioDescriptor? {
-        guard let active, !active.isClosed, active.transfer.resource.descriptor == resource.descriptor else { return nil }
-        return try await active.finishForDownload(owner: owner, allowsMetered: allowsMetered)
+    func prepareForBackgroundDownload(_ resource: OfflineAudioResource) async {
+        if let active, active.transfer.resource.descriptor == resource.descriptor {
+            await cancel().value
+        } else { await closing?.value }
     }
 
     private func isCurrent(_ ticket: Int) -> Bool { ticket == generation && !Task.isCancelled }

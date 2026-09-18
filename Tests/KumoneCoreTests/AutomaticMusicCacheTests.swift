@@ -60,19 +60,21 @@ struct AutomaticMusicCacheTests {
         #expect(try await store.record(id: fixture.descriptor.identity.id)?.state == .complete)
     }
 
-    @Test @MainActor func switchingSongsDoesNotCancelAnAttachedDownload() async throws {
+    @Test @MainActor func closingPlaybackCacheReleasesTheWriterForBackgroundImport() async throws {
         let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
         let server = try await AudioFixtureServer(fixture: fixture, delay: 0.01)
         defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
         let session = PlaybackCacheSession(resource: fixture.resource(url: server.url), store: store,
                                             context: .init(policy: .automatic), fallbackURL: server.url, onFailure: {})
         try await session.transfer.prepare()
-        let download = Task { try await session.finishForDownload(owner: "download:attached", allowsMetered: false) }
+        await session.updateCompletion(allowed: true)
         for _ in 0..<200 where server.ranges.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
         await session.close()
-        let descriptor = try await download.value
-        #expect(try await store.record(id: descriptor.identity.id)?.retainedBy == ["download:attached"])
-        #expect(await session.transfer.receivedByteCount == fixture.descriptor.byteCount)
+        let input = store.directory.appendingPathComponent("system-download.flac")
+        try fixture.data.write(to: input)
+        try await store.importDownload(at: input, descriptor: fixture.descriptor)
+        try await store.retain(id: fixture.descriptor.identity.id, owner: "download:background")
+        #expect(try await store.record(id: fixture.descriptor.identity.id)?.retainedBy == ["download:background"])
     }
 
     @Test func eligibilityRequiresTheSameCompleteRepresentation() async throws {

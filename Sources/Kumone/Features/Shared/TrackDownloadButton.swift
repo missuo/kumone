@@ -63,7 +63,7 @@ struct TrackDownloadButton: View {
                 if [.queued, .resolving, .downloading, .waitingNetwork].contains(job.status) {
                     Button("暂停下载") { Task { await downloads.pause(job.id) } }
                 } else if canResume {
-                    Button("继续下载") { Task { await downloads.resume(job.id) } }
+                    Button("继续下载") { Task { await downloads.resume(job.id, allowsMetered: true) } }
                 }
                 Button("停止下载") { Task { await downloads.cancel(job.id) } }
             }
@@ -84,8 +84,8 @@ struct TrackDownloadButton: View {
             defer { isSubmitting = false }
             guard downloads.accountScope == scope else { return }
             if let job = selectedJob, job.status.isInProgress { await downloads.cancel(job.id) }
-            else if let job = selectedJob { await downloads.resume(job.id) }
-            else { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: false) }
+            else if let job = selectedJob { await downloads.resume(job.id, allowsMetered: true) }
+            else { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: true) }
         }
     }
 

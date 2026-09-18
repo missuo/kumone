@@ -21,8 +21,6 @@ final class PlaybackCacheSession {
     let transfer: AudioTransferCoordinator
     let loader: CachingAssetResourceLoader
     let fallbackURL: URL
-    private let store: OfflineStore
-    private var downloadConsumers = 0
     private var completion: Task<Void, Never>?
     private var closing: Task<Void, Never>?
     private(set) var isClosed = false
@@ -35,7 +33,6 @@ final class PlaybackCacheSession {
         transfer = AudioTransferCoordinator(resource: resource, store: store, cacheContext: context)
         loader = CachingAssetResourceLoader(transfer: transfer, onFailure: onFailure)
         self.fallbackURL = fallbackURL
-        self.store = store
         self.onCompleted = onCompleted
     }
 
@@ -61,38 +58,14 @@ final class PlaybackCacheSession {
         isClosed = true
         completion?.cancel()
         let task = Task { [self, completion] in
-            // Leaving the song ends the player consumer. A user-requested
-            // download may still own this same transfer until it finishes.
             await loader.close(closeTransfer: false)
+            await transfer.close()
             await completion?.value
-            if downloadConsumers == 0 { await transfer.close() }
         }
         closing = task
         await task.value
     }
 
-    func finishForDownload(owner: String, allowsMetered: Bool) async throws -> OfflineAudioDescriptor {
-        guard !isClosed else { throw CancellationError() }
-        downloadConsumers += 1
-        do {
-            try await transfer.download(allowsMetered: allowsMetered)
-            try Task.checkCancellation()
-            let descriptor = transfer.resource.descriptor
-            try await store.retain(id: descriptor.identity.id, owner: owner)
-            isComplete = true
-            if !isClosed { onCompleted() }
-            await releaseDownloadConsumer()
-            return descriptor
-        } catch {
-            await releaseDownloadConsumer()
-            throw error
-        }
-    }
-
-    private func releaseDownloadConsumer() async {
-        downloadConsumers -= 1
-        if isClosed, downloadConsumers == 0 { await transfer.close() }
-    }
 }
 
 @MainActor
@@ -213,13 +186,15 @@ final class PlaybackCacheController: ObservableObject {
         return task
     }
 
-    /// A download requested during playback can finish the same transfer.
-    /// Its caller retains the file before this method releases playback.
-    func completeForDownload(resource: OfflineAudioResource, owner: String, allowsMetered: Bool) async throws -> OfflineAudioDescriptor? {
+    /// Explicit downloads belong to the background URLSession. Release a
+    /// partial cache's writer; playback continues through its ordinary source.
+    func prepareForBackgroundDownload(_ resource: OfflineAudioResource) async {
         if let session = active, !session.isClosed, session.transfer.resource.descriptor == resource.descriptor {
-            return try await session.finishForDownload(owner: owner, allowsMetered: allowsMetered)
+            let stopped = PlayerService.shared.stopAutomaticCaching() ?? stop()
+            await stopped.value
         }
-        return try await prefetcher.finishForDownload(resource: resource, owner: owner, allowsMetered: allowsMetered)
+        await closing?.value
+        await prefetcher.prepareForBackgroundDownload(resource)
     }
 
     func reconcile(forceMetadataCleanup: Bool = false) async {
