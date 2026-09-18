@@ -1011,6 +1011,28 @@ struct DownloadManagerTests {
         try await waitForDownload { h.manager.jobs.first?.status == .complete }
     }
 
+    @Test func resumingAWaitingTransferKeepsItsLivePartialDownload() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let transfer = h.transport.started[0], total = h.fixture.descriptor.byteCount
+        h.transport.continuation.yield(.progress(token: transfer.token, received: total / 2, expected: total))
+        try await waitForDownload { h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.5 }
+        h.manager.setNetwork(.init(connected: false, expensive: false, constrained: false))
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        await h.manager.resumeAll(allowsMetered: true)
+        #expect(!h.transport.cancelled.contains(transfer.token))
+        #expect(h.manager.jobs.first?.token == transfer.token)
+        #expect(h.manager.jobs.first?.status == .waitingNetwork)
+        #expect(h.transport.started.count == 1)
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.5)
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        #expect(h.manager.jobs.first?.status == .downloading)
+        try h.transport.finish(transfer)
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+        #expect(h.transport.started.count == 1)
+    }
     @Test func failedTransferFreesTheSlotAndKeepsResumeData() async throws {
         let h = try DownloadHarness(expensive: true)
         defer { h.close() }

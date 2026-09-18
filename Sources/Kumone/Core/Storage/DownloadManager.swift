@@ -385,9 +385,20 @@ final class DownloadManager: ObservableObject {
 
     private func resumeJobs(_ ids: Set<UUID>, allowsMetered: Bool? = nil) async {
         var resumed: [DownloadJob] = []
+        var changed = false
         for i in catalog.jobs.indices where ids.contains(catalog.jobs[i].id) && catalog.jobs[i].accountScope == accountScope {
             let job = catalog.jobs[i]
             guard job.status.canResume else { continue }
+            // A job waiting for the network keeps its session task and its bytes;
+            // it continues by itself. Only widening the networks it may use has
+            // to restart it, because the task carries the old request's limits.
+            if job.status == .waitingNetwork, job.attempt != nil, !(allowsMetered == true && !job.allowsMetered) {
+                if let allowsMetered, allowsMetered != job.allowsMetered {
+                    catalog.jobs[i].allowsMetered = allowsMetered
+                    changed = true
+                }
+                continue
+            }
             resumed.append(job)
             cancelNetworkRetry(job.id)
             if job.status == .cancelled { catalog.jobs[i].resetTransferState() }
@@ -399,7 +410,7 @@ final class DownloadManager: ObservableObject {
             if catalog.jobs[i].owners.isEmpty { catalog.jobs[i].owners.insert("single:\(job.track.id)") }
             if let token = job.token { transport.cancel(token: token) }
         }
-        guard !resumed.isEmpty else { return }
+        guard !resumed.isEmpty || changed else { return }
         batchOperations += 1
         defer { batchOperations -= 1; schedule() }
         publish()
