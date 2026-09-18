@@ -23,7 +23,7 @@ struct OfflineUIFixtureTests {
             {"id":\(id),"name":"\(name)","dt":3000,"ar":[{"id":1,"name":"Kumone 测试音频"}],"al":{"id":1,"name":"测试歌单","picUrl":"https://example.test/cover.png"}}
             """.utf8))
         }
-        let tracks = try [track(1, "地铁离线播放 · 測試曲"), track(2, "等待继续下载的歌曲"), track(3, "需要重试的歌曲"), track(4, "已缓存的歌曲")]
+        let tracks = try [track(1, "可离线播放的歌曲"), track(2, "等待继续下载的歌曲"), track(3, "需要重试的歌曲"), track(4, "已缓存的歌曲")]
         var catalog = DownloadCatalog()
         catalog.revision = 1
         for (index, track) in tracks.enumerated() {
@@ -43,7 +43,7 @@ struct OfflineUIFixtureTests {
                 job.receivedBytes = descriptor.byteCount
                 job.expectedBytes = descriptor.byteCount
                 job.metadataPending = false
-                let lyrics = try JSONDecoder().decode(LyricResponse.self, from: Data("{\"lrc\":{\"lyric\":\"[00:00.00]离线也能听见音乐\\n[00:01.00]次の駅へ\"}}".utf8))
+                let lyrics = try JSONDecoder().decode(LyricResponse.self, from: Data("{\"lrc\":{\"lyric\":\"[00:00.00]离线也能听见音乐\\n[00:01.00]第二行歌词\"}}".utf8))
                 try await metadata.save(lyrics: lyrics, trackID: track.id, scope: scope)
                 if let coverPath = ProcessInfo.processInfo.environment["KUMONE_UI_FIXTURE_COVER"] {
                     try await metadata.saveArtwork(Data(contentsOf: URL(fileURLWithPath: coverPath)), url: URL(string: "https://example.test/cover.png")!, scope: scope)
