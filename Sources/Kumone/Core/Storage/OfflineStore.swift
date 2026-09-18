@@ -1,9 +1,11 @@
+import Combine
 import Foundation
 
 actor OfflineStore {
     static let shared = OfflineStore(directory: KumonePaths.applicationSupport.appendingPathComponent("Offline", isDirectory: true))
 
     nonisolated let directory: URL
+    nonisolated let cacheCompletions = PassthroughSubject<OfflineAudioDescriptor, Never>()
     private let minimumFreeBytes: Int64
     private var database: OfflineAudioDatabase?
     private var writers: [String: UUID] = [:]
@@ -314,6 +316,7 @@ actor OfflineStore {
             record.state = .complete
             record.verifiedModificationDate = try audioURL(record).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             try db.save(record)
+            if cacheReservations[id] != nil { cacheCompletions.send(descriptor) }
         } catch {
             try removeFiles(record)
             let wasDeleted = try db.record(id: id)?.state == .deleting

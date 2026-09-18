@@ -139,6 +139,45 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test(arguments: [false, true])
+    func automaticCacheCompletionRefreshesOfflineAvailability(forCompletion: Bool) async throws {
+        let h = try DownloadHarness(online: false)
+        let server = try await AudioFixtureServer(fixture: h.fixture)
+        defer { server.stop(); h.close() }
+        await h.manager.start()
+        try await h.metadata.save(track: h.track, scope: "test-account")
+        let source = AudioTransferCoordinator(resource: h.fixture.resource(url: server.url), store: h.store,
+                                              cacheContext: .init(policy: .automatic))
+        try await source.prepare()
+        #expect(h.manager.offlineTracksByID[1] == nil)
+        try await source.download(forCompletion: forCompletion)
+        try await waitForDownload { h.manager.offlineTracksByID[1] != nil }
+        #expect(!h.manager.network.connected)
+        #expect(h.manager.offlineTracksByID[1]?.isDownloaded == false)
+        #expect(!h.manager.isDownloaded(trackID: 1) && h.manager.jobs.isEmpty)
+        // Account-scoped events must not put the old account's cache in a new list.
+        h.manager.activate(accountScope: "other-account")
+        #expect(h.manager.offlineTracksByID.isEmpty)
+        await source.close()
+    }
+
+    @Test func prefetchedAudioIsAvailableBeforeOptionalMetadataFinishes() async throws {
+        let h = try DownloadHarness(online: false), gate = DownloadRestoreGate()
+        let server = try await AudioFixtureServer(fixture: h.fixture)
+        defer { gate.open(); server.stop(); h.close() }
+        await h.manager.start()
+        let prefetcher = QueuePrefetcher(store: h.store, metadata: h.metadata,
+            resolver: { _, _, _ in h.fixture.resource(url: server.url) },
+            metadataFetcher: { _, _ in await gate.wait() })
+        prefetcher.update(.init(scope: "test-account", currentTrackID: 2, tracks: [h.track], quality: "exhigh",
+                                context: .init(policy: .automatic), pendingDownloadTrackIDs: []))
+        try await waitForDownload { gate.entered && h.manager.offlineTracksByID[1] != nil }
+        #expect(h.manager.offlineTracksByID[1]?.track.id == h.track.id)
+        #expect(h.manager.downloadedTracks.isEmpty)
+        gate.open()
+        await prefetcher.cancel().value
+    }
+
     @Test func catalogReadFailureCanBeRetriedWithoutMisreportingLogin() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

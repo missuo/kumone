@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Network
 #if os(iOS)
@@ -120,6 +121,7 @@ final class DownloadManager: ObservableObject {
     private var displayWorkers: [UUID: Task<Void, Never>] = [:]
     private var restoration: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+    private var cacheObservation: AnyCancellable?
     private var monitor: NWPathMonitor?
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
@@ -147,6 +149,14 @@ final class DownloadManager: ObservableObject {
         self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
         self.cacheContext = cacheContext
         self.retrySleep = retrySleep
+        cacheObservation = store.cacheCompletions.receive(on: DispatchQueue.main).sink { [weak self] descriptor in
+            Task { @MainActor [weak self] in
+                guard let self, self.accountScope == descriptor.identity.accountScope else { return }
+                await self.start()
+                guard self.isReady, self.accountScope == descriptor.identity.accountScope else { return }
+                await self.refreshLibrary()
+            }
+        }
     }
 
     func start() async {
@@ -498,6 +508,7 @@ final class DownloadManager: ObservableObject {
         networkRetryTasks.values.forEach { $0.cancel() }
         networkRetryTasks.removeAll()
         eventTask?.cancel()
+        cacheObservation?.cancel()
         workers.values.forEach { $0.task.cancel() }
         displayWorkers.values.forEach { $0.cancel() }
         monitor?.cancel()

@@ -118,9 +118,11 @@ final class QueuePrefetcher {
                 do {
                     try await session.transfer.prepare()
                     guard isCurrent(ticket) else { await session.close(); return }
+                    // Availability is published when audio validation finishes;
+                    // its display metadata must already be readable then.
+                    try await metadata.save(track: track, scope: request.scope)
                     try await session.transfer.download(forCompletion: true)
                     guard isCurrent(ticket) else { await session.close(); return }
-                    try await metadata.save(track: track, scope: request.scope)
                     await metadataFetcher(track, request.scope)
                     if isCurrent(ticket) { completedTrackIDs.append(track.id) }
                     await session.close()
