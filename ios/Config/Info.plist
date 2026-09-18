@@ -2,20 +2,38 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>UILaunchScreen</key>
-	<dict/>
+    <key>CADisableMinimumFrameDurationOnPhone</key>
+    <true/>
+    <!-- An empty UILaunchScreen opts the app into native full-screen rendering
+         on every device. It MUST be declared explicitly here: the
+         INFOPLIST_KEY_UILaunchScreen_Generation build setting produced a
+         MALFORMED, nested value (UILaunchScreen -> { UILaunchScreen -> {} }),
+         which iOS does not recognise as a valid launch screen — so large
+         devices (e.g. iPhone 15 Pro Max) fell back to letterboxed
+         compatibility mode (#71). The generation setting is removed in
+         Shared.xcconfig in favour of this flat, correct declaration. -->
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    <!-- Expose the app's Documents folder in the Files app (On My iPhone ▸
+         Kumone) so a downloaded update IPA is findable and can be imported into
+         a signing tool. (#73, #50) -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    <!-- CarPlay is deliberately absent from this file. UISupportsCarPlay and the
+         CPTemplateApplicationSceneSessionRoleApplication scene declaration are injected
+         into a generated copy of this plist by `make configure-carplay`, because the
+         CarPlay audio entitlement they depend on requires per-app approval from Apple.
+         See Scripts/configure-ios.sh and the CarPlay section of the README. -->
 </dict>
 </plist>
