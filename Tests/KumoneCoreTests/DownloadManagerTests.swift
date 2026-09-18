@@ -194,25 +194,6 @@ struct DownloadManagerTests {
         #expect(h.transport.started.count == 1)
     }
 
-    @Test func removingLargeCollectionPublishesOneBatchAndPreservesOtherOwners() async throws {
-        let h = try DownloadHarness(online: false)
-        defer { h.close() }
-        let tracks = try (1...300).map { id in
-            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track\"}".utf8))
-        }
-        await h.manager.enqueue(tracks: tracks, owner: "playlist:1", name: "Large", quality: "exhigh", allowsMetered: true)
-        await h.manager.enqueue(track: tracks[0], quality: "exhigh", allowsMetered: true)
-        try await waitForDownload { h.manager.jobs.allSatisfy { $0.status == .waitingNetwork } }
-        var publications = 0
-        let observation = h.manager.$jobs.dropFirst().sink { _ in publications += 1 }
-        await h.manager.removeCollection("playlist:1")
-        observation.cancel()
-        #expect(publications == 1)
-        #expect(h.manager.jobsByTrackID[1]?.owners == ["single:1"])
-        #expect(h.manager.pendingJobs.count == 1 && h.manager.collections.isEmpty)
-        #expect(try await h.persistence.load().jobs.filter { !$0.owners.isEmpty }.count == 1)
-    }
-
     @Test func cellularApprovalSurvivesDisconnectionAndRestartsTheQueue() async throws {
         let h = try DownloadHarness(expensive: true)
         defer { h.close() }
@@ -1011,14 +992,11 @@ struct DownloadManagerTests {
         try await waitForDownload { h.transport.started.count == 1 }
         try h.transport.finish(h.transport.started[0])
         try await waitForDownload { h.manager.jobs.first?.status == .complete && h.manager.offlineTracks.count == 1 }
-        await h.manager.removeCollection("playlist:1")
-        #expect(h.manager.jobs.first?.owners == ["playlist:2"])
+        #expect(h.manager.jobs.count == 1)
+        #expect(h.manager.jobs.first?.owners == ["playlist:1", "playlist:2"])
         #expect(h.manager.offlineTracks.first?.isDownloaded == true)
-        await h.manager.removeCollection("playlist:2")
-        #expect(h.manager.offlineTracks.first?.isDownloaded == false)
-        #expect(h.manager.offlineTracks.count == 1)
-        #expect(h.manager.downloadedTracks.isEmpty)
-        #expect(h.manager.downloadedSongs().isEmpty)
+        #expect(h.manager.downloadedSongs(in: "playlist:1").map(\.id) == [h.track.id])
+        #expect(h.manager.downloadedSongs(in: "playlist:2").map(\.id) == [h.track.id])
     }
 
     @Test func waitsForNetworkAndPreservesUserPause() async throws {

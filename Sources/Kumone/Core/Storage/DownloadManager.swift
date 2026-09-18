@@ -454,14 +454,6 @@ final class DownloadManager: ObservableObject {
         return succeeded
     }
 
-    func removeCollection(_ owner: String) async {
-        guard let scope = accountScope else { return }
-        let ids = Set(catalog.jobs.filter { $0.accountScope == scope && $0.owners.contains(owner) }.map(\.id))
-        catalog.collections.removeAll { $0.accountScope == scope && $0.id == owner }
-        if ids.isEmpty { publish(); try? await persist() }
-        else { await cancelJobs(ids, owner: owner) }
-    }
-
     func removeDownloads(trackID: Int) async {
         await cancelJobs(Set(jobs.filter { $0.track.id == trackID && !$0.owners.isEmpty }.map(\.id)))
     }
