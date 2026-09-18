@@ -349,6 +349,7 @@ private struct DownloadTaskRow: View {
 
 struct TrackDownloadActions: View {
     let track: Track
+    var showsIcons = false
     @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
@@ -358,15 +359,27 @@ struct TrackDownloadActions: View {
 
     var body: some View {
         if let job, job.status == .complete {
-            Button("移除下载", role: .destructive) { Task { await downloads.deleteLocalAudio(trackID: track.id) } }
+            Button(role: .destructive) { Task { await downloads.deleteLocalAudio(trackID: track.id) } } label: {
+                actionLabel("移除下载", systemImage: "trash")
+            }
         } else if let job, [.queued, .resolving, .downloading, .verifying, .waitingNetwork].contains(job.status) {
-            if job.status != .verifying { Button("暂停下载") { Task { await downloads.pause(job.id) } } }
-            Button("取消下载", role: .destructive) { Task { await downloads.cancel(job.id) } }
+            if job.status != .verifying {
+                Button { Task { await downloads.pause(job.id) } } label: { actionLabel("暂停下载", systemImage: "pause") }
+            }
+            Button(role: .destructive) { Task { await downloads.cancel(job.id) } } label: {
+                actionLabel("取消下载", systemImage: "xmark")
+            }
         } else if let job, job.status.canResume {
-            Button("继续下载") { Task { await downloads.resume(job.id) } }
+            Button { Task { await downloads.resume(job.id) } } label: { actionLabel("继续下载", systemImage: "play") }
         } else {
-            Button("下载") { enqueue() }
+            Button { enqueue() } label: { actionLabel("下载", systemImage: "arrow.down.circle") }
         }
+    }
+
+    @ViewBuilder
+    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        if showsIcons { Label(title, systemImage: systemImage) }
+        else { Text(title) }
     }
 
     private func enqueue() {
