@@ -363,7 +363,7 @@ struct PlaylistDetailView: View {
     private var playable: [Track] {
         if SettingsManager.shared.enableUnblock { return model.tracks }
         return model.tracks.filter { track in
-            downloads.offlineTracks.contains(where: { item in item.id == track.id }) || track.playability(privilege: model.privileges[track.id],
+            downloads.offlineTracksByID[track.id] != nil || track.playability(privilege: model.privileges[track.id],
                            isLoggedIn: account.isLoggedIn,
                            vipType: account.vipType) == .playable
         }

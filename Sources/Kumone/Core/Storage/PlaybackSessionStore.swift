@@ -34,7 +34,7 @@ actor PlaybackSessionStore {
 
     init(directory: URL) { self.directory = directory }
 
-    nonisolated func load(scope: String) -> PlaybackSessionSnapshot? {
+    func load(scope: String) -> PlaybackSessionSnapshot? {
         guard let data = try? Data(contentsOf: url(scope: scope, position: false)),
               var snapshot = try? JSONDecoder().decode(PlaybackSessionSnapshot.self, from: data),
               snapshot.version == 1, snapshot.accountScope == scope else { return nil }
@@ -65,8 +65,10 @@ actor PlaybackSessionStore {
     }
 
     private func write(_ data: Data, scope: String, position: Bool) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try data.write(to: url(scope: scope, position: position), options: .atomic)
+        try DownloadFileProtection.prepareDirectory(directory)
+        let destination = url(scope: scope, position: position)
+        try data.write(to: destination, options: .atomic)
+        try DownloadFileProtection.protect(destination)
     }
 
     private nonisolated func url(scope: String, position: Bool) -> URL {

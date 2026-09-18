@@ -757,6 +757,7 @@ public final class CarPlayConnector: NSObject {
                 guard self.interfaceController === controller, scope == AccountStore.shared.offlineScope else { return }
                 guard let tracks, !tracks.isEmpty else {
                     loading.emptyViewTitleVariants = ["暂无曲目"]
+                    loading.updateSections([])
                     return
                 }
                 let detail = CarPlayTemplateFactory.trackListTemplate(

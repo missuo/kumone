@@ -22,14 +22,14 @@ struct DownloadedMusicView: View {
         let displayed = tracks
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if isSelecting { selectionHeader } else { header }
+                if isSelecting { selectionHeader(tracks: displayed) } else { header(tracks: displayed) }
 
                 if !downloads.isReady, downloads.errorMessage == nil {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
-                } else if let error = downloads.errorMessage, tracks.isEmpty {
+                } else if let error = downloads.errorMessage, displayed.isEmpty {
                     EmptyStateView(icon: "exclamationmark.triangle", title: "无法读取下载", subtitle: LocalizedStringKey(error))
                         .frame(minHeight: 300)
-                } else if tracks.isEmpty {
+                } else if displayed.isEmpty {
                     EmptyStateView(icon: "arrow.down.circle", title: "还没有下载歌曲",
                                    subtitle: "在歌曲菜单或歌单页面选择下载，即可离线收听")
                         .frame(minHeight: 300)
@@ -56,7 +56,7 @@ struct DownloadedMusicView: View {
                     selectedIDs = []
                     isSelecting.toggle()
                 }
-                .disabled(isRemoving || (!isSelecting && tracks.isEmpty))
+                .disabled(isRemoving || (!isSelecting && displayed.isEmpty))
                 .accessibilityIdentifier("select-downloads")
             }
         }
@@ -76,7 +76,7 @@ struct DownloadedMusicView: View {
         } message: { Text("歌曲仍会保留在歌单中。") }
     }
 
-    private var selectionHeader: some View {
+    private func selectionHeader(tracks: [Track]) -> some View {
         HStack(spacing: 12) {
             Text("已选择 \(selectedIDs.count) 首")
                 .font(.system(size: 12))
@@ -120,20 +120,20 @@ struct DownloadedMusicView: View {
         }
     }
 
-    private var header: some View {
+    private func header(tracks: [Track]) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
-                songCount
+                songCount(tracks: tracks)
                 Spacer(minLength: 12)
-                actionRow
+                actionRow(tracks: tracks)
             }
             VStack(alignment: .leading, spacing: 12) {
-                songCount
+                songCount(tracks: tracks)
                 ViewThatFits(in: .horizontal) {
-                    actionRow
+                    actionRow(tracks: tracks)
                     VStack(alignment: .leading, spacing: 8) {
                         downloadQueueButton
-                        playAllButton
+                        playAllButton(tracks: tracks)
                     }
                 }
             }
@@ -143,7 +143,7 @@ struct DownloadedMusicView: View {
         .padding(.top, 12)
     }
 
-    private var songCount: some View {
+    private func songCount(tracks: [Track]) -> some View {
         Text("已下载 \(tracks.count) 首")
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
@@ -151,10 +151,10 @@ struct DownloadedMusicView: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var actionRow: some View {
+    private func actionRow(tracks: [Track]) -> some View {
         HStack(spacing: 10) {
             downloadQueueButton
-            playAllButton
+            playAllButton(tracks: tracks)
         }
         .fixedSize(horizontal: true, vertical: false)
     }
@@ -178,7 +178,7 @@ struct DownloadedMusicView: View {
         .buttonStyle(.pressable)
     }
 
-    private var playAllButton: some View {
+    private func playAllButton(tracks: [Track]) -> some View {
         Button {
             player.play(tracks: tracks, source: .none)
         } label: {
@@ -459,6 +459,8 @@ struct DownloadCollectionButton: View {
         .alert(removalTitle, isPresented: $confirmRemoval) {
             Button("移除下载", role: .destructive) { removeDownloads() }
             Button("取消", role: .cancel) {}
+        } message: {
+            Text("其他歌单中的相同歌曲也会移除下载。")
         }
         .onChange(of: downloads.accountScope) { _ in
             confirmRemoval = false

@@ -21,7 +21,16 @@ enum NeteaseAPIError: LocalizedError {
 /// Transport layer for NetEase Cloud Music. Owns the cookie jar and performs
 /// weapi / eapi encrypted requests.
 final class NeteaseClient: @unchecked Sendable {
-    static let shared = NeteaseClient()
+    static let shared: NeteaseClient = {
+        #if DEBUG
+        if KumonePaths.isOfflineUITest {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [OfflineUITestProtocol.self]
+            return NeteaseClient(configuration: configuration)
+        }
+        #endif
+        return NeteaseClient()
+    }()
 
     private static let log = Logger(subsystem: "im.missuo.kumone", category: "api")
     private static let userAgent =
@@ -224,7 +233,6 @@ final class NeteaseClient: @unchecked Sendable {
     }
 
     private func perform(_ request: URLRequest, authentication: (epoch: UInt64, binding: String?), absorbResponseCookies: Bool = true) async throws -> Data {
-        if KumonePaths.isOfflineUITest { throw URLError(.notConnectedToInternet) }
         try Task.checkCancellation()
         guard isCurrent(authentication) else { throw CancellationError() }
         let (data, response) = try await session.data(for: request)
@@ -272,3 +280,12 @@ final class NeteaseClient: @unchecked Sendable {
         return Data(encoded.utf8)
     }
 }
+
+#if DEBUG
+private final class OfflineUITestProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)) }
+    override func stopLoading() {}
+}
+#endif

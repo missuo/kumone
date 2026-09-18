@@ -127,7 +127,8 @@ final class LyricsCursor: ObservableObject {
 
 @MainActor
 final class PlayerService: ObservableObject {
-    static let shared = PlayerService()
+    static let shared = PlayerService(initialVolume: KumonePaths.isOfflineUITest ? 0
+        : (UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8))
 
     // MARK: - Observable state
 
@@ -179,7 +180,7 @@ final class PlayerService: ObservableObject {
     /// The list the player is walking through (shuffled or ordered).
     var activeQueue: [Track] { shuffleEnabled ? shuffledQueue : queue }
 
-    var upcomingTracks: [Track] { nextCandidates.prefix(200).map(\.track) }
+    var upcomingTracks: [Track] { nextCandidates(limit: 200).map(\.track) }
 
     var hasCurrentTrack: Bool { currentTrack != nil }
 
@@ -218,12 +219,12 @@ final class PlayerService: ObservableObject {
     private var scrobbled = false
     private var startScrobbled = false
 
-    private init() {
+    private init(initialVolume: Float) {
         engine.actionAtItemEnd = .pause
         sleepTimer.onDeadlineReached = { [weak self] in
             self?.pause()
         }
-        volume = KumonePaths.isOfflineUITest ? 0 : (UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8)
+        volume = initialVolume
         engine.volume = volume
         repeatMode = UserDefaults.standard.string(forKey: "player.repeat")
             .flatMap(RepeatMode.init) ?? .off
@@ -385,7 +386,7 @@ final class PlayerService: ObservableObject {
             AudioSpectrum.shared.reset()
         } else if engine.currentItem == nil {
             // Resume a saved position; a track ended by the sleep timer restarts.
-            startPlaying(track, indexUnchanged: true, resumeAt: progress >= duration ? 0 : progress)
+            startPlaying(track, resumeAt: progress >= duration ? 0 : progress)
             return
         } else {
             engine.play()
@@ -489,13 +490,13 @@ final class PlayerService: ObservableObject {
 
     /// Jump to a track in the upcoming list (queue panel click).
     func jumpTo(_ track: Track) {
-        if let index = nextCandidates.firstIndex(where: { $0.track.id == track.id }) {
+        if let index = nextCandidates().firstIndex(where: { $0.track.id == track.id }) {
             jumpToUpcoming(at: index, matching: track.id)
             return
         }
         if let nextIdx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.removeSubrange(0...nextIdx)
-            startPlaying(track, indexUnchanged: true)
+            startPlaying(track)
             return
         }
         if let idx = activeQueue.firstIndex(where: { $0.id == track.id }) {
@@ -507,7 +508,7 @@ final class PlayerService: ObservableObject {
     /// Queue rows carry their occurrence, so a repeated song selects the row
     /// the listener clicked rather than jumping back to its first occurrence.
     func jumpToUpcoming(at index: Int, matching trackID: Int) {
-        let candidates = nextCandidates
+        let candidates = nextCandidates(limit: max(0, index + 1))
         guard candidates.indices.contains(index), candidates[index].track.id == trackID else { return }
         let selected = candidates[index]
         switch selected.origin {
@@ -521,12 +522,12 @@ final class PlayerService: ObservableObject {
     }
 
     func removeFromUpcoming(_ track: Track) {
-        guard let index = nextCandidates.firstIndex(where: { $0.track.id == track.id }) else { return }
+        guard let index = nextCandidates().firstIndex(where: { $0.track.id == track.id }) else { return }
         removeUpcoming(at: index, matching: track.id)
     }
 
     func removeUpcoming(at index: Int, matching trackID: Int) {
-        let candidates = nextCandidates
+        let candidates = nextCandidates(limit: max(0, index + 1))
         guard candidates.indices.contains(index), candidates[index].track.id == trackID else { return }
         let selected = candidates[index]
         switch selected.origin {
@@ -595,7 +596,7 @@ final class PlayerService: ObservableObject {
         }
         guard !fmUpcoming.isEmpty else { return }
         let track = fmUpcoming.removeFirst()
-        startPlaying(track, indexUnchanged: true, autoAdvance: true)
+        startPlaying(track, autoAdvance: true)
         let playingGeneration = resolveGeneration
         if fmUpcoming.count < 1 {
             if let more = try? await NeteaseAPI.personalFM() {
@@ -610,14 +611,14 @@ final class PlayerService: ObservableObject {
 
     private var usesOfflineQueue: Bool { networkState.isKnown && !networkState.connected }
 
-    private var nextCandidates: [PlaybackQueueCandidate] {
+    private func nextCandidates(limit: Int = .max) -> [PlaybackQueueCandidate] {
         PlaybackQueuePlan.next(queue: activeQueue, currentIndex: currentIndex, inserted: playNextList,
-                               fm: fmUpcoming, isFM: isFMMode, repeatAll: repeatMode == .all)
+                               fm: fmUpcoming, isFM: isFMMode, repeatAll: repeatMode == .all, limit: limit)
     }
 
     private var prefetchTracks: [Track] {
         if repeatMode == .one, !isFMMode { return [] }
-        return nextCandidates.prefix(5).map(\.track)
+        return nextCandidates(limit: 5).map(\.track)
     }
 
     private func refreshPrefetchSoon() {
@@ -653,7 +654,7 @@ final class PlayerService: ObservableObject {
         resolveGeneration += 1
         let generation = resolveGeneration
         let scope = offlineAccountScope
-        var candidates = nextCandidates
+        var candidates = nextCandidates()
         if excludingFailedCurrent {
             candidates.removeAll { $0.origin == .queue(currentIndex) }
         }
@@ -741,7 +742,7 @@ final class PlayerService: ObservableObject {
         }
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
-            startPlaying(track, indexUnchanged: true, autoAdvance: true)
+            startPlaying(track, autoAdvance: true)
             return
         }
         guard !activeQueue.isEmpty else { return }
@@ -778,7 +779,7 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Source resolution
 
-    private func startPlaying(_ track: Track, indexUnchanged: Bool = false, resumeAt: TimeInterval = 0,
+    private func startPlaying(_ track: Track, resumeAt: TimeInterval = 0,
                               autoAdvance: Bool = false, localLease: OfflinePlaybackLease? = nil) {
         offlineScan?.cancel()
         offlineScan = nil
@@ -1186,15 +1187,16 @@ final class PlayerService: ObservableObject {
         if context.kind == .playlist, let scope,
            let saved = await PlaylistSnapshotStore.shared.load(id: context.id, scope: scope) {
             guard scope == offlineAccountScope else { throw CancellationError() }
-            if saved.isComplete || usesOfflineQueue, !saved.detail.tracks.isEmpty || saved.isComplete {
+            let summary = AccountStore.shared.userPlaylists.first { $0.id == context.id }
+            if usesOfflineQueue || !saved.needsBackgroundRefresh(summary: summary),
+               !saved.detail.tracks.isEmpty || saved.isComplete {
                 return (saved.detail.tracks, .playlist(context.id))
             }
         }
         let liked = context.kind == .playlist && AccountStore.shared.likedSongsPlaylist?.id == context.id
             ? AccountStore.shared.likedTrackIDs : []
         let local = downloads.localTracks(for: context, likedTrackIDs: liked)
-        let saved = context.downloadCollectionID.map { id in downloads.collections.contains { $0.id == id } } ?? false
-        if !local.isEmpty, saved || usesOfflineQueue { return (local, context.source) }
+        if !local.isEmpty, usesOfflineQueue { return (local, context.source) }
         if usesOfflineQueue { throw URLError(.notConnectedToInternet) }
         do {
             let resolved = try await resolveOnline(context)
@@ -1256,7 +1258,16 @@ final class PlayerService: ObservableObject {
     }
 
     private func restoreState() {
-        guard let scope = stateScope, let state = PlaybackSessionStore.shared.load(scope: scope) else { return }
+        guard let scope = stateScope else { return }
+        let generation = resolveGeneration, revision = persistenceRevision
+        Task {
+            guard let state = await PlaybackSessionStore.shared.load(scope: scope),
+                  stateScope == scope, resolveGeneration == generation, persistenceRevision == revision else { return }
+            applyRestoredState(state)
+        }
+    }
+
+    private func applyRestoredState(_ state: PlaybackSessionSnapshot) {
         isRestoringState = true
         defer { isRestoringState = false; sessionSnapshotDirty = false }
         sessionID = state.sessionID

@@ -2,8 +2,53 @@ import Foundation
 import Testing
 @testable import KumoneCore
 
+private actor AudioValidationGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var entered = false
+    func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
+    func open() { continuation?.resume(); continuation = nil }
+}
+
 @Suite("Offline storage")
 struct OfflineStoreTests {
+    @Test(arguments: [false, true])
+    func validationCannotRestoreARemovedRetention(fails: Bool) async throws {
+        let fixture = try OfflineAudioFixture(.flac), gate = AudioValidationGate()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OfflineStore(directory: root, minimumFreeBytes: 0, validateAudio: { url, descriptor in
+            await gate.wait()
+            if fails { throw OfflineAudioError.checksumMismatch }
+            try OfflineAudioValidator.validate(url: url, descriptor: descriptor)
+        })
+        let writer = UUID(), id = fixture.descriptor.identity.id
+        try await store.begin(fixture.descriptor, writer: writer)
+        try await store.write(fixture.data, at: 0, id: id, writer: writer)
+        // A retained resource can be partial while recovering its missing file.
+        let database = try OfflineAudioDatabase(url: root.appendingPathComponent("index.sqlite"))
+        var record = try #require(try database.record(id: id))
+        record.retainedBy = ["download:old"]
+        try database.save(record)
+        let validation = Task { try await store.finalize(id: id, writer: writer) }
+        for _ in 0..<200 {
+            if await gate.entered { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await gate.entered)
+        try await store.removeRetention(id: id, owner: "download:old")
+        await gate.open()
+        if fails {
+            await #expect(throws: OfflineAudioError.checksumMismatch) { try await validation.value }
+            #expect(try await store.record(id: id) == nil)
+        } else {
+            try await validation.value
+            #expect(try await store.record(id: id)?.retainedBy.isEmpty == true)
+            await store.releaseWriter(id: id, writer: writer)
+            try await store.remove(id: id)
+            #expect(try await store.record(id: id) == nil)
+        }
+    }
+
     @Test func preferredQualityCanExcludeLowerCacheWithoutMarkingItPlayed() async throws {
         let low = try OfflineAudioFixture(), store = low.store()
         defer { try? FileManager.default.removeItem(at: store.directory) }

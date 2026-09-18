@@ -10,13 +10,18 @@ enum PlaybackQueuePlan {
     /// One bounded pass through the actual order. The original queue is never
     /// sorted or filtered to produce an offline/prefetch view of it.
     static func next(queue: [Track], currentIndex: Int, inserted: [Track], fm: [Track],
-                     isFM: Bool, repeatAll: Bool) -> [PlaybackQueueCandidate] {
-        if isFM { return fm.enumerated().map { .init(track: $0.element, origin: .fm($0.offset)) } }
-        var result = inserted.enumerated().map { PlaybackQueueCandidate(track: $0.element, origin: .inserted($0.offset)) }
+                     isFM: Bool, repeatAll: Bool, limit: Int = .max) -> [PlaybackQueueCandidate] {
+        guard limit > 0 else { return [] }
+        if isFM { return fm.prefix(limit).enumerated().map { .init(track: $0.element, origin: .fm($0.offset)) } }
+        var result = inserted.prefix(limit).enumerated().map { PlaybackQueueCandidate(track: $0.element, origin: .inserted($0.offset)) }
         let start = min(queue.count, max(0, currentIndex + 1))
-        result += queue.indices.dropFirst(start).map { .init(track: queue[$0], origin: .queue($0)) }
+        for index in queue.indices.dropFirst(start).prefix(limit - result.count) {
+            result.append(.init(track: queue[index], origin: .queue(index)))
+        }
         if repeatAll, queue.indices.contains(currentIndex) {
-            result += (0...currentIndex).map { .init(track: queue[$0], origin: .queue($0)) }
+            for index in (0...currentIndex).prefix(limit - result.count) {
+                result.append(.init(track: queue[index], origin: .queue(index)))
+            }
         }
         return result
     }

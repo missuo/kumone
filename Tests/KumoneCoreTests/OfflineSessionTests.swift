@@ -41,20 +41,23 @@ struct OfflineSessionTests {
             currentTrack: second, progress: 0, source: .playlist(9), repeatMode: "all", shuffle: true, isFM: false, recentContexts: [])
         try await store.save(snapshot, revision: 2)
         try await store.savePosition(.init(sessionID: snapshot.sessionID, trackID: 2, progress: 1.25), scope: "a", revision: 3)
-        let restored = try #require(store.load(scope: "a"))
+        for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isExcludedFromBackupKey]) {
+            #expect(try file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+        }
+        let restored = try #require(await store.load(scope: "a"))
         #expect(restored.shuffledQueue.map(\.id) == [2, 1])
         #expect(restored.playNextList.map(\.id) == [3])
         #expect(restored.progress == 1.25)
         #expect(restored.source == .playlist(9))
-        #expect(store.load(scope: "b") == nil)
+        #expect(await store.load(scope: "b") == nil)
         try await store.savePosition(.init(sessionID: UUID(), trackID: 2, progress: 99), scope: "a", revision: 1)
-        #expect(store.load(scope: "a")?.progress == 1.25)
+        #expect(await store.load(scope: "a")?.progress == 1.25)
         let next = PlaybackSessionSnapshot(sessionID: UUID(), accountScope: "a", queue: [second], shuffledQueue: [],
             playNextList: [], fmUpcoming: [], currentIndex: 0, currentTrack: second, progress: 0,
             source: .none, repeatMode: "off", shuffle: false, isFM: false, recentContexts: [])
         try await store.save(next, revision: 4)
         try await store.savePosition(.init(sessionID: snapshot.sessionID, trackID: 2, progress: 2), scope: "a", revision: 5)
-        #expect(store.load(scope: "a")?.progress == 0)
+        #expect(await store.load(scope: "a")?.progress == 0)
     }
 
     @Test func advancingALargeQueueOnlyRewritesTheSmallPositionFile() async throws {
@@ -74,7 +77,7 @@ struct OfflineSessionTests {
             try await store.savePosition(.init(sessionID: snapshot.sessionID, trackID: current.id, progress: 1.5,
                                                currentIndex: index, currentTrack: current), scope: "a", revision: UInt64(index + 1))
         }
-        let restored = try #require(store.load(scope: "a"))
+        let restored = try #require(await store.load(scope: "a"))
         #expect(restored.currentIndex == 20 && restored.currentTrack?.id == 9980 && restored.progress == 1.5)
         #expect(restored.queue.count == 10_000 && restored.shuffledQueue.count == 10_000)
         #expect(try Data(contentsOf: file) == original)

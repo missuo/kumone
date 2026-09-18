@@ -414,3 +414,4 @@
 "歌单数据不完整，请重试" = "Playlist data is incomplete. Please try again.";
 "无法加载歌单，请重试" = "Unable to load the playlist. Please try again.";
 "无法读取下载记录，请重试" = "Unable to read download records. Please try again.";
+"其他歌单中的相同歌曲也会移除下载。" = "Downloads of the same songs in other playlists will also be removed.";

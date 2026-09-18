@@ -95,6 +95,24 @@ struct PlaybackNetworkRecoveryTests {
         await loader.close()
     }
 
+    @Test func sustainedNetworkFailureFinishesLoadingAndTriggersFallback() async throws {
+        let fixture = try OfflineAudioFixture(), store = fixture.store(), session = session()
+        defer { session.invalidateAndCancel(); try? FileManager.default.removeItem(at: store.directory) }
+        NetworkAudioProtocol.state.configure(fixture.data, failures: [:], alwaysFail: true)
+        let transfer = AudioTransferCoordinator(resource: fixture.resource(url: URL(string: "https://fixture.test/audio.mp3")!), store: store, session: session)
+        let loader = CachingAssetResourceLoader(transfer: transfer, onFailure: { NetworkAudioProtocol.state.fallback() })
+        let loading = Task { try await loader.asset.load(.isPlayable) }
+        for _ in 0..<1200 where NetworkAudioProtocol.state.snapshot().fallbacks == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(NetworkAudioProtocol.state.snapshot().fallbacks == 1)
+        if case .success = await loading.result { Issue.record("Unavailable audio unexpectedly loaded") }
+        let attempts = NetworkAudioProtocol.state.snapshot().requests.count
+        try await Task.sleep(for: .milliseconds(1100))
+        #expect(NetworkAudioProtocol.state.snapshot().requests.count == attempts)
+        await loader.close()
+    }
+
     @Test func leavingTheSongCancelsPendingNetworkRetries() async throws {
         let fixture = try OfflineAudioFixture(), store = fixture.store(), session = session()
         defer { session.invalidateAndCancel(); try? FileManager.default.removeItem(at: store.directory) }

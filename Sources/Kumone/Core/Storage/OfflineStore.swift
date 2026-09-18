@@ -13,15 +13,20 @@ actor OfflineStore {
     private var validating: Set<String> = []
     private var downloadReservations: [String: Int64] = [:]
     private var cacheReservations: [String: Int64] = [:]
+    private let validateAudio: @Sendable (URL, OfflineAudioDescriptor) async throws -> Void
     private let freeSpace: @Sendable (URL) throws -> Int64
 
     init(directory: URL, minimumFreeBytes: Int64? = nil,
+         validateAudio: @escaping @Sendable (URL, OfflineAudioDescriptor) async throws -> Void = { url, descriptor in
+             try await Task.detached(priority: .utility) { try OfflineAudioValidator.validate(url: url, descriptor: descriptor) }.value
+         },
          freeSpace: @escaping @Sendable (URL) throws -> Int64 = { url in
              let values = try FileManager.default.attributesOfFileSystem(forPath: url.path)
              guard let free = values[.systemFreeSize] as? NSNumber else { throw OfflineAudioError.insufficientSpace }
              return free.int64Value
          }) {
         self.directory = directory
+        self.validateAudio = validateAudio
         self.freeSpace = freeSpace
         #if os(macOS)
         self.minimumFreeBytes = minimumFreeBytes ?? 2_000_000_000
@@ -309,8 +314,9 @@ actor OfflineStore {
         let staging = stagingURL(record)
         let descriptor = record.descriptor
         do {
-            try await Task.detached(priority: .utility) { try OfflineAudioValidator.validate(url: staging, descriptor: descriptor) }.value
+            try await validateAudio(staging, descriptor)
             guard let current = try db.record(id: id), current.state == .verifying else { throw CancellationError() }
+            record = current
             try FileManager.default.moveItem(at: staging, to: audioURL(record))
             try protect(audioURL(record))
             record.state = .complete
@@ -319,8 +325,9 @@ actor OfflineStore {
             if cacheReservations[id] != nil { cacheCompletions.send(descriptor) }
         } catch {
             try removeFiles(record)
-            let wasDeleted = try db.record(id: id)?.state == .deleting
-            if record.retainedBy.isEmpty || wasDeleted {
+            guard let current = try db.record(id: id) else { throw error }
+            record = current
+            if record.retainedBy.isEmpty || record.state == .deleting {
                 try db.remove(id: id)
             } else {
                 record.state = .missing

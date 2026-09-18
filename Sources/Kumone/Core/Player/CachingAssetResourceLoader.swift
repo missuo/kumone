@@ -55,6 +55,7 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
         requests[key] = Task { [weak self, transfer] in
             do {
                 var cursor = offset
+                var retries = 0
                 while cursor < end {
                     try Task.checkCancellation()
                     do {
@@ -62,9 +63,10 @@ final class CachingAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
                         guard let self, await self.deliver(data, to: request) else { return }
                         cursor += Int64(data.count)
                     } catch {
-                        guard AudioTransferCoordinator.isConnectivityFailure(error) else { throw error }
-                        // Keep AVFoundation's request and buffered audio alive.
-                        // Seeking or switching tracks cancels this retry as usual.
+                        guard AudioTransferCoordinator.isConnectivityFailure(error), retries < 3 else { throw error }
+                        // Brief interruptions can recover in place; persistent
+                        // failures must reach the player's offline fallback.
+                        retries += 1
                         try await Task.sleep(for: .seconds(1))
                     }
                 }

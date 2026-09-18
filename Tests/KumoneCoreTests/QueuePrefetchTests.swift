@@ -38,6 +38,16 @@ struct PlaybackQueuePlanTests {
         #expect(fm.map(\.track.id) == [7])
     }
 
+    @Test(arguments: [0, 1, 5, 200, 20_000])
+    func boundedCandidatesKeepTheSameOccurrenceOrder(limit: Int) throws {
+        let queue = try (1...10_000).map { try queueTrack($0) }, inserted = try [queueTrack(99), queueTrack(99)]
+        let full = PlaybackQueuePlan.next(queue: queue, currentIndex: 9998, inserted: inserted, fm: [], isFM: false, repeatAll: true)
+        let bounded = PlaybackQueuePlan.next(queue: queue, currentIndex: 9998, inserted: inserted, fm: [], isFM: false, repeatAll: true, limit: limit)
+        #expect(bounded == Array(full.prefix(limit)))
+        let fm = PlaybackQueuePlan.next(queue: [], currentIndex: -1, inserted: [], fm: queue, isFM: true, repeatAll: false, limit: limit)
+        #expect(fm.map(\.track.id) == Array(queue.prefix(limit)).map(\.id))
+    }
+
     @Test func countAndDurationLimitsStopAtFirstExcess() throws {
         let limits = PrefetchLimits()
         #expect(limits.window(try (1...8).map { try queueTrack($0) }).count == 5)

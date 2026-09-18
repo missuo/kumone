@@ -71,6 +71,7 @@ private final class DownloadHarness {
 
     init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false,
          metadataReader: ((Int, String) async -> Track?)? = nil, freeBytes: Int64? = nil,
+         metadataFetcher: @escaping DownloadManager.MetadataFetcher = { _, _ in },
          prepareResource: @escaping (OfflineAudioResource) async -> Void = { _ in },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-download-tests-\(UUID())")
@@ -85,7 +86,7 @@ private final class DownloadHarness {
         persistence = DownloadCatalogStore(directory: root.appendingPathComponent("catalog"))
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
-                                  accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: { _, _ in },
+                                  accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: metadataFetcher,
                                   metadataReader: metadataReader, prepareResource: prepareResource, retrySleep: retrySleep)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
@@ -139,6 +140,52 @@ private final class DownloadRetryClock {
 @Suite("Persistent downloads", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DownloadManagerTests {
+    @Test func activatingAnAccountPublishesAndPersistsReconciledDownloads() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: true)
+        job.descriptor = h.fixture.descriptor
+        job.status = .waitingAccount
+        job.metadataPending = false
+        let input = h.root.appendingPathComponent("completed.mp3")
+        try FileManager.default.createDirectory(at: h.root, withIntermediateDirectories: true)
+        try h.fixture.data.write(to: input)
+        try await h.store.importDownload(at: input, descriptor: h.fixture.descriptor)
+        try await h.persistence.save(DownloadCatalog(jobs: [job]))
+        h.manager.activate(accountScope: "another")
+        await h.manager.start()
+        h.manager.activate(accountScope: "test-account")
+        h.manager.setNetwork(h.manager.network)
+        try await waitForDownload { h.manager.jobs.first?.status == .complete && h.manager.downloadedTracks.count == 1 }
+        #expect(try await h.persistence.load().jobs.first?.status == .complete)
+        #expect(h.transport.started.isEmpty)
+    }
+
+    @Test func cancelledMetadataWorkerCannotEraseItsReplacement() async throws {
+        let first = DownloadRestoreGate(), replacement = DownloadRestoreGate()
+        var calls = 0, firstReturned = false
+        let h = try DownloadHarness(metadataFetcher: { _, _ in
+            calls += 1
+            if calls == 1 { await first.wait(); firstReturned = true }
+            else if calls == 2 { await replacement.wait() }
+        })
+        defer { first.open(); replacement.open(); h.close() }
+        await h.enqueue()
+        try await waitForDownload { first.entered && h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.downloadedTracks.count == 1 }
+        h.manager.activate(accountScope: "another")
+        h.manager.activate(accountScope: "test-account")
+        try await waitForDownload { replacement.entered }
+        first.open()
+        try await waitForDownload { firstReturned }
+        try await Task.sleep(for: .milliseconds(30))
+        h.manager.setNetwork(h.manager.network)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(calls == 2)
+        replacement.open()
+    }
+
     @Test(arguments: [false, true])
     func automaticCacheCompletionRefreshesOfflineAvailability(forCompletion: Bool) async throws {
         let h = try DownloadHarness(online: false)

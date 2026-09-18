@@ -32,7 +32,8 @@ final class DownloadManager: ObservableObject {
                                               likedTracks: account.offlineScope.map { [$0: account.likedTrackIDs] } ?? [:])
                                       },
                                       prepareResource: { await PlaybackCacheController.shared.prepareForBackgroundDownload($0) })
-        manager.monitorNetwork()
+        manager.observeForeground()
+        if !KumonePaths.isOfflineUITest { manager.monitorNetwork() }
         Task { await manager.start() }
         return manager
     }()
@@ -118,7 +119,7 @@ final class DownloadManager: ObservableObject {
     private var networkRetries: [UUID: Int] = [:]
     private var networkRetryTasks: [UUID: Task<Void, Never>] = [:]
     private var workers: [UUID: (attempt: UUID, task: Task<Void, Never>)] = [:]
-    private var displayWorkers: [UUID: Task<Void, Never>] = [:]
+    private var displayWorkers: [UUID: (id: UUID, task: Task<Void, Never>)] = [:]
     private var restoration: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var cacheObservation: AnyCancellable?
@@ -254,11 +255,13 @@ final class DownloadManager: ObservableObject {
         libraryRefreshID = UUID()
         accountScope = scope
         offlineTracks = []
+        for job in catalog.jobs where job.accountScope != scope {
+            displayWorkers.removeValue(forKey: job.id)?.task.cancel()
+        }
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope != scope && catalog.jobs[i].status != .complete {
             let job = catalog.jobs[i]
             cancelNetworkRetry(job.id)
             workers.removeValue(forKey: job.id)?.task.cancel()
-            displayWorkers.removeValue(forKey: job.id)?.cancel()
             if let token = job.token {
                 transport.cancel(token: token)
                 Task { await store.releaseDownloadReservation(token: token) }
@@ -271,11 +274,16 @@ final class DownloadManager: ObservableObject {
         }
         publish()
         guard isReady else { return }
+        batchOperations += 1
         Task {
-            try? await persist()
+            defer { batchOperations -= 1; schedule() }
+            guard accountScope == scope else { return }
             await reconcileCompletedAssets()
+            guard accountScope == scope else { return }
+            publish()
+            try? await persist()
+            guard accountScope == scope else { return }
             await refreshLibrary()
-            schedule()
         }
     }
 
@@ -435,7 +443,7 @@ final class DownloadManager: ObservableObject {
             cancelled.append(job)
             cancelNetworkRetry(job.id)
             workers.removeValue(forKey: job.id)?.task.cancel()
-            displayWorkers.removeValue(forKey: job.id)?.cancel()
+            displayWorkers.removeValue(forKey: job.id)?.task.cancel()
             catalog.jobs[i].resetTransferState()
             catalog.jobs[i].status = .cancelled
             catalog.jobs[i].owners = []
@@ -513,7 +521,7 @@ final class DownloadManager: ObservableObject {
         eventTask?.cancel()
         cacheObservation?.cancel()
         workers.values.forEach { $0.task.cancel() }
-        displayWorkers.values.forEach { $0.cancel() }
+        displayWorkers.values.forEach { $0.task.cancel() }
         monitor?.cancel()
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
     }
@@ -820,16 +828,19 @@ final class DownloadManager: ObservableObject {
 
     private func fetchMetadata(_ job: DownloadJob) {
         guard job.accountScope == accountScope, !job.owners.isEmpty, network.permits(job), displayWorkers[job.id] == nil else { return }
-        displayWorkers[job.id] = Task {
+        let workerID = UUID()
+        displayWorkers[job.id] = (workerID, Task {
+            defer { if displayWorkers[job.id]?.id == workerID { displayWorkers[job.id] = nil } }
             guard !Task.isCancelled else { return }
             await metadataFetcher(job.track, job.accountScope)
+            guard !Task.isCancelled, displayWorkers[job.id]?.id == workerID else { return }
             let available = await metadata.hasDisplayData(track: job.track, scope: job.accountScope)
+            guard !Task.isCancelled, displayWorkers[job.id]?.id == workerID else { return }
             if let i = index(job.id), catalog.jobs[i].accountScope == accountScope {
                 catalog.jobs[i].metadataPending = !available
                 publish(); try? await persist()
             }
-            displayWorkers[job.id] = nil
-        }
+        })
     }
 
     private func reconcileCompletedAssets() async {
@@ -903,7 +914,7 @@ final class DownloadManager: ObservableObject {
         completion()
     }
 
-    private func monitorNetwork() {
+    private func observeForeground() {
         #if os(iOS)
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
@@ -911,7 +922,9 @@ final class DownloadManager: ObservableObject {
             Task { @MainActor in self?.resumeAfterForeground() }
         }
         #endif
-        if KumonePaths.isOfflineUITest { setNetwork(.unknown); return }
+    }
+
+    private func monitorNetwork() {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             let value = DownloadNetworkState(connected: path.status == .satisfied, expensive: path.isExpensive, constrained: path.isConstrained)
