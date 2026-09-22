@@ -3,6 +3,16 @@ import Foundation
 import Testing
 @testable import KumoneCore
 
+private extension AudioTransferCoordinator {
+    /// Keep both updates in one actor turn so the cancelled fetch necessarily
+    /// handles cancellation after completion has become eligible again.
+    func cycleCompletionEligibility(cancelling completion: Task<Void, Error>) {
+        setCompletionAllowed(false)
+        completion.cancel()
+        setCompletionAllowed(true)
+    }
+}
+
 @Suite("Automatic current-track cache", .timeLimit(.minutes(1)))
 struct AutomaticMusicCacheTests {
     @Test func downloadsReclaimOrdinaryCacheBeforeLikesAndKeepProtectedAudio() async throws {
@@ -216,6 +226,45 @@ struct AutomaticMusicCacheTests {
         let writer = UUID()
         try await store.begin(fixture.descriptor, writer: writer)
         await store.releaseWriter(id: fixture.descriptor.identity.id, writer: writer)
+    }
+
+    @Test func resumedCompletionDoesNotPoisonConcurrentPlaybackReads() async throws {
+        let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
+        let server = try await AudioFixtureServer(fixture: fixture, delay: 0.01)
+        defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
+        let transfer = AudioTransferCoordinator(resource: fixture.resource(url: server.url), store: store,
+                                                cacheContext: .init(policy: .automatic))
+        let completing = Task { try await transfer.download(forCompletion: true) }
+        for _ in 0..<200 where server.ranges.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!server.ranges.isEmpty)
+        await transfer.cycleCompletionEligibility(cancelling: completing)
+        _ = await completing.result
+
+        async let playback = transfer.read(at: fixture.descriptor.byteCount - 100, maximum: 100)
+        async let resumed: Void = transfer.download(forCompletion: true)
+        #expect(try await playback == fixture.data.suffix(100))
+        try await resumed
+        #expect(try await store.record(id: fixture.descriptor.identity.id)?.state == .complete)
+        await transfer.close()
+    }
+
+    @Test @MainActor func playbackSessionRestartsCompletionAfterEligibilityReturns() async throws {
+        let fixture = try OfflineAudioFixture(.flac), store = fixture.store()
+        let server = try await AudioFixtureServer(fixture: fixture, delay: 0.01)
+        defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
+        var completions = 0
+        let session = PlaybackCacheSession(resource: fixture.resource(url: server.url), store: store,
+                                            context: .init(policy: .automatic), fallbackURL: server.url,
+                                            onFailure: {}, onCompleted: { completions += 1 })
+        await session.updateCompletion(allowed: true)
+        for _ in 0..<200 where server.ranges.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!server.ranges.isEmpty)
+        await session.updateCompletion(allowed: false)
+        await session.updateCompletion(allowed: true)
+        #expect(try await session.transfer.read(at: fixture.descriptor.byteCount - 100, maximum: 100) == fixture.data.suffix(100))
+        for _ in 0..<500 where !session.isComplete { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(session.isComplete && completions == 1)
+        await session.close()
     }
 
     @Test func evictionPreservesDownloadsPlaybackAndLikesBeforeOrdinarySongs() async throws {

@@ -190,7 +190,10 @@ actor AudioTransferCoordinator {
             wakeWaiters()
         } catch {
             active = nil
-            if forCompletion, Task.isCancelled, !completionAllowed, !closed {
+            // Only a policy change or close cancels this owned fetch task.
+            // Eligibility may already be enabled again by the time its
+            // cancellation arrives; that must not poison ordinary reads.
+            if forCompletion, Task.isCancelled, !closed {
                 wakeWaiters()
                 return
             }
