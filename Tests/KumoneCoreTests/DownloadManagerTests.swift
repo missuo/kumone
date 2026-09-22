@@ -449,6 +449,61 @@ struct DownloadManagerTests {
         #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0.75)
     }
 
+    @Test func resumedDownloadReservesOnlyMissingBytesAlongsideOtherTransfers() async throws {
+        let h = try DownloadHarness(freeBytes: 80_000)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .paused
+        job.descriptor = h.fixture.descriptor
+        job.expectedBytes = h.fixture.descriptor.byteCount
+        job.receivedBytes = job.expectedBytes - 40_000
+        try await h.persistence.save(DownloadCatalog(jobs: [job]))
+        try await h.persistence.saveResumeData(Data("resume".utf8), jobID: job.id)
+        try await h.store.reserveDownload(token: "other-transfer", bytes: 30_000)
+        await h.manager.start()
+
+        await h.manager.resume(job.id)
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.transport.started[0].resumed)
+        #expect(h.manager.jobs.first?.receivedBytes == job.receivedBytes)
+        // The resumed 40 KB and the other transfer's 30 KB must both remain
+        // reserved, leaving exactly 10 KB for another transfer.
+        await #expect(throws: OfflineAudioError.insufficientSpace) {
+            try await h.store.reserveDownload(token: "probe", bytes: 10_001)
+        }
+        try await h.store.reserveDownload(token: "probe", bytes: 10_000)
+        try h.transport.finish(h.transport.started[0])
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test(arguments: ["missing", "changed", "negative", "beyond", "minimum", "maximum"])
+    func unusableResumeProgressStillRequiresTheFullDownloadSize(reason: String) async throws {
+        let h = try DownloadHarness(freeBytes: 60_000)
+        defer { h.close() }
+        var job = DownloadJob(scope: "test-account", track: h.track, quality: "exhigh", owner: "single:1", allowsMetered: false)
+        job.status = .paused
+        job.descriptor = reason == "changed" ? try OfflineAudioFixture(.flac).descriptor : h.fixture.descriptor
+        job.expectedBytes = h.fixture.descriptor.byteCount
+        switch reason {
+        case "negative": job.receivedBytes = -1
+        case "beyond": job.receivedBytes = job.expectedBytes + 1
+        case "minimum": job.receivedBytes = .min
+        case "maximum": job.receivedBytes = .max
+        default: job.receivedBytes = 80_000
+        }
+        try await h.persistence.save(DownloadCatalog(jobs: [job]))
+        if reason != "missing" { try await h.persistence.saveResumeData(Data("resume".utf8), jobID: job.id) }
+        await h.manager.start()
+
+        await h.manager.resume(job.id)
+        try await waitForDownload { h.manager.jobs.first?.status == .failed }
+        #expect(h.transport.started.isEmpty)
+        #expect(h.manager.jobs.first?.receivedBytes == 0)
+        #expect(h.manager.jobs.first?.errorMessage == DownloadManager.message(for: OfflineAudioError.insufficientSpace))
+        #expect(await h.persistence.resumeData(jobID: job.id) == nil)
+        try await h.store.reserveDownload(token: "probe", bytes: 60_000)
+    }
+
     @Test func aTransferOnlyNotifiesItsOwnTrackState() async throws {
         let h = try DownloadHarness()
         defer { h.close() }

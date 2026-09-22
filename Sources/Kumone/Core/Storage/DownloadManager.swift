@@ -693,15 +693,24 @@ final class DownloadManager: ObservableObject {
             guard current(job) else { return }
             var resumeData = await persistence.resumeData(jobID: job.id)
             guard current(job), let i = index(job.id) else { return }
-            if catalog.jobs[i].descriptor != resource.descriptor { resumeData = nil }
+            let received = catalog.jobs[i].receivedBytes
+            if resumeData != nil, catalog.jobs[i].descriptor != resource.descriptor
+                || received < 0 || received > resource.descriptor.byteCount {
+                resumeData = nil
+                try await persistence.saveResumeData(nil, jobID: job.id)
+            }
+            guard current(job), let i = index(job.id) else { return }
             if resumeData == nil {
                 catalog.jobs[i].receivedBytes = 0
                 progress.values[job.id] = nil
             }
+            // Valid resume bytes already occupy disk space; reserve only what
+            // is still missing, alongside the other active transfers.
+            let remainingBytes = resource.descriptor.byteCount - catalog.jobs[i].receivedBytes
             var context = cacheContext()
             context.protectedAssetIDs.formUnion(storageAssetIDs)
             context.protectedAssetIDs.insert(resource.descriptor.identity.id)
-            try await store.reserveDownload(token: token, bytes: resource.descriptor.byteCount, context: context)
+            try await store.reserveDownload(token: token, bytes: remainingBytes, context: context)
             guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
             catalog.jobs[i].descriptor = resource.descriptor
             catalog.jobs[i].expectedBytes = resource.descriptor.byteCount
