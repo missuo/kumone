@@ -1164,6 +1164,35 @@ struct DownloadManagerTests {
         try await waitForDownload { h.manager.jobs.first?.status == .complete }
     }
 
+    @Test func waitingTransferRebuildsItsRequestWhenMeteredApprovalIsRevoked() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let original = h.transport.started[0], total = h.fixture.descriptor.byteCount
+        let id = try #require(h.manager.jobs.first?.id)
+        h.transport.continuation.yield(.progress(token: original.token, received: total / 2, expected: total))
+        h.transport.continuation.yield(.waiting(token: original.token))
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        try await h.persistence.saveResumeData(Data("previous request allows cellular".utf8), jobID: id)
+
+        await h.manager.resumeAll(allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        #expect(h.transport.cancelled.contains(original.token))
+        #expect(h.transport.started.count == 1)
+        #expect(h.manager.jobs.first?.token == nil)
+        #expect(await h.persistence.resumeData(jobID: id) == nil)
+        #expect(try await h.persistence.load().jobs.first?.allowsMetered == false)
+
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        try await waitForDownload { h.transport.started.count == 2 }
+        let restarted = h.transport.started[1]
+        #expect(!restarted.metered && !restarted.resumed)
+        #expect(h.manager.progress.fraction(for: h.manager.jobs[0]) == 0)
+        try h.transport.finish(restarted)
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
     @Test func meteredConfirmationOnlyCoversBulkDownloadsAndLowDataMode() {
         let wifi = DownloadNetworkState(connected: true, expensive: false, constrained: false)
         #expect(!wifi.needsMeteredConfirmation(bulk: true) && !wifi.needsMeteredConfirmation(bulk: false))
