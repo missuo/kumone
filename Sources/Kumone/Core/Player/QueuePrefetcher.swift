@@ -30,6 +30,9 @@ final class QueuePrefetcher {
     private var active: PlaybackCacheSession?
     private var closing: Task<Void, Never>?
     private var pendingDownloadTrackIDs: Set<Int> = []
+    private var windowBytes: Int64 = 0
+    private var visitedTrackIDs: Set<Int> = []
+    private var windowStopped = false
     private(set) var completedTrackIDs: [Int] = []
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, limits: PrefetchLimits = .init(),
@@ -47,16 +50,31 @@ final class QueuePrefetcher {
         let pending = next?.pendingDownloadTrackIDs ?? []
         let pendingChanged = pending != pendingDownloadTrackIDs
         pendingDownloadTrackIDs = pending
-        guard next != request || (pendingChanged && active == nil && next != nil) else { return }
+        if next == request {
+            // An active worker rechecks eligibility after its current song.
+            // An idle window resumes with its original byte/track accounting.
+            if pendingChanged, let next, next.context.policy != .disabled, worker == nil, !windowStopped {
+                startWorker(next, after: closing)
+            }
+            return
+        }
         let stopped = cancel()
         request = next
         completedTrackIDs = []
+        windowBytes = 0
+        visitedTrackIDs = next.map { Set([$0.currentTrackID]) } ?? []
+        windowStopped = false
         guard let next, next.context.policy != .disabled else { return }
+        startWorker(next, after: stopped)
+    }
+
+    private func startWorker(_ request: QueuePrefetchRequest, after stopped: Task<Void, Never>?) {
         let ticket = generation
         worker = Task { [weak self] in
-            await stopped.value
+            await stopped?.value
             guard let self, self.isCurrent(ticket) else { return }
-            await self.run(next, ticket: ticket)
+            await self.run(request, ticket: ticket)
+            if self.isCurrent(ticket) { self.worker = nil }
         }
     }
 
@@ -87,31 +105,30 @@ final class QueuePrefetcher {
     private func isCurrent(_ ticket: Int) -> Bool { ticket == generation && !Task.isCancelled }
 
     private func run(_ request: QueuePrefetchRequest, ticket: Int) async {
-        var bytes: Int64 = 0
-        var seen: Set<Int> = [request.currentTrackID]
         let tracks = limits.window(request.tracks)
         var context = request.context
         context.isPrefetch = true
         context.protectedTracks[request.scope, default: []].formUnion(tracks.map(\.id))
-        for track in tracks {
+        while let track = tracks.first(where: { !visitedTrackIDs.contains($0.id) && !pendingDownloadTrackIDs.contains($0.id) }) {
             guard isCurrent(ticket) else { return }
-            guard seen.insert(track.id).inserted else { continue }
+            visitedTrackIDs.insert(track.id)
             do {
                 if let local = try await store.availableDescriptor(accountScope: request.scope, trackID: track.id, preferredQuality: request.quality) {
-                    guard isCurrent(ticket), local.byteCount <= limits.bytes - bytes else { return }
-                    bytes += local.byteCount
+                    guard isCurrent(ticket) else { return }
+                    guard local.byteCount <= limits.bytes - windowBytes else { windowStopped = true; return }
+                    windowBytes += local.byteCount
                     continue
                 }
                 guard isCurrent(ticket) else { return }
-                guard !pendingDownloadTrackIDs.contains(track.id) else { continue }
+                guard !pendingDownloadTrackIDs.contains(track.id) else { visitedTrackIDs.remove(track.id); continue }
                 let resource = try await resolver(track, request.quality, request.scope)
                 guard isCurrent(ticket) else { return }
-                guard !pendingDownloadTrackIDs.contains(track.id) else { continue }
+                guard !pendingDownloadTrackIDs.contains(track.id) else { visitedTrackIDs.remove(track.id); continue }
                 try resource.descriptor.validate()
-                guard isCurrent(ticket), resource.descriptor.identity.accountScope == request.scope,
+                guard resource.descriptor.identity.accountScope == request.scope,
                       resource.descriptor.identity.trackID == track.id,
-                      resource.descriptor.byteCount <= limits.bytes - bytes else { return }
-                bytes += resource.descriptor.byteCount
+                      resource.descriptor.byteCount <= limits.bytes - windowBytes else { windowStopped = true; return }
+                windowBytes += resource.descriptor.byteCount
                 let session = PlaybackCacheSession(resource: resource, store: store, context: context,
                                                     fallbackURL: resource.url, onFailure: {})
                 active = session
@@ -132,11 +149,12 @@ final class QueuePrefetcher {
                     if active === session { active = nil }
                     // A capacity or transport failure ends this window; it
                     // must not repeatedly evict/retry on a playback timer.
+                    if isCurrent(ticket) { windowStopped = true }
                     return
                 }
             } catch {
                 guard isCurrent(ticket) else { return }
-                if error is URLError { return }
+                if error is URLError { windowStopped = true; return }
                 // An unavailable song still consumes its position in the
                 // bounded window; later eligible songs may be prepared.
             }

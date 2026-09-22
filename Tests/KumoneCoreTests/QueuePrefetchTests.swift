@@ -240,4 +240,37 @@ struct QueuePrefetchTests {
         #expect(calls == 1)
         await scheduler.cancel().value
     }
+
+    @Test(arguments: [1, 2])
+    func pendingCancellationDuringAnotherSongPreservesTheWindowBudget(songBudget: Int) async throws {
+        let fixture = try OfflineAudioFixture(), store = fixture.store(), gate = PrefetchGate()
+        let server = try await AudioFixtureServer(fixture: fixture)
+        defer { server.stop(); try? FileManager.default.removeItem(at: store.directory) }
+        var resolved: [Int] = []
+        let scheduler = QueuePrefetcher(store: store, metadata: .init(directory: store.directory.appendingPathComponent("metadata")),
+            limits: .init(bytes: fixture.descriptor.byteCount * Int64(songBudget)), resolver: { track, _, scope in
+                resolved.append(track.id)
+                return resource(fixture, track: track, scope: scope, url: server.url)
+            }, metadataFetcher: { track, _ in if track.id == 3 { await gate.wait() } })
+        // Track 2's explicit job has no descriptor yet, so cancelling it only
+        // changes pending IDs, not the protected asset IDs in the context.
+        scheduler.update(try request([2, 3], pending: [2]))
+        try await waitForPrefetch { await gate.entered }
+        #expect(resolved == [3])
+        scheduler.update(try request([2, 3]))
+        await gate.open()
+        try await waitForPrefetch { resolved == [3, 2] }
+        if songBudget == 2 {
+            try await waitForPrefetch { scheduler.completedTrackIDs == [3, 2] }
+            #expect(try await store.availableDescriptor(accountScope: "a", trackID: 2, preferredQuality: "exhigh") != nil)
+        } else {
+            for _ in 0..<10 { scheduler.update(try request([2, 3])); await Task.yield() }
+            #expect(scheduler.completedTrackIDs == [3])
+            #expect(try await store.availableDescriptor(accountScope: "a", trackID: 2, preferredQuality: "exhigh") == nil)
+        }
+        // The completed track is never restarted or transferred twice.
+        #expect(resolved == [3, 2])
+        #expect(server.ranges.count == songBudget)
+        await scheduler.cancel().value
+    }
 }
