@@ -15,6 +15,16 @@ enum MusicCachePolicy: String, CaseIterable, Identifiable, Codable {
         default: return ByteCountFormatter.string(fromByteCount: fixedBytes ?? 0, countStyle: .file)
         }
     }
+    /// Offline listening is a phone use case (commutes, flights). A Mac is
+    /// nearly always online, so it only keeps a small replay cache, the same
+    /// 1 GB the official desktop client ships with.
+    static var `default`: Self {
+        #if os(macOS)
+        .gb1
+        #else
+        .automatic
+        #endif
+    }
     static var options: [Self] {
         #if os(macOS)
         allCases

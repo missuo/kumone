@@ -140,6 +140,15 @@ struct AutomaticMusicCacheTests {
         #expect(MusicCachePolicy.disabled.limit(free: 100 * gb, cacheBytes: 0, downloadReservations: 0, floor: gb, isMac: false) == 0)
     }
 
+    @Test func macDefaultsToASmallReplayCache() {
+        #if os(macOS)
+        #expect(MusicCachePolicy.default == .gb1)
+        #else
+        #expect(MusicCachePolicy.default == .automatic)
+        #endif
+        #expect(MusicCachePolicy.options.contains(MusicCachePolicy.default))
+    }
+
     @Test func completionNeedsAnUnmeteredUnconstrainedNetworkAndPower() {
         #expect(PlaybackCacheController.permitsCompletion(network: .init(connected: true, expensive: false, constrained: false), lowPower: false))
         for network in [DownloadNetworkState.unknown,

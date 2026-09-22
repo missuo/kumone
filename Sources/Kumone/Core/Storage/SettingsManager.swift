@@ -199,7 +199,7 @@ final class SettingsManager: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
-        musicCachePolicy = defaults.string(forKey: Keys.musicCache).flatMap(MusicCachePolicy.init) ?? .automatic
+        musicCachePolicy = defaults.string(forKey: Keys.musicCache).flatMap(MusicCachePolicy.init) ?? .default
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
