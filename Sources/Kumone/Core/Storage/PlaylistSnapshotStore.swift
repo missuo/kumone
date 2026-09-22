@@ -28,6 +28,21 @@ struct PlaylistSnapshot: Codable {
         detail.trackCount = detail.trackIds.count
         privileges = privileges.filter { !ids.contains($0.key) }
     }
+
+    mutating func replaceRecommendation(_ trackID: Int, with replacement: Track) {
+        guard detail.trackIds.contains(where: { $0.id == trackID })
+                || detail.tracks.contains(where: { $0.id == trackID }) else { return }
+        let previousCount = detail.trackIds.count
+        var seen: Set<Int> = []
+        detail.trackIds = detail.trackIds.map { $0.id == trackID ? TrackIDRef(id: replacement.id) : $0 }
+            .filter { seen.insert($0.id).inserted }
+        detail.trackCount -= previousCount - detail.trackIds.count
+        seen = []
+        detail.tracks = detail.tracks.map { $0.id == trackID ? replacement : $0 }
+            .filter { seen.insert($0.id).inserted }
+        privileges[trackID] = nil
+        if let privilege = replacement.embeddedPrivilege { privileges[replacement.id] = privilege }
+    }
 }
 
 /// Library metadata is app data, independent of evictable audio and artwork.
@@ -37,6 +52,7 @@ actor PlaylistSnapshotStore {
     private var refreshes: [URL: (token: UUID, background: Bool)] = [:]
     private var foregroundRefreshes: [URL: Set<UUID>] = [:]
     private var removedTracks: [URL: Set<Int>] = [:]
+    private var recommendationReplacements: [URL: [Int: Track]] = [:]
 
     init(directory: URL) { self.directory = directory }
 
@@ -55,6 +71,7 @@ actor PlaylistSnapshotStore {
         if !background { foregroundRefreshes[url, default: []].insert(token) }
         refreshes[url] = (token, background)
         removedTracks[url] = []
+        recommendationReplacements[url] = [:]
         return token
     }
 
@@ -69,12 +86,16 @@ actor PlaylistSnapshotStore {
         guard refreshes[url]?.token == token else { return }
         refreshes[url] = nil
         removedTracks[url] = nil
+        recommendationReplacements[url] = nil
     }
 
     func save(_ snapshot: PlaylistSnapshot, scope: String, token: UUID) throws {
         let url = file(id: snapshot.detail.id, scope: scope)
         guard refreshes[url]?.token == token else { return }
         var snapshot = snapshot
+        for (id, replacement) in recommendationReplacements[url] ?? [:] {
+            snapshot.replaceRecommendation(id, with: replacement)
+        }
         if let removed = removedTracks[url], !removed.isEmpty { snapshot.remove(removed) }
         try write(snapshot, to: url)
     }
@@ -84,6 +105,19 @@ actor PlaylistSnapshotStore {
         if refreshes[url] != nil { removedTracks[url, default: []].insert(trackID) }
         guard var snapshot = load(id: playlistID, scope: scope) else { return }
         snapshot.remove([trackID])
+        try write(snapshot, to: url)
+    }
+
+    func replaceRecommendation(trackID: Int, with replacement: Track, playlistID: Int, scope: String) throws {
+        let url = file(id: playlistID, scope: scope)
+        if refreshes[url] != nil {
+            for (id, previous) in recommendationReplacements[url] ?? [:] where previous.id == trackID {
+                recommendationReplacements[url]?[id] = replacement
+            }
+            recommendationReplacements[url, default: [:]][trackID] = replacement
+        }
+        guard var snapshot = load(id: playlistID, scope: scope) else { return }
+        snapshot.replaceRecommendation(trackID, with: replacement)
         try write(snapshot, to: url)
     }
 

@@ -13,6 +13,7 @@ final class PlaylistContent: ObservableObject {
     @Published var filter = ""
     private(set) var loadedScope: String?
     private var reducedRecommendationIDs: Set<Int> = []
+    private var recommendationReplacements: [Int: Track] = [:]
     private var removedTrackIDs: Set<Int> = []
     private var loadGeneration = 0
     private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
@@ -56,6 +57,7 @@ final class PlaylistContent: ObservableObject {
             tracks = []
             privileges = [:]
             reducedRecommendationIDs = []
+            recommendationReplacements = [:]
             loadedScope = scope
         }
         removedTrackIDs = []
@@ -66,6 +68,7 @@ final class PlaylistContent: ObservableObject {
         guard let scope else { return }
         if let snapshots, let saved = await snapshots.load(id: playlistID, scope: scope) {
             guard valid(generation, scope: scope) else { return }
+            let saved = applyingRecommendations(to: saved)
             detail = saved.detail
             tracks = saved.detail.tracks
             privileges = saved.privileges
@@ -91,6 +94,7 @@ final class PlaylistContent: ObservableObject {
             if loaded.trackIds.isEmpty, !loaded.tracks.isEmpty {
                 loaded.trackIds = loaded.tracks.map { TrackIDRef(id: $0.id) }
             }
+            loaded = applyingRecommendations(to: .init(detail: loaded, privileges: [:])).detail
             // A truncated membership response cannot remove the tail of a saved list.
             if loaded.trackIds.count < loaded.trackCount, !tracks.isEmpty {
                 errorMessage = String(localized: "歌单数据不完整，请重试")
@@ -173,9 +177,35 @@ final class PlaylistContent: ObservableObject {
         }
     }
 
-    func replaceRecommendation(_ rejected: Track, with replacement: Track) {
-        if tracks.replaceRecommendation(rejected, with: replacement) {
-            reducedRecommendationIDs.insert(rejected.id)
+    private func applyingRecommendations(to snapshot: PlaylistSnapshot) -> PlaylistSnapshot {
+        var snapshot = snapshot
+        for (id, replacement) in recommendationReplacements {
+            snapshot.replaceRecommendation(id, with: replacement)
+        }
+        return snapshot
+    }
+
+    @discardableResult
+    func replaceRecommendation(_ rejected: Track, with replacement: Track) -> Task<Void, Never>? {
+        guard tracks.replaceRecommendation(rejected, with: replacement) else { return nil }
+        // A replacement occupies the same position in membership as in the
+        // visible list, so subsequent pages and offline loads preserve it.
+        for (id, previous) in recommendationReplacements where previous.id == rejected.id {
+            recommendationReplacements[id] = replacement
+        }
+        recommendationReplacements[rejected.id] = replacement
+        reducedRecommendationIDs.insert(rejected.id)
+        if var detail {
+            detail.tracks = tracks
+            let snapshot = applyingRecommendations(to: .init(detail: detail, privileges: privileges))
+            self.detail = snapshot.detail
+            privileges = snapshot.privileges
+        }
+        guard let snapshots, let scope = loadedScope, scope == accountScope() else { return nil }
+        return Task {
+            guard scope == accountScope() else { return }
+            try? await snapshots.replaceRecommendation(trackID: rejected.id, with: replacement,
+                                                       playlistID: playlistID, scope: scope)
         }
     }
 }

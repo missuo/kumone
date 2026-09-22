@@ -428,4 +428,107 @@ import Testing
         await model.load()
         #expect(model.errorMessage == nil && model.canDownloadAll)
     }
+
+    @Test(arguments: [false, true])
+    func recommendationReplacementSurvivesPagination(persisted: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = persisted ? PlaylistSnapshotStore(directory: root) : nil
+        let gate = PlaylistGate()
+        defer { gate.open() }
+        let first = try response(ids: [1, 2], loaded: [1])
+        let replacement = try response(ids: [3], loaded: [3]).playlist.tracks[0]
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                await gate.wait()
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        let request = Task { await model.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.entered)
+        await model.replaceRecommendation(first.playlist.tracks[0], with: replacement)?.value
+        gate.open()
+        await request.value
+        #expect(model.tracks.map(\.id) == [3, 2])
+        #expect(model.detail?.trackIds.map(\.id) == [3, 2] && model.canDownloadAll)
+        if let store {
+            let saved = await store.load(id: 1, scope: "a")
+            #expect(saved?.detail.tracks.map(\.id) == [3, 2] && saved?.isComplete == true)
+        }
+    }
+
+    @Test func recommendationReplacementSurvivesOfflineReloadAndReopening() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        let original = try response(ids: [1, 2], loaded: [1, 2])
+        let replacement = try response(ids: [3], loaded: [3]).playlist.tracks[0]
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in original })
+        await model.load()
+        let persistence = model.replaceRecommendation(original.playlist.tracks[0], with: replacement)
+        // A network change can reload this view before the mutation reaches disk.
+        await model.load(allowNetwork: false)
+        #expect(model.tracks.map(\.id) == [3, 2] && model.canDownloadAll)
+        await persistence?.value
+        let reopened = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" })
+        await reopened.load(allowNetwork: false)
+        #expect(reopened.tracks.map(\.id) == [3, 2] && reopened.canDownloadAll)
+        #expect(await store.load(id: 1, scope: "a")?.isComplete == true)
+        #expect(await store.load(id: 1, scope: "b") == nil)
+    }
+
+    @Test func repeatedRecommendationReplacementsRespectRefreshMembershipAndAccountChanges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        var latest = try response(ids: [1, 2], loaded: [1, 2])
+        let first = latest.playlist.tracks[0]
+        let third = try response(ids: [3], loaded: [3]).playlist.tracks[0]
+        let fourth = try response(ids: [4], loaded: [4]).playlist.tracks[0]
+        var scope = "a"
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { scope },
+            detailLoader: { _ in latest })
+        await model.load()
+        await model.replaceRecommendation(first, with: third)?.value
+        await model.replaceRecommendation(third, with: fourth)?.value
+        // A refresh can still contain a rejected entry, or already include its replacement.
+        latest = try response(ids: [1, 3, 2], loaded: [1, 3, 2])
+        await model.load()
+        #expect(model.tracks.map(\.id) == [4, 2] && model.canDownloadAll)
+        #expect(await store.load(id: 1, scope: "a")?.isComplete == true)
+        // A genuinely changed server list remains authoritative for membership.
+        latest = try response(ids: [2, 5], loaded: [2, 5])
+        await model.load()
+        #expect(model.tracks.map(\.id) == [2, 5] && model.canDownloadAll)
+        scope = "b"
+        latest = try response(ids: [1, 2], loaded: [1, 2])
+        await model.load()
+        #expect(model.tracks.map(\.id) == [1, 2] && model.canDownloadAll)
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [2, 5])
+    }
+
+    @Test func anotherRefreshCannotPersistARejectedRecommendationAgain() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let original = try response(ids: [1, 2], loaded: [1, 2])
+        let replacement = try response(ids: [3], loaded: [3]).playlist.tracks[0]
+        let opened = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in original })
+        await opened.load()
+        let refreshing = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" }, detailLoader: { _ in
+            await gate.wait()
+            return original
+        })
+        let request = Task { await refreshing.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.entered)
+        await opened.replaceRecommendation(original.playlist.tracks[0], with: replacement)?.value
+        gate.open()
+        await request.value
+        let saved = await store.load(id: 1, scope: "a")
+        #expect(saved?.detail.tracks.map(\.id) == [3, 2] && saved?.isComplete == true)
+    }
 }
