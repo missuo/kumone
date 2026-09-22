@@ -8,11 +8,13 @@ struct NowPlayingArtworkStoreTests {
     @Test func latestArtworkRequestWins() async {
         let firstArtwork = artwork(color: .systemRed)
         let secondArtwork = artwork(color: .systemBlue)
-        let store = NowPlayingArtworkStore(player: nil) { url in
+        let store = NowPlayingArtworkStore(player: nil) { url, onCachedImage in
             if url.absoluteString.contains("first-artwork") {
                 try? await Task.sleep(nanoseconds: 20_000_000)
+                await onCachedImage(firstArtwork)
                 return firstArtwork
             }
+            await onCachedImage(secondArtwork)
             return secondArtwork
         }
         store.setArtworkNeeded(true)
@@ -32,7 +34,7 @@ struct NowPlayingArtworkStoreTests {
     }
 
     @Test func missingArtworkImmediatelyUsesFallback() {
-        let store = NowPlayingArtworkStore(player: nil) { _ in artwork(color: .systemRed) }
+        let store = NowPlayingArtworkStore(player: nil) { _, _ in artwork(color: .systemRed) }
 
         store.update(trackID: 1, artworkURL: nil)
 
@@ -43,7 +45,7 @@ struct NowPlayingArtworkStoreTests {
 
     @Test func failedArtworkLoadUsesFallback() async {
         let loaderCalls = ImageLoaderCallSignal()
-        let store = NowPlayingArtworkStore(player: nil) { _ in
+        let store = NowPlayingArtworkStore(player: nil) { _, _ in
             await loaderCalls.record()
             return nil
         }
@@ -62,7 +64,7 @@ struct NowPlayingArtworkStoreTests {
 
     @Test func waitsForAConsumerBeforeLoadingArtwork() async {
         let loaderCalls = ImageLoaderCallSignal()
-        let store = NowPlayingArtworkStore(player: nil) { _ in
+        let store = NowPlayingArtworkStore(player: nil) { _, _ in
             await loaderCalls.record()
             return nil
         }
@@ -78,6 +80,25 @@ struct NowPlayingArtworkStoreTests {
         await loaderCalls.waitForCall()
 
         #expect(await loaderCalls.callCount() == 1)
+    }
+
+    @Test func showsCachedArtworkBeforeFullSizeLoaderReturns() async {
+        let preview = artwork(color: .systemGreen)
+        let calls = ImageLoaderCallSignal()
+        let (response, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        let store = NowPlayingArtworkStore(player: nil) { _, onCachedImage in
+            await onCachedImage(preview)
+            await calls.record()
+            for await _ in response { break }
+            return nil
+        }
+        store.setArtworkNeeded(true)
+        store.update(trackID: 1, artworkURL: "https://example.com/thumbnail.jpg")
+        await calls.waitForCall()
+
+        #expect(store.artwork === preview)
+        #expect(store.trackID == 1)
     }
 
     private func artwork(color: NSColor) -> PlatformImage {

@@ -44,6 +44,45 @@ private final class ArtworkProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// Holds the HTTP response until the test explicitly releases it, so a preview
+/// cannot pass by merely arriving shortly after a fast network failure.
+private final class HeldArtworkProtocol: URLProtocol, @unchecked Sendable {
+    final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [HeldArtworkProtocol] = []
+        func append(_ request: HeldArtworkProtocol) {
+            lock.lock(); defer { lock.unlock() }
+            pending.append(request)
+        }
+        var count: Int {
+            lock.lock(); defer { lock.unlock() }
+            return pending.count
+        }
+        func finishAll(with data: Data?) {
+            lock.lock()
+            let requests = pending
+            pending = []
+            lock.unlock()
+            for request in requests { request.finish(with: data) }
+        }
+    }
+    static let state = State()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { Self.state.append(self) }
+    override func stopLoading() {}
+    private func finish(with data: Data?) {
+        guard let data else {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
 @Suite("Offline artwork", .serialized)
 struct OfflineArtworkTests {
     private let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5XkAAAAASUVORK5CYII=")!
@@ -135,6 +174,68 @@ struct OfflineArtworkTests {
         try seed(cover.resizedImageURL(160)!, at: root)
 
         #expect(await cache(at: root).image(for: cover.resizedImageURL(768)!) != nil)
+    }
+
+    @Test @MainActor func thumbnailAppearsWhileFullSizeRequestIsStillPending() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-art-preview-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { HeldArtworkProtocol.state.finishAll(with: nil) }
+        try seed(cover.resizedImageURL(160)!, at: root)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HeldArtworkProtocol.self]
+        let cache = ImageCache(directory: root, session: URLSession(configuration: config), offlineArtwork: { _ in nil })
+        let url = cover.resizedImageURL(768)!
+        var previews: [PlatformImage] = []
+        var finished = false
+        let first = Task {
+            let image = await cache.image(for: url) { previews.append($0) }
+            finished = true
+            return image
+        }
+        for _ in 0..<200 where HeldArtworkProtocol.state.count == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(HeldArtworkProtocol.state.count == 1)
+        #expect(previews.count == 1)
+        #expect(!finished)
+        #expect(cache.cachedImage(for: url) == nil)
+
+        // A second view joining the same request gets its own immediate preview.
+        let second = Task { await cache.image(for: url) { previews.append($0) } }
+        for _ in 0..<200 where previews.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(previews.count == 2)
+        #expect(HeldArtworkProtocol.state.count == 1)
+        #expect(!finished)
+
+        HeldArtworkProtocol.state.finishAll(with: png)
+        #expect(await first.value != nil)
+        #expect(await second.value != nil)
+        #expect(cache.cachedImage(for: url) != nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).count == 2)
+    }
+
+    @Test @MainActor func cancelledPreviewDoesNotApplyToTheNextArtwork() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-art-cancel-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        defer { HeldArtworkProtocol.state.finishAll(with: nil) }
+        try seed(cover.resizedImageURL(160)!, at: root)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HeldArtworkProtocol.self]
+        let cache = ImageCache(directory: root, session: URLSession(configuration: config), offlineArtwork: { _ in nil })
+        let url = cover.resizedImageURL(768)!
+        let nextURL = URL(string: "https://example.test/next.jpg?param=768y768")!
+        var state = CachedImageState(url: url)
+        let request = Task {
+            let image = await cache.image(for: url) { state.finish($0, for: url) }
+            guard !Task.isCancelled, let image else { return }
+            state.finish(image, for: url)
+        }
+        for _ in 0..<200 where HeldArtworkProtocol.state.count == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(state.image(for: url) != nil)
+        request.cancel()
+        state = CachedImageState(url: nextURL)
+        HeldArtworkProtocol.state.finishAll(with: png)
+        await request.value
+        #expect(state.image(for: nextURL) == nil)
+        #expect(state.image(for: url) == nil)
     }
 
     @Test @MainActor func reusedViewNeverShowsPreviousSongsPixels() {

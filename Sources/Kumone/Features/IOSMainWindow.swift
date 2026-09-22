@@ -188,6 +188,7 @@ public struct IOSMainWindow: View {
                 .environmentObject(account)
                 .environmentObject(settings)
         }
+        .modifier(NowPlayingLoginPresenter())
     }
 
     @ViewBuilder
@@ -346,6 +347,23 @@ extension IOSMainWindow {
 
 private enum NowPlayingTransitionID {
     static let surface = "now-playing-surface"
+}
+
+/// Login requested from the player must be presented by the player itself:
+/// the main window is already presenting its full-screen cover on iOS 18+.
+/// Keeping this state here also makes cancellation return to the same player.
+private struct NowPlayingLoginPresenter: ViewModifier {
+    @EnvironmentObject private var account: AccountStore
+    @State private var showLogin = false
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.openLogin, { showLogin = true })
+            .sheet(isPresented: $showLogin) {
+                LoginSheet()
+                    .environmentObject(account)
+            }
+    }
 }
 
 // MARK: - Mini player bar for iOS

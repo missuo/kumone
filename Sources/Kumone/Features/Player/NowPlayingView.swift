@@ -219,12 +219,16 @@ struct NowPlayingView: View {
             return
         }
         loadedArtwork = CachedImageState(url: url)
-        let image = await ImageCache.shared.image(for: url)
+        let image = await ImageCache.shared.image(for: url) { preview in
+            applyArtwork(preview, for: url, cacheKey: urlString)
+        }
+        if let image { applyArtwork(image, for: url, cacheKey: urlString) }
+    }
+
+    private func applyArtwork(_ image: PlatformImage, for url: URL, cacheKey: String) {
         guard !Task.isCancelled, currentArtworkURL == url else { return }
         loadedArtwork.finish(image, for: url)
-        if let image {
-            loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
-        }
+        loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: cacheKey)
     }
     #endif
 

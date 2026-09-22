@@ -190,7 +190,7 @@ enum CarPlayTemplateFactory {
     static func fillArtwork(_ item: CPListItem, from coverURL: String?) {
         guard let urlStr = coverURL, let url = urlStr.resizedImageURL(120) else { return }
         Task { @MainActor in
-            guard let image = await ImageCache.shared.image(for: url) else { return }
+            guard let image = await ImageCache.shared.image(for: url, onCachedImage: { item.setImage($0) }) else { return }
             item.setImage(image)
         }
     }

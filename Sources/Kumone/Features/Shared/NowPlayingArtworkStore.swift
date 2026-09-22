@@ -4,7 +4,7 @@ import SwiftUI
 /// Shares the current track artwork and palette between app surfaces.
 @MainActor
 final class NowPlayingArtworkStore: ObservableObject {
-    typealias ImageLoader = (URL) async -> PlatformImage?
+    typealias ImageLoader = (URL, @escaping ImageCache.CachedImageHandler) async -> PlatformImage?
 
     @Published private(set) var colors: ArtworkColors = .fallback
     @Published private(set) var artwork: PlatformImage?
@@ -25,8 +25,8 @@ final class NowPlayingArtworkStore: ObservableObject {
 
     init(
         player: PlayerService?,
-        imageLoader: @escaping ImageLoader = { url in
-            await ImageCache.shared.image(for: url)
+        imageLoader: @escaping ImageLoader = { url, onCachedImage in
+            await ImageCache.shared.image(for: url, onCachedImage: onCachedImage)
         }
     ) {
         self.imageLoader = imageLoader
@@ -85,7 +85,11 @@ final class NowPlayingArtworkStore: ObservableObject {
         self.request = request
         let imageLoader = imageLoader
         loadTask = Task { [weak self] in
-            let image = await imageLoader(request.imageURL)
+            let image = await imageLoader(request.imageURL) { [weak self] preview in
+                guard !Task.isCancelled, let self, self.request == request else { return }
+                self.artwork = preview
+                self.colors = ArtworkPalette.extract(from: preview, cacheKey: request.artworkURL)
+            }
             guard !Task.isCancelled,
                   let self,
                   self.request == request else {

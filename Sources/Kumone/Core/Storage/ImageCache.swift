@@ -5,6 +5,7 @@ import SwiftUI
 /// Two-tier (memory + disk) image cache with in-flight request coalescing.
 actor ImageCache {
     static let shared = ImageCache()
+    typealias CachedImageHandler = @MainActor @Sendable (PlatformImage) -> Void
 
     private nonisolated(unsafe) let memory = NSCache<NSString, PlatformImage>()
     nonisolated let directory: URL
@@ -32,19 +33,29 @@ actor ImageCache {
         return await OfflineMetadataStore.shared.artwork(url: url, scope: scope)
     }
 
-    func image(for url: URL) async -> PlatformImage? {
+    /// Surface local pixels before waiting for a larger version. The returned
+    /// image still prefers the requested resolution, including after reconnect.
+    func image(for url: URL, onCachedImage: CachedImageHandler? = nil) async -> PlatformImage? {
         let key = Self.cacheKey(for: url)
         if let cached = memory.object(forKey: key as NSString) {
             return cached
         }
+        let requestGeneration = generation
+        if let onCachedImage,
+           let preview = diskImage(for: key) ?? cachedVariant(for: url) {
+            await onCachedImage(preview)
+        }
+        guard !Task.isCancelled else { return nil }
+        // Delivering the preview hops to MainActor; another caller may have
+        // completed the exact request while this actor was suspended.
+        if let cached = memory.object(forKey: key as NSString) { return cached }
         if let existing = inflight[key] {
             let result = await existing.task.value
             return result ?? cachedVariant(for: url)
         }
-        let requestGeneration = generation
         let task = Task<PlatformImage?, Never> { [self] in
             let fileURL = directory.appendingPathComponent(key)
-            if let data = try? Data(contentsOf: fileURL), let image = PlatformImage(data: data) {
+            if let image = diskImage(for: key) {
                 return image
             }
             if let data = await offlineArtwork(url),
@@ -69,6 +80,11 @@ actor ImageCache {
         return result ?? cachedVariant(for: url)
     }
 
+    private func diskImage(for key: String) -> PlatformImage? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)) else { return nil }
+        return PlatformImage(data: data)
+    }
+
     private func cachedVariant(for url: URL) -> PlatformImage? {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
@@ -82,8 +98,7 @@ actor ImageCache {
             guard let candidate = components.url, candidate != url else { continue }
             let key = Self.cacheKey(for: candidate)
             if let image = memory.object(forKey: key as NSString) { return image }
-            if let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
-               let image = PlatformImage(data: data) { return image }
+            if let image = diskImage(for: key) { return image }
         }
         return nil
     }
@@ -171,13 +186,17 @@ struct CachedAsyncImage<Placeholder: View>: View {
                 imageState = CachedImageState()
                 return
             }
-            guard imageState.image(for: url) == nil else { return }
             // Synchronous memory hit first — no actor hop, no placeholder frame.
             let memoryHit = ImageCache.shared.cachedImage(for: url)
-            imageState = CachedImageState(url: url, image: memoryHit)
+            if imageState.url != url || memoryHit != nil {
+                imageState = CachedImageState(url: url, image: memoryHit)
+            }
             guard memoryHit == nil else { return }
-            let cached = await ImageCache.shared.image(for: url)
-            guard !Task.isCancelled else { return }
+            let cached = await ImageCache.shared.image(for: url) { preview in
+                guard !Task.isCancelled else { return }
+                imageState.finish(preview, for: url)
+            }
+            guard !Task.isCancelled, let cached else { return }
             imageState.finish(cached, for: url)
         }
     }
