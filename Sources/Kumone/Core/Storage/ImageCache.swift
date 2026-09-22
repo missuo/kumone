@@ -38,7 +38,8 @@ actor ImageCache {
             return cached
         }
         if let existing = inflight[key] {
-            return await existing.task.value
+            let result = await existing.task.value
+            return result ?? cachedVariant(for: url)
         }
         let requestGeneration = generation
         let task = Task<PlatformImage?, Never> { [self] in
@@ -63,7 +64,28 @@ actor ImageCache {
             memory.setObject(result, forKey: key as NSString,
                              cost: Int(width * height * 4))
         }
-        return result
+        // Do not store a smaller fallback under the requested size: a later
+        // online request must still be able to fetch the full-resolution image.
+        return result ?? cachedVariant(for: url)
+    }
+
+    private func cachedVariant(for url: URL) -> PlatformImage? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
+        let otherItems = components.queryItems?.filter { $0.name != "param" } ?? []
+        // Sizes used by app surfaces, including existing on-disk caches from
+        // before cross-size fallback. Probe largest first without a disk scan.
+        let sizes = [1024, 768, 640, 512, 384, 256, 160, 128, 120, 96, 80, 64, 48]
+        for size in [nil] + sizes.map(Optional.some) {
+            components.queryItems = otherItems + (size.map { [URLQueryItem(name: "param", value: "\($0)y\($0)")] } ?? [])
+            if components.queryItems?.isEmpty == true { components.queryItems = nil }
+            guard let candidate = components.url, candidate != url else { continue }
+            let key = Self.cacheKey(for: candidate)
+            if let image = memory.object(forKey: key as NSString) { return image }
+            if let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
+               let image = PlatformImage(data: data) { return image }
+        }
+        return nil
     }
 
     /// Existing views may finish loading their image, but requests started
@@ -92,14 +114,35 @@ actor ImageCache {
     }
 }
 
+/// Keep pixels bound to their source, even while SwiftUI reuses a view for a
+/// different URL or a cancelled request finishes after the next one starts.
+struct CachedImageState {
+    private(set) var url: URL?
+    private var image: PlatformImage?
+
+    init(url: URL? = nil, image: PlatformImage? = nil) {
+        self.url = url
+        self.image = image
+    }
+
+    func image(for url: URL?) -> PlatformImage? {
+        guard let url, self.url == url else { return nil }
+        return image
+    }
+
+    mutating func finish(_ image: PlatformImage?, for url: URL) {
+        guard self.url == url else { return }
+        self.image = image
+    }
+}
+
 /// AsyncImage replacement backed by `ImageCache`, with a crossfade reveal.
 struct CachedAsyncImage<Placeholder: View>: View {
     let url: URL?
     var animated: Bool = true
     @ViewBuilder var placeholder: () -> Placeholder
 
-    @State private var image: PlatformImage?
-    @State private var loadedURL: URL?
+    @State private var imageState: CachedImageState
 
     init(url: URL?, animated: Bool = true,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
@@ -110,14 +153,13 @@ struct CachedAsyncImage<Placeholder: View>: View {
         // tab-bar accessory rebuilt on a tab switch, #46) shows already-decoded
         // artwork immediately instead of flashing the placeholder.
         let seeded = url.flatMap { ImageCache.shared.cachedImage(for: $0) }
-        _image = State(initialValue: seeded)
-        _loadedURL = State(initialValue: seeded == nil ? nil : url)
+        _imageState = State(initialValue: CachedImageState(url: url, image: seeded))
     }
 
     var body: some View {
         ZStack {
             placeholder()
-            if let image {
+            if let image = imageState.image(for: url) {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -126,22 +168,17 @@ struct CachedAsyncImage<Placeholder: View>: View {
         }
         .task(id: url) {
             guard let url else {
-                image = nil
-                loadedURL = nil
+                imageState = CachedImageState()
                 return
             }
-            guard url != loadedURL else { return }
+            guard imageState.image(for: url) == nil else { return }
             // Synchronous memory hit first — no actor hop, no placeholder frame.
-            if let memoryHit = ImageCache.shared.cachedImage(for: url) {
-                image = memoryHit
-                loadedURL = url
-                return
-            }
-            if let cached = await ImageCache.shared.image(for: url) {
-                guard !Task.isCancelled else { return }
-                image = cached
-                loadedURL = url
-            }
+            let memoryHit = ImageCache.shared.cachedImage(for: url)
+            imageState = CachedImageState(url: url, image: memoryHit)
+            guard memoryHit == nil else { return }
+            let cached = await ImageCache.shared.image(for: url)
+            guard !Task.isCancelled else { return }
+            imageState.finish(cached, for: url)
         }
     }
 }

@@ -18,7 +18,7 @@ struct NowPlayingView: View {
     #endif
 
     #if os(iOS)
-    @State private var loadedArtworkImage: PlatformImage?
+    @State private var loadedArtwork = CachedImageState()
     @State private var loadedArtworkColors: ArtworkColors = .fallback
     #endif
     @State private var activeIndex: Int?
@@ -102,7 +102,7 @@ struct NowPlayingView: View {
         .modifier(MeteredDownloadAlert(enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
         #endif
         #if os(iOS)
-        .task(id: player.currentTrack?.id) {
+        .task(id: currentArtworkURL) {
             await loadArtwork()
         }
         #endif
@@ -175,7 +175,7 @@ struct NowPlayingView: View {
         #if os(macOS)
         artworkStore.artwork
         #else
-        loadedArtworkImage
+        loadedArtwork.image(for: currentArtworkURL)
         #endif
     }
 
@@ -183,7 +183,7 @@ struct NowPlayingView: View {
         #if os(macOS)
         artworkStore.colors
         #else
-        loadedArtworkColors
+        artworkImage == nil ? .fallback : loadedArtworkColors
         #endif
     }
 
@@ -207,15 +207,22 @@ struct NowPlayingView: View {
     }
 
     #if os(iOS)
+    private var currentArtworkURL: URL? {
+        player.currentTrack?.album.picUrl?.resizedImageURL(768)
+    }
+
     private func loadArtwork() async {
+        loadedArtworkColors = .fallback
         guard let urlString = player.currentTrack?.album.picUrl,
-              let url = urlString.resizedImageURL(768) else {
-            loadedArtworkImage = nil
-            loadedArtworkColors = .fallback
+              let url = currentArtworkURL else {
+            loadedArtwork = CachedImageState()
             return
         }
-        if let image = await ImageCache.shared.image(for: url) {
-            loadedArtworkImage = image
+        loadedArtwork = CachedImageState(url: url)
+        let image = await ImageCache.shared.image(for: url)
+        guard !Task.isCancelled, currentArtworkURL == url else { return }
+        loadedArtwork.finish(image, for: url)
+        if let image {
             loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
         }
     }
