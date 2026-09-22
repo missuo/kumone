@@ -18,9 +18,11 @@ final class MeteredDownloadCenter: ObservableObject {
 
     private init() {}
 
-    /// Starts the download right away, or asks first on a metered path.
+    /// Starts the download right away, or asks first on a metered path. A bulk
+    /// download that did not ask was never approved for cellular, so it waits
+    /// for Wi-Fi if the device later leaves it; one song never needs approval.
     func request(bulk: Bool, count: Int, network: DownloadNetworkState, run: @escaping (Bool) -> Void) {
-        guard network.needsMeteredConfirmation(bulk: bulk) else { run(true); return }
+        guard network.needsMeteredConfirmation(bulk: bulk) else { run(!bulk); return }
         prompt = MeteredDownloadPrompt(count: count, constrained: network.constrained, run: run)
     }
 }

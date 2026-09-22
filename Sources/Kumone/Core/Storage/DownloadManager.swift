@@ -162,8 +162,10 @@ final class DownloadManager: ObservableObject {
     private var monitor: NWPathMonitor?
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
-    private var libraryRefreshID = UUID()
     private var libraryScanID = UUID()
+    /// Songs merged while the current scan runs; their entries are newer than
+    /// the scan's snapshot, so the scan keeps them when it publishes.
+    private var libraryMergedTrackIDs: Set<Int> = []
     private var batchOperations = 0
     private var preparationSuspended = false
     private var foregroundObserver: NSObjectProtocol?
@@ -293,8 +295,8 @@ final class DownloadManager: ObservableObject {
 
     func activate(accountScope scope: String?) {
         guard accountScope != scope else { return }
-        libraryRefreshID = UUID()
-        libraryScanID = libraryRefreshID
+        libraryScanID = UUID()
+        libraryMergedTrackIDs = []
         accountScope = scope
         offlineTracks = []
         for job in catalog.jobs where job.accountScope != scope {
@@ -357,8 +359,13 @@ final class DownloadManager: ObservableObject {
                 // A new explicit request resumes a paused/waiting shared job.
                 // Active requests can gain approval from another owner without
                 // revoking the networks their existing owner already allowed.
-                if job.status.canResume || (allowsMetered && !job.allowsMetered) {
+                // A live transfer keeps its bytes: its request is only rebuilt
+                // once the path turns metered (see setNetwork).
+                if job.status.canResume {
                     resumableIDs.insert(job.id)
+                } else if allowsMetered && !job.allowsMetered {
+                    if job.status == .downloading { catalog.jobs[i].allowsMetered = true }
+                    else { resumableIDs.insert(job.id) }
                 }
             } else { catalog.jobs.append(DownloadJob(scope: scope, track: track, quality: quality, owner: owner, allowsMetered: allowsMetered)) }
         }
@@ -436,8 +443,8 @@ final class DownloadManager: ObservableObject {
             // A job waiting for the network keeps its session task and its bytes;
             // changing its network policy in either direction must rebuild the
             // task, because the request and resume data carry the old limits.
-            if job.status == .waitingNetwork, job.attempt != nil,
-               allowsMetered == nil || allowsMetered == job.allowsMetered {
+            let policy = allowsMetered ?? job.allowsMetered
+            if job.status == .waitingNetwork, job.attempt != nil, policy == job.liveTransferAllowsMetered {
                 continue
             }
             resumed.append(job)
@@ -460,7 +467,7 @@ final class DownloadManager: ObservableObject {
         for job in resumed {
             if let token = job.token { await store.releaseDownloadReservation(token: token) }
             // Resume blobs contain the previous request's network restrictions.
-            if let allowsMetered, allowsMetered != job.allowsMetered {
+            if (allowsMetered ?? job.allowsMetered) != job.liveTransferAllowsMetered {
                 try? await persistence.saveResumeData(nil, jobID: job.id)
             }
         }
@@ -561,6 +568,14 @@ final class DownloadManager: ObservableObject {
 
     func setNetwork(_ value: DownloadNetworkState) {
         network = value
+        let metered = value.connected && (value.expensive || value.constrained)
+        // Transfers approved for cellular after their Wi-Fi-only request started
+        // would stall here; rebuild them with the approved policy.
+        let widened = Set(catalog.jobs.filter {
+            metered && $0.accountScope == accountScope && !$0.owners.isEmpty && $0.attempt != nil
+                && [.downloading, .waitingNetwork].contains($0.status) && $0.allowsMetered && !$0.liveTransferAllowsMetered
+        }.map(\.id))
+        if !widened.isEmpty { Task { await resumeJobs(widened, restartingActive: true) } }
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == accountScope && !catalog.jobs[i].owners.isEmpty {
             if !value.permits(catalog.jobs[i]) { cancelNetworkRetry(catalog.jobs[i].id) }
             if !value.permits(catalog.jobs[i]), catalog.jobs[i].status == .resolving {
@@ -715,10 +730,11 @@ final class DownloadManager: ObservableObject {
             catalog.jobs[i].descriptor = resource.descriptor
             catalog.jobs[i].expectedBytes = resource.descriptor.byteCount
             catalog.jobs[i].status = .downloading
+            catalog.jobs[i].transferAllowsMetered = catalog.jobs[i].allowsMetered
             publish()
             try await persist()
             guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
-            transport.start(resource: resource, token: token, allowsMetered: catalog.jobs[i].allowsMetered, resumeData: resumeData)
+            transport.start(resource: resource, token: token, allowsMetered: catalog.jobs[i].liveTransferAllowsMetered, resumeData: resumeData)
             fetchMetadata(job)
         } catch {
             await fail(job: job, error: error)
@@ -946,8 +962,8 @@ final class DownloadManager: ObservableObject {
 
     func refreshLibrary() async {
         let requestID = UUID()
-        libraryRefreshID = requestID
         libraryScanID = requestID
+        libraryMergedTrackIDs = []
         guard let scope = accountScope else { offlineTracks = []; return }
         let completedAtStart = Dictionary(uniqueKeysWithValues: catalog.jobs.filter {
             $0.accountScope == scope && $0.status == .complete
@@ -957,14 +973,16 @@ final class DownloadManager: ObservableObject {
         catch { return }
         var result: [OfflineLibraryTrack] = []
         for (trackID, assets) in Dictionary(grouping: available, by: { $0.descriptor.identity.trackID }) {
-            guard libraryRefreshID == requestID, accountScope == scope, !Task.isCancelled else { return }
+            guard libraryScanID == requestID, accountScope == scope, !Task.isCancelled else { return }
             if let track = await metadataReader(trackID, scope)
                 ?? catalog.jobs.first(where: { $0.accountScope == scope && $0.track.id == trackID })?.track {
                 result.append(.init(track: track, assets: assets))
             }
         }
-        guard libraryRefreshID == requestID, accountScope == scope, !Task.isCancelled else { return }
-        offlineTracks = result.sorted(by: Self.precedes)
+        guard libraryScanID == requestID, accountScope == scope, !Task.isCancelled else { return }
+        let merged = libraryMergedTrackIDs
+        offlineTracks = (result.filter { !merged.contains($0.id) } + offlineTracks.filter { merged.contains($0.id) })
+            .sorted(by: Self.precedes)
         let availableIDs = Set(available.map(\.id))
         var changed = false
         for i in catalog.jobs.indices where catalog.jobs[i].accountScope == scope && catalog.jobs[i].status == .complete {
@@ -989,21 +1007,26 @@ final class DownloadManager: ObservableObject {
     }
 
     /// One finished song must not rescan the library: read that song's records
-    /// and merge its entry where a full refresh would have sorted it. The merge
-    /// supersedes an older scan, which cannot see this song's retention yet, and
-    /// steps aside for a newer one, whose own snapshot already covers the song.
+    /// and merge its entry where a full refresh would have sorted it. A scan
+    /// running alongside keeps the merged entry, since its snapshot may predate
+    /// this song's retention, and still publishes every other song. A scan that
+    /// starts later makes the merge step aside; its own snapshot covers the song.
     private func mergeLibraryEntry(trackID: Int, scope: String) async {
-        libraryRefreshID = UUID()
         let scanID = libraryScanID
         guard let records = try? await store.availableRecords(accountScope: scope, trackID: trackID) else { return }
         guard libraryScanID == scanID, accountScope == scope, !Task.isCancelled else { return }
-        guard !records.isEmpty else { offlineTracks.removeAll { $0.id == trackID }; return }
+        guard !records.isEmpty else {
+            libraryMergedTrackIDs.insert(trackID)
+            offlineTracks.removeAll { $0.id == trackID }
+            return
+        }
         let stored = await metadataReader(trackID, scope)
         guard libraryScanID == scanID, accountScope == scope, !Task.isCancelled else { return }
         guard let track = stored ?? catalog.jobs.first(where: { $0.accountScope == scope && $0.track.id == trackID })?.track else { return }
         let entry = OfflineLibraryTrack(track: track, assets: records)
         var merged = offlineTracks.filter { $0.id != trackID }
         merged.insert(entry, at: merged.firstIndex { Self.precedes(entry, $0) } ?? merged.endIndex)
+        libraryMergedTrackIDs.insert(trackID)
         offlineTracks = merged
     }
 

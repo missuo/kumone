@@ -1073,6 +1073,42 @@ struct DownloadManagerTests {
         #expect(try await h.persistence.load().jobs.allSatisfy { $0.status == .complete })
     }
 
+    @Test func completionDuringALibraryScanDoesNotHideARemovedDownload() async throws {
+        let gate = DownloadRestoreGate()
+        var blockNextRead = false
+        let h = try DownloadHarness(metadataReader: { id, _ in
+            if id == 3, blockNextRead { blockNextRead = false; await gate.wait() }
+            return nil
+        })
+        defer { gate.open(); h.close() }
+        let kept = try JSONDecoder().decode(Track.self, from: Data("{\"id\":3,\"name\":\"Kept\",\"dt\":3000}".utf8))
+        await h.enqueue()
+        await h.manager.enqueue(track: kept, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 2 }
+        try h.transport.finish(h.transport.started[0])
+        try h.transport.finish(h.transport.started[1])
+        try await waitForDownload { h.manager.offlineTracks.count == 2 }
+
+        // The song's audio disappears; the next full scan must notice.
+        let lease = try #require(try await h.store.acquire(accountScope: "test-account", trackID: 1, preferredQuality: "exhigh"))
+        try await h.store.release(lease)
+        try FileManager.default.removeItem(at: lease.url)
+        let next = try JSONDecoder().decode(Track.self, from: Data("{\"id\":2,\"name\":\"Just downloaded\",\"dt\":3000}".utf8))
+        await h.manager.enqueue(track: next, quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.transport.started.count == 3 }
+
+        blockNextRead = true
+        let scan = Task { await h.manager.refreshLibrary() }
+        try await waitForDownload { gate.entered }
+        try h.transport.finish(h.transport.started[2])
+        try await waitForDownload { h.manager.offlineTracks.contains { $0.id == 2 } }
+        gate.open()
+        await scan.value
+        #expect(h.manager.offlineTracks.map(\.id) == [2, 3])
+        #expect(h.manager.jobs.first { $0.track.id == 1 }?.status == .failed)
+        #expect(h.manager.jobs.first { $0.track.id == 2 }?.status == .complete)
+    }
+
     @Test func libraryScanStillReportsAnActuallyMissingDownload() async throws {
         let h = try DownloadHarness()
         defer { h.close() }
@@ -1304,11 +1340,47 @@ struct DownloadManagerTests {
         let original = h.transport.started[0]
         await h.manager.enqueue(tracks: [h.track], owner: "playlist:new", name: "New playlist",
                                 quality: "exhigh", allowsMetered: !originalApproval)
+        // Widening approval on Wi-Fi keeps the live transfer and its bytes.
+        #expect(h.transport.cancelled.isEmpty)
+        #expect(h.transport.started.count == 1)
+        #expect(h.manager.jobs.first?.allowsMetered == true)
+        #expect(try await h.persistence.load().jobs.first?.allowsMetered == true)
+
+        // Only a metered path forces the Wi-Fi-only request to be rebuilt.
+        h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
         if !originalApproval { try await waitForDownload { h.transport.started.count == 2 } }
         #expect(h.transport.cancelled.contains(original.token) == !originalApproval)
         #expect(h.transport.started.count == (originalApproval ? 1 : 2))
-        #expect(h.manager.jobs.first?.allowsMetered == true)
         #expect(h.transport.started.last?.metered == true)
+        #expect(h.transport.started.last?.resumed == false)
+        try h.transport.finish(try #require(h.transport.started.last))
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test func pausingAWidenedTransferDropsItsWiFiOnlyResumeData() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        let id = try #require(h.manager.jobs.first?.id)
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
+        await h.manager.pause(id)
+        #expect(await h.persistence.resumeData(jobID: id) != nil)
+        await h.manager.resume(id)
+        #expect(await h.persistence.resumeData(jobID: id) == nil)
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(h.transport.started[1].metered && !h.transport.started[1].resumed)
+    }
+
+    @Test(arguments: [false, true])
+    func bulkDownloadsOnlyUseCellularWhenTheUserApprovedIt(bulk: Bool) {
+        let wifi = DownloadNetworkState(connected: true, expensive: false, constrained: false)
+        for network in [wifi, .unknown] {
+            var approval: Bool?
+            MeteredDownloadCenter.shared.request(bulk: bulk, count: 1, network: network) { approval = $0 }
+            #expect(approval == !bulk)
+            #expect(MeteredDownloadCenter.shared.prompt == nil)
+        }
     }
 
     @Test func meteredConfirmationOnlyCoversBulkDownloadsAndLowDataMode() {

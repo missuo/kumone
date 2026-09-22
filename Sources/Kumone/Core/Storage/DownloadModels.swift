@@ -33,6 +33,9 @@ struct DownloadJob: Codable, Identifiable {
     var owners: Set<String>
     var status: DownloadStatus = .queued
     var allowsMetered = false
+    /// The network policy the live transfer's request was built with. Approval
+    /// can widen mid-transfer without restarting it; nil in older catalogs.
+    var transferAllowsMetered: Bool?
     var attempt: UUID?
     var descriptor: OfflineAudioDescriptor?
     var assetID: String?
@@ -54,6 +57,7 @@ struct DownloadJob: Codable, Identifiable {
     }
 
     var token: String? { attempt.map { "\(id.uuidString).\($0.uuidString)" } }
+    var liveTransferAllowsMetered: Bool { transferAllowsMetered ?? allowsMetered }
     var retentionOwner: String { "download:\(id.uuidString)" }
 
     mutating func resetTransferState() {
