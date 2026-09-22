@@ -1045,8 +1045,23 @@ final class PlayerService: ObservableObject {
             guard item.status == .failed, let error = item.error, Self.isConnectivityFailure(error) else { return }
             Task { @MainActor in
                 guard let self, generation == self.resolveGeneration else { return }
-                self.unavailableOffline(track, generation: generation,
-                                        autoAdvance: self.currentWasAdvanced && self.progress < 0.5)
+                // A reachable network does not guarantee a reachable CDN. Claim
+                // this recovery before closing the failed loader, so its late
+                // callbacks cannot race the local fallback or a newer song.
+                let scope = self.offlineAccountScope
+                let position = max(self.progress, self.livePlaybackTime)
+                self.resolveGeneration += 1
+                let recoveryGeneration = self.resolveGeneration
+                self.itemStatusObservation = nil
+                self.engine.replaceCurrentItem(with: nil)
+                self.playbackCacheSession = nil
+                await PlaybackCacheController.shared.stop().value
+                guard recoveryGeneration == self.resolveGeneration, scope == self.offlineAccountScope else { return }
+                if await self.playCachedFallback(track, generation: recoveryGeneration, scope: scope,
+                                                 quality: SettingsManager.shared.audioQuality.rawValue,
+                                                 resumeAt: position) { return }
+                self.unavailableOffline(track, generation: recoveryGeneration,
+                                        autoAdvance: self.currentWasAdvanced && position < 0.5)
             }
         }
         if let assetTrack, let mix = AudioSpectrum.shared.makeAudioMix(for: assetTrack) {
