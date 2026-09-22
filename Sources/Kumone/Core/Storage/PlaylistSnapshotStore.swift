@@ -35,6 +35,7 @@ actor PlaylistSnapshotStore {
     static let shared = PlaylistSnapshotStore(directory: KumonePaths.applicationSupport.appendingPathComponent("playlists"))
     let directory: URL
     private var refreshes: [URL: (token: UUID, background: Bool)] = [:]
+    private var foregroundRefreshes: [URL: Set<UUID>] = [:]
     private var removedTracks: [URL: Set<Int>] = [:]
 
     init(directory: URL) { self.directory = directory }
@@ -49,8 +50,9 @@ actor PlaylistSnapshotStore {
     /// An opened playlist takes priority over a background library refresh.
     func beginRefresh(id: Int, scope: String, background: Bool) -> UUID? {
         let url = file(id: id, scope: scope)
-        if background, refreshes[url]?.background == false { return nil }
+        if background, foregroundRefreshes[url]?.isEmpty == false { return nil }
         let token = UUID()
+        if !background { foregroundRefreshes[url, default: []].insert(token) }
         refreshes[url] = (token, background)
         removedTracks[url] = []
         return token
@@ -62,6 +64,8 @@ actor PlaylistSnapshotStore {
 
     func finishRefresh(id: Int, scope: String, token: UUID) {
         let url = file(id: id, scope: scope)
+        foregroundRefreshes[url]?.remove(token)
+        if foregroundRefreshes[url]?.isEmpty == true { foregroundRefreshes[url] = nil }
         guard refreshes[url]?.token == token else { return }
         refreshes[url] = nil
         removedTracks[url] = nil

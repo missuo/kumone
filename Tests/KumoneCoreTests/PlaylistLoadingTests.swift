@@ -234,6 +234,59 @@ import Testing
         #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [2])
     }
 
+    @Test func simultaneousForegroundLoadsFinishWithoutOverwritingTheNewerSnapshot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let first = try response(ids: [1, 2], loaded: [1])
+        let second = try response(ids: [1, 3], loaded: [1, 3])
+        let phone = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                await gate.wait()
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        let request = Task { await phone.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.entered)
+        let carPlay = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in second })
+        await carPlay.load()
+        // The older visible page still has priority over background sync even
+        // after the newer foreground caller has finished.
+        #expect(await store.beginRefresh(id: 1, scope: "a", background: true) == nil)
+        gate.open()
+        await request.value
+        #expect(phone.tracks.map(\.id) == [1, 2] && phone.canDownloadAll)
+        #expect(carPlay.tracks.map(\.id) == [1, 3] && carPlay.canDownloadAll)
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [1, 3])
+    }
+
+    @Test func aSupersededForegroundLoadStillHonorsCancellation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root), gate = PlaylistGate()
+        defer { gate.open() }
+        let first = try response(ids: [1, 2], loaded: [1])
+        let second = try response(ids: [3], loaded: [3])
+        let phone = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in first }, tracksLoader: { chunk in
+                await gate.wait()
+                return .init(songs: try response(ids: chunk, loaded: chunk).playlist.tracks, privileges: [])
+            })
+        let request = Task { await phone.load() }
+        for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(gate.entered)
+        let carPlay = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in second })
+        await carPlay.load()
+        request.cancel()
+        gate.open()
+        await request.value
+        #expect(phone.tracks.map(\.id) == [1])
+        #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [3])
+    }
+
     @Test func switchingAccountRejectsThePreviousAccountsLateResponse() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-playlist-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -338,12 +391,16 @@ import Testing
         #expect(model.canDownloadAll)
     }
 
-    @Test func anOlderRequestCannotReplaceARetriedPlaylist() async throws {
+    @Test(arguments: [false, true])
+    func anOlderRequestCannotReplaceARetriedPlaylist(persisted: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = persisted ? PlaylistSnapshotStore(directory: root) : nil
         let gate = PlaylistGate()
         defer { gate.open() }
         var calls = 0
         let old = try response(ids: [1], loaded: [1]), new = try response(ids: [2], loaded: [2])
-        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" }, detailLoader: { _ in
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "test" }, detailLoader: { _ in
             calls += 1
             if calls == 1 { await gate.wait(); return old }
             return new
@@ -355,6 +412,7 @@ import Testing
         gate.open()
         await first.value
         #expect(model.tracks.map(\.id) == [2] && model.canDownloadAll)
+        if let store { #expect(await store.load(id: 1, scope: "test")?.detail.tracks.map(\.id) == [2]) }
     }
 
     @Test func aFailedPageCanBeRetried() async throws {

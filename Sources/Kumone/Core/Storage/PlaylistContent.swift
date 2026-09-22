@@ -84,7 +84,7 @@ final class PlaylistContent: ObservableObject {
         }
         do {
             let response = try await detailLoader(playlistID)
-            guard await current(generation, scope: scope, token: token) else { return }
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
             var loaded = response.playlist
             // Some responses include songs but omit membership IDs. Preserve
             // that order without treating a partial response as a complete list.
@@ -110,24 +110,24 @@ final class PlaylistContent: ObservableObject {
             merge(privileges: response.privileges)
             isLoading = false
             await save(scope: scope, token: token)
-            try await loadRemainingTracks(generation: generation, scope: scope, token: token)
+            try await loadRemainingTracks(generation: generation, scope: scope, token: token, background: background)
         } catch {
-            guard await current(generation, scope: scope, token: token) else { return }
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
             errorMessage = error is OfflineAudioError
                 ? String(localized: "无法加载歌单，请重试") : error.localizedDescription
         }
     }
 
-    private func loadRemainingTracks(generation: Int, scope: String, token: UUID?) async throws {
+    private func loadRemainingTracks(generation: Int, scope: String, token: UUID?, background: Bool) async throws {
         guard let detail, tracks.count < detail.trackIds.count else { return }
         isLoadingMore = true
         let loadedIDs = Set(tracks.map(\.id))
         let remaining = detail.trackIds.map(\.id).filter { !loadedIDs.contains($0) && !reducedRecommendationIDs.contains($0) }
         for chunk in stride(from: 0, to: remaining.count, by: 500)
             .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-            guard await current(generation, scope: scope, token: token) else { return }
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
             let response = try await tracksLoader(chunk)
-            guard await current(generation, scope: scope, token: token) else { return }
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
             let known = Dictionary((tracks + response.songs).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             tracks = (self.detail?.trackIds ?? []).compactMap { known[$0.id] }
                 .filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
@@ -140,9 +140,12 @@ final class PlaylistContent: ObservableObject {
         generation == loadGeneration && !Task.isCancelled && scope == accountScope()
     }
 
-    private func current(_ generation: Int, scope: String, token: UUID?) async -> Bool {
+    private func current(_ generation: Int, scope: String, token: UUID?, background: Bool) async -> Bool {
         guard valid(generation, scope: scope) else { return false }
-        if let snapshots, let token, !(await snapshots.isCurrent(id: playlistID, scope: scope, token: token)) { return false }
+        // Each visible caller finishes its own list. The newest refresh alone
+        // may save the shared snapshot; superseded background work can stop.
+        if background, let snapshots, let token,
+           !(await snapshots.isCurrent(id: playlistID, scope: scope, token: token)) { return false }
         return valid(generation, scope: scope)
     }
 
