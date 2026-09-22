@@ -1193,6 +1193,69 @@ struct DownloadManagerTests {
         try await waitForDownload { h.manager.jobs.first?.status == .complete }
     }
 
+    @Test(arguments: [false, true], [DownloadStatus.waitingNetwork, .paused])
+    func newCollectionAppliesMeteredApprovalToAnExistingSharedJob(liveTransfer: Bool, status: DownloadStatus) async throws {
+        let h = try DownloadHarness(expensive: !liveTransfer)
+        defer { h.close() }
+        await h.enqueue()
+        if liveTransfer { try await waitForDownload { h.transport.started.count == 1 } }
+        h.manager.setNetwork(.init(connected: true, expensive: true, constrained: false))
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        let id = try #require(h.manager.jobs.first?.id)
+        if status == .paused { await h.manager.pause(id) }
+        let startsBeforeRequest = h.transport.started.count
+        #expect(h.manager.jobs.first?.owners == ["single:1"])
+
+        // The collection button resumes its own jobs before attaching a new
+        // owner; that first step cannot find the existing single-song request.
+        await h.manager.resumeCollection("playlist:new", allowsMetered: true)
+        #expect(h.manager.jobs.first?.status == status)
+        await h.manager.enqueue(tracks: [h.track], owner: "playlist:new", name: "New playlist",
+                                quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == startsBeforeRequest + 1 }
+        #expect(h.manager.jobs.count == 1)
+        #expect(h.manager.jobs.first?.id == id)
+        #expect(h.manager.jobs.first?.owners == ["single:1", "playlist:new"])
+        let transfer = try #require(h.transport.started.last)
+        #expect(transfer.metered && !transfer.resumed)
+        try h.transport.finish(transfer)
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+    }
+
+    @Test func newCollectionResumesAPausedSharedJobWithItsNewWiFiRestriction() async throws {
+        let h = try DownloadHarness(expensive: true)
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: true)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let id = try #require(h.manager.jobs.first?.id)
+        await h.manager.pause(id)
+        await h.manager.enqueue(tracks: [h.track], owner: "playlist:new", name: "New playlist",
+                                quality: "exhigh", allowsMetered: false)
+        try await waitForDownload { h.manager.jobs.first?.status == .waitingNetwork }
+        #expect(h.transport.started.count == 1)
+        #expect(h.manager.jobs.first?.allowsMetered == false)
+        #expect(await h.persistence.resumeData(jobID: id) == nil)
+        h.manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
+        try await waitForDownload { h.transport.started.count == 2 }
+        #expect(!h.transport.started[1].metered && !h.transport.started[1].resumed)
+    }
+
+    @Test(arguments: [false, true])
+    func newCollectionOnlyWidensAnActiveSharedJobsNetworkApproval(originalApproval: Bool) async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.manager.enqueue(track: h.track, quality: "exhigh", allowsMetered: originalApproval)
+        try await waitForDownload { h.transport.started.count == 1 }
+        let original = h.transport.started[0]
+        await h.manager.enqueue(tracks: [h.track], owner: "playlist:new", name: "New playlist",
+                                quality: "exhigh", allowsMetered: !originalApproval)
+        if !originalApproval { try await waitForDownload { h.transport.started.count == 2 } }
+        #expect(h.transport.cancelled.contains(original.token) == !originalApproval)
+        #expect(h.transport.started.count == (originalApproval ? 1 : 2))
+        #expect(h.manager.jobs.first?.allowsMetered == true)
+        #expect(h.transport.started.last?.metered == true)
+    }
+
     @Test func meteredConfirmationOnlyCoversBulkDownloadsAndLowDataMode() {
         let wifi = DownloadNetworkState(connected: true, expensive: false, constrained: false)
         #expect(!wifi.needsMeteredConfirmation(bulk: true) && !wifi.needsMeteredConfirmation(bulk: false))

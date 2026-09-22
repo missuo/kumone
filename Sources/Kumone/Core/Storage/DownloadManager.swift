@@ -349,16 +349,16 @@ final class DownloadManager: ObservableObject {
                                              savedAt: Date()))
         }
         var seen: Set<Int> = []
+        var resumableIDs: Set<UUID> = []
         for track in tracks where seen.insert(track.id).inserted {
             if let i = catalog.jobs.firstIndex(where: { $0.accountScope == scope && $0.track.id == track.id && $0.quality == quality }) {
                 catalog.jobs[i].owners.insert(owner)
-                if catalog.jobs[i].status == .cancelled { catalog.jobs[i].resetTransferState() }
-                if [.cancelled, .failed, .unavailable].contains(catalog.jobs[i].status) {
-                    cancelNetworkRetry(catalog.jobs[i].id)
-                    catalog.jobs[i].allowsMetered = allowsMetered
-                    catalog.jobs[i].status = .queued
-                    catalog.jobs[i].errorMessage = nil
-                    catalog.jobs[i].retries = 0
+                let job = catalog.jobs[i]
+                // A new explicit request resumes a paused/waiting shared job.
+                // Active requests can gain approval from another owner without
+                // revoking the networks their existing owner already allowed.
+                if job.status.canResume || (allowsMetered && !job.allowsMetered) {
+                    resumableIDs.insert(job.id)
                 }
             } else { catalog.jobs.append(DownloadJob(scope: scope, track: track, quality: quality, owner: owner, allowsMetered: allowsMetered)) }
         }
@@ -370,6 +370,9 @@ final class DownloadManager: ObservableObject {
                 if catalog.jobs[i].owners.isEmpty { await cancel(id) }
             }
         }
+        // Attach every owner before restarting shared jobs, so the scheduler
+        // always sees the complete collection request.
+        await resumeJobs(resumableIDs, allowsMetered: allowsMetered, restartingActive: true)
         publish()
         do { try await persist(); errorMessage = nil; schedule(); return true }
         catch { errorMessage = String(localized: "无法保存下载任务"); return false }
@@ -425,11 +428,11 @@ final class DownloadManager: ObservableObject {
         await resumeJobs(Set(pendingJobs.filter { $0.owners.contains(owner) }.map(\.id)), allowsMetered: allowsMetered)
     }
 
-    private func resumeJobs(_ ids: Set<UUID>, allowsMetered: Bool? = nil) async {
+    private func resumeJobs(_ ids: Set<UUID>, allowsMetered: Bool? = nil, restartingActive: Bool = false) async {
         var resumed: [DownloadJob] = []
         for i in catalog.jobs.indices where ids.contains(catalog.jobs[i].id) && catalog.jobs[i].accountScope == accountScope {
             let job = catalog.jobs[i]
-            guard job.status.canResume else { continue }
+            guard job.status.canResume || (restartingActive && [.queued, .resolving, .downloading].contains(job.status)) else { continue }
             // A job waiting for the network keeps its session task and its bytes;
             // changing its network policy in either direction must rebuild the
             // task, because the request and resume data carry the old limits.
@@ -439,6 +442,7 @@ final class DownloadManager: ObservableObject {
             }
             resumed.append(job)
             cancelNetworkRetry(job.id)
+            workers.removeValue(forKey: job.id)?.task.cancel()
             if job.status == .cancelled { catalog.jobs[i].resetTransferState() }
             catalog.jobs[i].attempt = nil
             catalog.jobs[i].status = .queued
