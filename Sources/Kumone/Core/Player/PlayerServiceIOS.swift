@@ -206,6 +206,13 @@ final class PlayerService: ObservableObject {
     private var pendingAutoAdvance = false
     private var currentWasAdvanced = false
 
+    // MARK: - Queue prefetch (song cache)
+
+    /// Fills the cache with the next few songs while the network is free.
+    private let queuePrefetcher = QueuePrefetcher()
+    private var prefetchObservations: Set<AnyCancellable> = []
+    private var prefetchUpdateScheduled = false
+
     private enum ResolvedURLLoadResult {
         case loaded
         case superseded
@@ -287,6 +294,7 @@ final class PlayerService: ObservableObject {
         networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.networkState = network
         }
+        observePrefetchInputs()
         // The cache keeps its default limit until something writes to it, and
         // trims to that on every release; a cache-only session must not lose
         // songs on the way.
@@ -1143,6 +1151,53 @@ final class PlayerService: ObservableObject {
                                fm: fmUpcoming, isFM: isFMMode, repeatAll: repeatMode == .all)
     }
 
+    /// Everything the prefetch window depends on. `@Published` fires before
+    /// the value lands, so the update itself waits for the next turn.
+    private func observePrefetchInputs() {
+        let player: [AnyPublisher<Void, Never>] = [
+            $queue.map { _ in }.eraseToAnyPublisher(), $shuffledQueue.map { _ in }.eraseToAnyPublisher(),
+            $shuffleEnabled.map { _ in }.eraseToAnyPublisher(), $playNextList.map { _ in }.eraseToAnyPublisher(),
+            $currentIndex.map { _ in }.eraseToAnyPublisher(), $currentTrack.map { _ in }.eraseToAnyPublisher(),
+            $fmUpcoming.map { _ in }.eraseToAnyPublisher(), $isFMMode.map { _ in }.eraseToAnyPublisher(),
+            $repeatMode.map { _ in }.eraseToAnyPublisher(), $isPlaying.map { _ in }.eraseToAnyPublisher(),
+            $isBuffering.map { _ in }.eraseToAnyPublisher(),
+        ]
+        let environment: [AnyPublisher<Void, Never>] = [
+            DownloadManager.shared.$network.map { _ in }.eraseToAnyPublisher(),
+            DownloadManager.shared.$jobs.map { _ in }.eraseToAnyPublisher(),
+            SettingsManager.shared.$enableAudioCache.map { _ in }.eraseToAnyPublisher(),
+            SettingsManager.shared.$audioQuality.map { _ in }.eraseToAnyPublisher(),
+            NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).map { _ in }.eraseToAnyPublisher(),
+        ]
+        Publishers.MergeMany(player + environment)
+            .sink { [weak self] _ in self?.scheduleUpdatePrefetch() }
+            .store(in: &prefetchObservations)
+    }
+
+    private func scheduleUpdatePrefetch() {
+        guard !prefetchUpdateScheduled else { return }
+        prefetchUpdateScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.prefetchUpdateScheduled = false
+            self.updatePrefetch()
+        }
+    }
+
+    private func updatePrefetch() {
+        guard isPlaying, !isBuffering, SettingsManager.shared.enableAudioCache, let current = currentTrack,
+              QueuePrefetcher.permits(network: networkState, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        else { queuePrefetcher.update(nil); return }
+        let upcoming = PrefetchLimits().window(nextCandidates().map(\.track))
+        guard !upcoming.isEmpty else { queuePrefetcher.update(nil); return }
+        let scope = offlineAccountScope
+        let pending = Set(DownloadManager.shared.pendingJobs.filter { $0.accountScope == scope }.map(\.track.id))
+        queuePrefetcher.update(.init(scope: scope, currentTrackID: current.id, tracks: upcoming,
+                                     quality: SettingsManager.shared.audioQuality.rawValue,
+                                     allowsUnblock: SettingsManager.shared.canResolveUnblockedTracks,
+                                     pendingDownloadTrackIDs: pending))
+    }
+
     /// A downloaded copy of the track. Online it must match the chosen quality
     /// or better; offline, any quality will do.
     private func acquireOfflineLease(for track: Track, generation: Int, reusing lease: OfflinePlaybackLease? = nil,
@@ -1293,6 +1348,7 @@ final class PlayerService: ObservableObject {
         offlineScan = nil
         offlineScanID = UUID()
         offlineIssue = nil
+        scheduleUpdatePrefetch()
         guard offlinePlaybackLease != nil else { return }
         resolveGeneration += 1
         engine.replaceCurrentItem(with: nil)

@@ -49,6 +49,26 @@ enum PlaybackQueuePlan {
     }
 }
 
+/// How far ahead the song cache fills while the network is free: a few songs,
+/// a short stretch of listening, and a bounded number of bytes.
+struct PrefetchLimits: Equatable {
+    var tracks = 5
+    var seconds: TimeInterval = 20 * 60
+    var bytes: Int64 = 100_000_000
+
+    func window(_ candidates: [Track]) -> [Track] {
+        var result: [Track] = []
+        var duration: TimeInterval = 0
+        for track in candidates {
+            guard result.count < tracks, track.duration.isFinite, track.duration > 0,
+                  duration + track.duration <= seconds else { break }
+            result.append(track)
+            duration += track.duration
+        }
+        return result
+    }
+}
+
 struct OfflineQueueSelection {
     let candidate: PlaybackQueueCandidate
     /// Nil when the song sits in the platform's song cache rather than a download.
