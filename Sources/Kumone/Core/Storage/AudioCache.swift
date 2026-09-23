@@ -114,9 +114,12 @@ actor AudioCache {
         return entry
     }
 
-    /// Tracks with a complete cached copy, for offline availability.
-    func cachedTrackIDs() throws -> Set<Int> {
-        Set(try completedEntries().map(\.metadata.trackID))
+    /// Tracks with a complete cached copy this player may use, for offline
+    /// availability; the same rule as `fallbackEntry`.
+    func cachedTrackIDs(allowsUnblock: Bool) throws -> Set<Int> {
+        Set(try completedEntries()
+            .filter { allowsUnblock || !$0.metadata.source.requiresUnblockEnabled }
+            .map(\.metadata.trackID))
     }
 
     func retain(_ entry: AudioCacheEntry) -> UUID {

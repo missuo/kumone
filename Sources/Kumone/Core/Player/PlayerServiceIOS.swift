@@ -287,6 +287,12 @@ final class PlayerService: ObservableObject {
         networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.networkState = network
         }
+        // The cache keeps its default limit until something writes to it, and
+        // trims to that on every release; a cache-only session must not lose
+        // songs on the way.
+        if SettingsManager.shared.enableAudioCache {
+            Task { try? await AudioCache.shared.enforce(maximumSizeMB: await SettingsManager.shared.effectiveAudioCacheSizeMB()) }
+        }
         restoreState()
     }
 
@@ -1121,8 +1127,8 @@ final class PlayerService: ObservableObject {
         guard generation == resolveGeneration, let response else { return }
         lyrics = LyricsParser.parse(response)
         updateLyricsCursor(at: progress)
-        if let scope, DownloadManager.shared.isDownloaded(trackID: track.id) {
-            try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope)
+        if let scope, SettingsManager.shared.enableAudioCache || DownloadManager.shared.isDownloaded(trackID: track.id) {
+            await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: response, scope: scope)
         }
     }
 

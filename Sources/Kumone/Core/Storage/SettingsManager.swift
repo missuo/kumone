@@ -323,7 +323,9 @@ final class SettingsManager: ObservableObject {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
-        audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool ?? true
+        // A size somebody chose stays chosen; the untouched default becomes automatic.
+        audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool
+            ?? (defaults.object(forKey: Keys.audioCacheSizeMB) as? Int).map { $0 == AudioCache.defaultMaximumSizeMB } ?? true
         let storedAudioCacheSizeMB = defaults.object(forKey: Keys.audioCacheSizeMB) as? Int
             ?? AudioCache.defaultMaximumSizeMB
         let normalizedAudioCacheSizeMB = Self.normalizedAudioCacheSizeMB(storedAudioCacheSizeMB)

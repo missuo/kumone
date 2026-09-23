@@ -69,6 +69,7 @@ final class StorageSpaceModel: ObservableObject {
                 #else
                 try await AudioCache.shared.clear()
                 #endif
+                await DownloadManager.shared.refreshCachedTracks()
                 message = String(localized: "歌曲缓存已清除")
             default: return
             }

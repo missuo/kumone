@@ -60,6 +60,17 @@ actor OfflineMetadataStore {
         if let (url, data) = await cover { try? saveArtwork(data, url: url, scope: scope) }
     }
 
+    /// What a song the cache holds needs to show offline like a download: its
+    /// record, its lyrics and its artwork. Artwork is fetched once.
+    func keepPlaybackData(track: Track, lyrics: LyricResponse?, scope: String) async {
+        try? save(track: track, scope: scope)
+        if let lyrics { try? save(lyrics: lyrics, trackID: track.id, scope: scope) }
+        guard let url = track.album.picUrl.flatMap(URL.init(string:)), artwork(url: url, scope: scope) == nil else { return }
+        if let (url, data) = await fetchArtwork(track: track), !Task.isCancelled {
+            try? saveArtwork(data, url: url, scope: scope)
+        }
+    }
+
     /// Keep display data for audio, pending downloads and the current queue.
     /// Recent writes get a short grace period for in-flight playback/download setup.
     func pruneUnused(audio: OfflineStore, protectedTracks: [String: Set<Int>], force: Bool = false) async throws {

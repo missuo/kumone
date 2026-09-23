@@ -148,10 +148,11 @@ struct StorageSpaceView: View {
         }
         #else
         .task(id: [settings.enableAudioCache ? (settings.audioCacheAutomatic ? -1 : settings.audioCacheSizeMB) : 0]) {
-            guard settings.enableAudioCache else { return }
-            let limit = await settings.effectiveAudioCacheSizeMB()
+            guard settings.enableAudioCache else { await DownloadManager.shared.refreshCachedTracks(); return }
+            let limit = await settings.effectiveAudioCacheSizeMB(refresh: true)
             automaticLimitMB = settings.audioCacheAutomatic ? limit : nil
             try? await AudioCache.shared.enforce(maximumSizeMB: limit)
+            await DownloadManager.shared.refreshCachedTracks()
             await model.reload()
         }
         #endif

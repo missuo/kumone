@@ -972,11 +972,13 @@ final class DownloadManager: ObservableObject {
         }
         if changed { publish(); try? await persist() }
         await pruneCollections()
-        // Metadata outlives audio only for downloads still on their way.
-        let pending = Dictionary(grouping: catalog.jobs.filter { !$0.owners.isEmpty && $0.status != .complete }, by: \.accountScope)
-            .mapValues { Set($0.map(\.track.id)) }
-        try? await metadata.pruneUnused(audio: store, protectedTracks: pending)
         await refreshCachedTracks()
+        // Metadata outlives audio only for downloads on their way and for the
+        // songs the cache holds.
+        var protected = Dictionary(grouping: catalog.jobs.filter { !$0.owners.isEmpty && $0.status != .complete }, by: \.accountScope)
+            .mapValues { Set($0.map(\.track.id)) }
+        protected[scope, default: []].formUnion(cachedTrackIDs)
+        try? await metadata.pruneUnused(audio: store, protectedTracks: protected)
     }
 
     func refreshCachedTracks() async {
@@ -991,7 +993,7 @@ final class DownloadManager: ObservableObject {
         return await EngineAudioCache.shared.cachedTrackIDs()
         #else
         guard SettingsManager.shared.enableAudioCache else { return [] }
-        return (try? await AudioCache.shared.cachedTrackIDs()) ?? []
+        return (try? await AudioCache.shared.cachedTrackIDs(allowsUnblock: SettingsManager.shared.canResolveUnblockedTracks)) ?? []
         #endif
     }
 
@@ -1096,7 +1098,10 @@ final class DownloadManager: ObservableObject {
 
     private func refresh(_ state: TrackDownloadState) {
         let job = pendingJobsByTrackID[state.trackID]
-        let isOffline = offlineTracksByID[state.trackID] != nil || cachedTrackIDs.contains(state.trackID)
+        // A cached copy only stands in when the network is gone; online, the
+        // song's own playability decides, as it does upstream.
+        let cachedOffline = network.isKnown && !network.connected && cachedTrackIDs.contains(state.trackID)
+        let isOffline = offlineTracksByID[state.trackID] != nil || cachedOffline
         state.apply(.init(jobID: job?.id, status: job?.status, isDownloaded: downloadedTrackIDs.contains(state.trackID),
                           isOffline: isOffline, needsNetwork: network.isKnown && !network.connected && !isOffline,
                           accountScope: accountScope))

@@ -2545,9 +2545,8 @@ final class PlayerService: ObservableObject {
         let response = try? await NeteaseAPI.lyric(id: track.id)
         guard generation == resolveGeneration, let response else { return }
         applyLyrics(response)
-        if let scope, DownloadManager.shared.isDownloaded(trackID: track.id) {
-            try? await OfflineMetadataStore.shared.save(lyrics: response, trackID: track.id, scope: scope)
-        }
+        // The engine caches every song it streams, so each one may play offline.
+        if let scope { await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: response, scope: scope) }
     }
 
     private func applyLyrics(_ response: LyricResponse) {
