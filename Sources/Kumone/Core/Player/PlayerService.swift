@@ -788,8 +788,8 @@ final class PlayerService: ObservableObject {
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
-        pendingAutoAdvance = !userInitiated
         if usesOfflineQueue, !nextCandidates().isEmpty {
+            pendingAutoAdvance = !userInitiated
             advanceOffline()
             return
         }
@@ -799,6 +799,7 @@ final class PlayerService: ObservableObject {
         }
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
+            pendingAutoAdvance = !userInitiated
             startPlaying(track, indexUnchanged: true)
             return
         }
@@ -817,6 +818,7 @@ final class PlayerService: ObservableObject {
             idx = 0
         }
         currentIndex = idx
+        pendingAutoAdvance = !userInitiated
         startPlaying(activeQueue[idx])
     }
 
@@ -2446,6 +2448,9 @@ final class PlayerService: ObservableObject {
 
     private func adoptTransitionedTrack(on deck: Deck) {
         guard let next = pendingTransitionTrack else { return }
+        // A hand-over is an automatic advance, and the outgoing download is done.
+        releaseOfflineLease()
+        currentWasAdvanced = true
         scrobbleIfNeeded(completed: true)
         scrobbled = false
         consecutiveFailures = 0

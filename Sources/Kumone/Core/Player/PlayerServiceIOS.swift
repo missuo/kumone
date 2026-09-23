@@ -583,8 +583,8 @@ final class PlayerService: ObservableObject {
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
-        pendingAutoAdvance = !userInitiated
         if usesOfflineQueue, !nextCandidates().isEmpty {
+            pendingAutoAdvance = !userInitiated
             advanceOffline()
             return
         }
@@ -594,6 +594,7 @@ final class PlayerService: ObservableObject {
         }
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
+            pendingAutoAdvance = !userInitiated
             startPlaying(track, indexUnchanged: true)
             return
         }
@@ -612,6 +613,7 @@ final class PlayerService: ObservableObject {
             idx = 0
         }
         currentIndex = idx
+        pendingAutoAdvance = !userInitiated
         startPlaying(activeQueue[idx])
     }
 
