@@ -109,7 +109,10 @@ actor OfflineStore {
         defer { importing.remove(id) }
         var record: OfflineAudioRecord
         if let existing = try db.record(id: id) {
-            guard existing.descriptor == descriptor, existing.state != .deleting else { throw OfflineAudioError.changedResource }
+            guard existing.descriptor == descriptor else { throw OfflineAudioError.changedResource }
+            // Removed while it plays: the file goes when playback lets go of it,
+            // and this copy has to wait for that.
+            guard existing.state != .deleting else { throw OfflineAudioError.busy }
             if existing.state == .complete { return }
             record = existing
         } else {

@@ -2923,8 +2923,8 @@ final class PlayerService: ObservableObject {
         deckLoaded = true
         hasLocalFile = true
         deckFiles[activeDeck] = lease.url
-        currentLocalURL = lease.url
-        persistCurrentLyricsSidecar()
+        // Not `currentLocalURL`: that is the cache file the stem pre-render and
+        // the lyric sidecar write next to, and downloads are not cache entries.
         isBuffering = false
         duration = fileDuration
         if isPlaying {
@@ -2998,6 +2998,7 @@ final class PlayerService: ObservableObject {
             }
             self.offlineScan = nil
             guard let selected else {
+                self.pendingAutoAdvance = false
                 self.offlineIssue = .init(kind: .emptyQueue, trackName: nil)
                 self.isBuffering = false
                 NowPlayingManager.shared.updateElapsed(self.progress, rate: 0)

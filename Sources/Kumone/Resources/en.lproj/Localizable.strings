@@ -391,6 +391,7 @@
 "存储空间不足，请释放空间后重试" = "Not enough storage. Free up space and retry.";
 "音频校验失败，请重试" = "Audio verification failed. Retry the download.";
 "无法保存音频，请重试" = "Unable to save the audio. Please retry.";
+"歌曲正在使用中，请稍后重试" = "The song is in use. Please try again later.";
 "无法解析音源地址，请检查网络后重试" = "The audio server could not be found. Check your connection and retry.";
 "下载失败，请检查网络或账号权限后重试" = "Download failed. Check your connection or account access and retry.";
 "本地文件缺失，请重新下载" = "The local file is missing. Download it again.";

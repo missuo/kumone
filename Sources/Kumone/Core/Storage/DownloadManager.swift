@@ -878,6 +878,7 @@ final class DownloadManager: ObservableObject {
             case .insufficientSpace: return String(localized: "存储空间不足，请释放空间后重试")
             case .checksumMismatch, .invalidAudio, .incomplete, .invalidResponse, .changedResource:
                 return String(localized: "音频校验失败，请重试")
+            case .busy: return String(localized: "歌曲正在使用中，请稍后重试")
             default: return String(localized: "无法保存音频，请重试")
             }
         }

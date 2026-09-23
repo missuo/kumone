@@ -88,7 +88,7 @@ enum OfflineContextResolver {
         let downloads = DownloadManager.shared
         let scope = AccountStore.shared.offlineScope
         await downloads.start()
-        guard scope == AccountStore.shared.offlineScope, downloads.accountScope == scope else { throw CancellationError() }
+        guard scope == AccountStore.shared.offlineScope else { throw CancellationError() }
         if context.kind == .playlist, let scope,
            let saved = await PlaylistSnapshotStore.shared.load(id: context.id, scope: scope) {
             guard scope == AccountStore.shared.offlineScope else { throw CancellationError() }
@@ -100,14 +100,16 @@ enum OfflineContextResolver {
         }
         let liked = context.kind == .playlist && AccountStore.shared.likedSongsPlaylist?.id == context.id
             ? AccountStore.shared.likedTrackIDs : []
-        let local = downloads.localTracks(for: context, likedTrackIDs: liked)
+        // The manager may still be switching accounts; then it has nothing to offer.
+        let local = downloads.accountScope == scope ? downloads.localTracks(for: context, likedTrackIDs: liked) : []
         if offline {
             if !local.isEmpty { return (local, context.source) }
             throw URLError(.notConnectedToInternet)
         }
         do {
-            if context.kind == .playlist {
-                // Loading through the model saves the snapshot for offline browsing.
+            if context.kind == .playlist, scope != nil {
+                // Loading through the model saves the snapshot for offline browsing;
+                // without an account scope it has nowhere to save and loads nothing.
                 let model = PlaylistContent(playlistID: context.id)
                 await model.load()
                 guard model.detail != nil, !model.tracks.isEmpty || model.detail?.trackCount == 0 else {

@@ -743,15 +743,18 @@ final class PlayerService: ObservableObject {
             }
         } catch {
             guard generation == resolveGeneration else { return }
-            // The network went away since the check above.
+            // A download covers a request that died on the network. Anything
+            // else keeps upstream's path: third-party sources, then the cache.
             if ConnectivityFailure.matches(error) {
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
                     await playOfflineFile(lease, for: track, generation: generation)
                     return
                 }
                 guard generation == resolveGeneration else { return }
-                unavailableOffline(track, generation: generation)
-                return
+                if usesOfflineQueue {
+                    unavailableOffline(track, generation: generation)
+                    return
+                }
             }
         }
         guard generation == resolveGeneration else { return }
@@ -1228,6 +1231,7 @@ final class PlayerService: ObservableObject {
             }
             self.offlineScan = nil
             guard let selected else {
+                self.pendingAutoAdvance = false
                 self.offlineIssue = .init(kind: .emptyQueue, trackName: nil)
                 self.isBuffering = false
                 NowPlayingManager.shared.updateElapsed(self.progress, rate: 0)
