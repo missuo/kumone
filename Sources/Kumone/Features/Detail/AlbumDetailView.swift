@@ -10,6 +10,8 @@ struct AlbumDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var showFullDescription = false
+    @State private var loadGeneration = 0
+    @ObservedObject private var downloads = DownloadManager.shared
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -23,7 +25,34 @@ struct AlbumDetailView: View {
         #endif
     }
 
+    /// Only a collection with songs to show may replace the online page,
+    /// otherwise an empty list would hide the error and its retry button.
+    private var savedCollectionID: String? {
+        let id = "album:\(albumID)"
+        return downloads.downloadedSongs(in: id).isEmpty ? nil : id
+    }
+
     var body: some View {
+        Group {
+            if let savedCollectionID, !downloads.network.connected || errorMessage != nil {
+                DownloadedMusicView(collectionID: savedCollectionID)
+            } else { onlineContent }
+        }
+        .task(id: "\(albumID):\(downloads.network.connected)") {
+            if downloads.network.connected || savedCollectionID == nil { await load() }
+        }
+        .toolbar {
+            if errorMessage != nil, downloads.network.connected, album != nil || savedCollectionID != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("重试")
+                        .help("重试")
+                }
+            }
+        }
+    }
+
+    private var onlineContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
                 if let album {
@@ -83,28 +112,31 @@ struct AlbumDetailView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .task(id: albumID) {
-            await load()
-        }
     }
 
     private func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
+        defer { if generation == loadGeneration { isLoading = false } }
         do {
             let response = try await NeteaseAPI.album(id: albumID)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             album = response.album
             tracks = response.songs
             isLoading = false
             if let dynamic = try? await NeteaseAPI.albumDynamic(id: albumID) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 isSubscribed = dynamic.isSub ?? false
             }
             if let artistID = response.album.artist?.id,
                let albums = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 12) {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 otherAlbums = albums.hotAlbums.filter { $0.id != albumID }
             }
         } catch {
-            isLoading = false
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -194,6 +226,8 @@ struct AlbumDetailView: View {
                 }
                 .buttonStyle(.pressable)
 
+                DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
+
                 if account.isLoggedIn {
                     Button {
                         toggleSubscribe()
@@ -279,6 +313,8 @@ struct AlbumDetailView: View {
                             .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                     }
                     .buttonStyle(.pressable)
+
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name)
 
                     if account.isLoggedIn {
                         Button {

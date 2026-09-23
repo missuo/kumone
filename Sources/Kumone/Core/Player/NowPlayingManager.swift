@@ -152,11 +152,15 @@ final class NowPlayingManager {
         // needs high-resolution art to engage.
         guard let url = track.album.picUrl?.resizedImageURL(1024) else { return }
         artworkTask = Task { [weak self] in
-            guard let image = await ImageCache.shared.image(for: url),
-                  let self, !Task.isCancelled else { return }
-            let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-            self.info[MPMediaItemPropertyArtwork] = artwork
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = self.info
+            let apply: ImageCache.CachedImageHandler = { [weak self] image in
+                guard let self, !Task.isCancelled else { return }
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                self.info[MPMediaItemPropertyArtwork] = artwork
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = self.info
+            }
+            if let image = await ImageCache.shared.image(for: url, onCachedImage: apply) {
+                apply(image)
+            }
         }
     }
 
@@ -165,5 +169,14 @@ final class NowPlayingManager {
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
+    }
+
+    func clear() {
+        artworkTask?.cancel()
+        artworkTask = nil
+        info = [:]
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
+        MPRemoteCommandCenter.shared().likeCommand.isActive = false
     }
 }

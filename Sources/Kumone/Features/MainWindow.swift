@@ -110,8 +110,17 @@ struct MainWindow: View {
         )
         #endif
         .playerChrome(detailWidth: detailWidth)
+        #if os(macOS)
+        .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }))
+        .modifier(MeteredDownloadAlert())
+        #endif
         .environment(\.openLogin, { showLogin = true })
         .environment(\.openDestination, openDestination)
+        .onReceive(NotificationCenter.default.publisher(for: .showDownloadedMusic)) { _ in
+            player.showNowPlaying = false
+            selection = .downloaded
+            path = []
+        }
         #if os(macOS)
         .environmentObject(artworkStore)
         #endif
@@ -124,6 +133,8 @@ struct MainWindow: View {
             artworkStore.setArtworkNeeded(needsCurrentArtwork)
 #endif
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
+            await DownloadManager.shared.start()
+            if KumonePaths.isOfflineUITest { selection = .downloaded }
             await account.bootstrap()
         }
         .onChange(of: settings.showDesktopLyrics) { _ in
@@ -223,6 +234,8 @@ struct MainWindow: View {
     @ViewBuilder
     private var rootView: some View {
         switch selection {
+        case .downloaded:
+            DownloadedMusicView()
         case .home:
             HomeView()
         case .explore:

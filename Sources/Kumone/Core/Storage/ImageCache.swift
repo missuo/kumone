@@ -5,67 +5,125 @@ import SwiftUI
 /// Two-tier (memory + disk) image cache with in-flight request coalescing.
 actor ImageCache {
     static let shared = ImageCache()
+    typealias CachedImageHandler = @MainActor @Sendable (PlatformImage) -> Void
 
     private nonisolated(unsafe) let memory = NSCache<NSString, PlatformImage>()
-    private let fileManager = FileManager.default
-    private let diskURL: URL
-    private var inflight: [String: Task<PlatformImage?, Never>] = [:]
+    nonisolated let directory: URL
+    private let session: URLSession
+    private let offlineArtwork: @Sendable (URL) async -> Data?
+    private var generation: UInt64 = 0
+    private struct Request {
+        let generation: UInt64
+        let task: Task<PlatformImage?, Never>
+    }
+    private var inflight: [String: Request] = [:]
 
-    private init() {
+    init(directory: URL = KumonePaths.imageCache, session: URLSession = .shared,
+         offlineArtwork: @escaping @Sendable (URL) async -> Data? = { await ImageCache.loadOfflineArtwork(for: $0) }) {
+        self.directory = directory
+        self.session = session
+        self.offlineArtwork = offlineArtwork
         memory.countLimit = 300
         memory.totalCostLimit = 64 * 1024 * 1024
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        diskURL = caches.appendingPathComponent("im.missuo.Kumone/images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    func image(for url: URL) async -> PlatformImage? {
+    private static func loadOfflineArtwork(for url: URL) async -> Data? {
+        guard let scope = await MainActor.run(body: { AccountStore.shared.offlineScope }) else { return nil }
+        return await OfflineMetadataStore.shared.artwork(url: url, scope: scope)
+    }
+
+    /// Surface local pixels before waiting for a larger version. The returned
+    /// image still prefers the requested resolution, including after reconnect.
+    func image(for url: URL, onCachedImage: CachedImageHandler? = nil) async -> PlatformImage? {
         let key = Self.cacheKey(for: url)
         if let cached = memory.object(forKey: key as NSString) {
             return cached
         }
+        let requestGeneration = generation
+        // The exact file, decoded once: it is both the preview and the answer.
+        let exact = onCachedImage == nil ? nil : diskImage(for: key)
+        if let onCachedImage, let preview = exact ?? cachedVariant(for: url) {
+            await onCachedImage(preview)
+        }
+        guard !Task.isCancelled else { return nil }
+        // Delivering the preview hops to MainActor; another caller may have
+        // completed the exact request while this actor was suspended.
+        if let cached = memory.object(forKey: key as NSString) { return cached }
         if let existing = inflight[key] {
-            return await existing.value
+            let result = await existing.task.value
+            return result ?? cachedVariant(for: url)
         }
-        let task = Task<PlatformImage?, Never> { [diskURL, fileManager] in
-            let fileURL = diskURL.appendingPathComponent(key)
-            do {
-                try fileManager.createDirectory(at: diskURL, withIntermediateDirectories: true)
-                if fileManager.fileExists(atPath: fileURL.path) {
-                    let data = try Data(contentsOf: fileURL)
-                    if let image = PlatformImage(data: data) {
-                        return image
-                    }
-                    try fileManager.removeItem(at: fileURL)
-                }
-            } catch {
-                print("Image cache disk lookup failed: \(error)")
-            }
-
-            do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-                      let image = PlatformImage(data: data) else { return nil }
-                do {
-                    try data.write(to: fileURL, options: .atomic)
-                } catch {
-                    print("Image cache disk write failed: \(error)")
-                }
+        let task = Task<PlatformImage?, Never> { [self] in
+            let fileURL = directory.appendingPathComponent(key)
+            if let image = exact ?? diskImage(for: key) {
                 return image
-            } catch {
-                print("Image download failed: \(error)")
-                return nil
             }
+            if let data = await offlineArtwork(url),
+               let image = PlatformImage(data: data) { return image }
+            guard let (data, response) = try? await session.data(from: url),
+                  (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+                  let image = PlatformImage(data: data) else { return nil }
+            if generation == requestGeneration { try? data.write(to: fileURL, options: .atomic) }
+            return image
         }
-        inflight[key] = task
+        inflight[key] = Request(generation: requestGeneration, task: task)
         let result = await task.value
-        inflight[key] = nil
-        if let result {
+        if inflight[key]?.generation == requestGeneration { inflight[key] = nil }
+        if generation == requestGeneration, let result {
             let width = result.size.width
             let height = result.size.height
             memory.setObject(result, forKey: key as NSString,
                              cost: Int(width * height * 4))
         }
-        return result
+        // Do not store a smaller fallback under the requested size: a later
+        // online request must still be able to fetch the full-resolution image.
+        return result ?? cachedVariant(for: url)
+    }
+
+    private func diskImage(for key: String) -> PlatformImage? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)) else { return nil }
+        return PlatformImage(data: data)
+    }
+
+    private func cachedVariant(for url: URL) -> PlatformImage? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
+        let otherItems = components.queryItems?.filter { $0.name != "param" } ?? []
+        // Sizes used by app surfaces, including existing on-disk caches from
+        // before cross-size fallback. Probe largest first without a disk scan.
+        let sizes = [1024, 768, 640, 512, 384, 256, 160, 128, 120, 96, 80, 64, 48]
+        for size in [nil] + sizes.map(Optional.some) {
+            components.queryItems = otherItems + (size.map { [URLQueryItem(name: "param", value: "\($0)y\($0)")] } ?? [])
+            if components.queryItems?.isEmpty == true { components.queryItems = nil }
+            guard let candidate = components.url, candidate != url else { continue }
+            let key = Self.cacheKey(for: candidate)
+            if let image = memory.object(forKey: key as NSString) { return image }
+            if let image = diskImage(for: key) { return image }
+        }
+        return nil
+    }
+
+    func usage() throws -> CacheUsage {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+        let bytes = files.reduce(Int64(0)) { total, file in
+            total + Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return CacheUsage(bytes: bytes)
+    }
+
+    /// Existing views may finish loading their image, but requests started
+    /// before the clear cannot refill either disk or memory caches afterwards.
+    func clear() throws {
+        generation += 1
+        memory.removeAllObjects()
+        if FileManager.default.fileExists(atPath: directory.path) {
+            let info = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard info.isDirectory == true, info.isSymbolicLink != true else { throw OfflineAudioError.invalidResource }
+            try FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     /// Synchronous in-memory lookup — safe off the actor (`NSCache` is
@@ -75,38 +133,31 @@ actor ImageCache {
         memory.object(forKey: Self.cacheKey(for: url) as NSString)
     }
 
-    func usage() throws -> CacheUsage {
-        try fileManager.createDirectory(at: diskURL, withIntermediateDirectories: true)
-        let files = try fileManager.contentsOfDirectory(
-            at: diskURL,
-            includingPropertiesForKeys: [.fileAllocatedSizeKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-        let bytes = try files.reduce(into: Int64(0)) { total, fileURL in
-            let values = try fileURL.resourceValues(forKeys: [.fileAllocatedSizeKey, .fileSizeKey])
-            total += Int64(values.fileAllocatedSize ?? values.fileSize ?? 0)
-        }
-        return CacheUsage(bytes: bytes)
-    }
-
-    func clear() throws {
-        try fileManager.createDirectory(at: diskURL, withIntermediateDirectories: true)
-        let files = try fileManager.contentsOfDirectory(
-            at: diskURL,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )
-        for fileURL in files {
-            try fileManager.removeItem(at: fileURL)
-        }
-        inflight.values.forEach { $0.cancel() }
-        inflight.removeAll()
-        memory.removeAllObjects()
-    }
-
     private static func cacheKey(for url: URL) -> String {
         let digest = Insecure.MD5.hash(data: Data(url.absoluteString.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Keep pixels bound to their source, even while SwiftUI reuses a view for a
+/// different URL or a cancelled request finishes after the next one starts.
+struct CachedImageState {
+    private(set) var url: URL?
+    private var image: PlatformImage?
+
+    init(url: URL? = nil, image: PlatformImage? = nil) {
+        self.url = url
+        self.image = image
+    }
+
+    func image(for url: URL?) -> PlatformImage? {
+        guard let url, self.url == url else { return nil }
+        return image
+    }
+
+    mutating func finish(_ image: PlatformImage?, for url: URL) {
+        guard self.url == url else { return }
+        self.image = image
     }
 }
 
@@ -116,8 +167,7 @@ struct CachedAsyncImage<Placeholder: View>: View {
     var animated: Bool = true
     @ViewBuilder var placeholder: () -> Placeholder
 
-    @State private var image: PlatformImage?
-    @State private var loadedURL: URL?
+    @State private var imageState: CachedImageState
 
     init(url: URL?, animated: Bool = true,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
@@ -128,14 +178,13 @@ struct CachedAsyncImage<Placeholder: View>: View {
         // tab-bar accessory rebuilt on a tab switch, #46) shows already-decoded
         // artwork immediately instead of flashing the placeholder.
         let seeded = url.flatMap { ImageCache.shared.cachedImage(for: $0) }
-        _image = State(initialValue: seeded)
-        _loadedURL = State(initialValue: seeded == nil ? nil : url)
+        _imageState = State(initialValue: CachedImageState(url: url, image: seeded))
     }
 
     var body: some View {
         ZStack {
             placeholder()
-            if let image {
+            if let image = imageState.image(for: url) {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -144,22 +193,21 @@ struct CachedAsyncImage<Placeholder: View>: View {
         }
         .task(id: url) {
             guard let url else {
-                image = nil
-                loadedURL = nil
+                imageState = CachedImageState()
                 return
             }
-            guard url != loadedURL else { return }
             // Synchronous memory hit first — no actor hop, no placeholder frame.
-            if let memoryHit = ImageCache.shared.cachedImage(for: url) {
-                image = memoryHit
-                loadedURL = url
-                return
+            let memoryHit = ImageCache.shared.cachedImage(for: url)
+            if imageState.url != url || memoryHit != nil {
+                imageState = CachedImageState(url: url, image: memoryHit)
             }
-            if let cached = await ImageCache.shared.image(for: url) {
+            guard memoryHit == nil else { return }
+            let cached = await ImageCache.shared.image(for: url) { preview in
                 guard !Task.isCancelled else { return }
-                image = cached
-                loadedURL = url
+                imageState.finish(preview, for: url)
             }
+            guard !Task.isCancelled, let cached else { return }
+            imageState.finish(cached, for: url)
         }
     }
 }

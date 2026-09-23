@@ -132,6 +132,7 @@ else
 fi
 
 # Localization tables → Bundle.main
+cp "$ROOT/Sources/Kumone/Resources/PrivacyInfo.xcprivacy" "$APP_BUNDLE/Contents/Resources/"
 for lproj in "$ROOT"/Sources/Kumone/Resources/*.lproj; do
   [ -d "$lproj" ] && cp -R "$lproj" "$APP_BUNDLE/Contents/Resources/"
 done

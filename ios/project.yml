@@ -17,6 +17,8 @@ targets:
     platform: iOS
     sources:
       - KumoneIOS
+      - path: ../Sources/Kumone/Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     configFiles:
       Debug: Config/Debug.xcconfig
       Release: Config/Release.xcconfig

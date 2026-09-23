@@ -105,6 +105,9 @@ struct Track: Codable, Hashable, Identifiable {
         try c.encode(mvID, forKey: .mv)
         try c.encode(trackNo, forKey: .no)
         try c.encodeIfPresent(disc, forKey: .cd)
+        if isCloud { try c.encode([String: String](), forKey: .pc) }
+        if noCopyright { try c.encode([String: String](), forKey: .noCopyrightRcmd) }
+        try c.encodeIfPresent(embeddedPrivilege, forKey: .privilege)
     }
 }
 

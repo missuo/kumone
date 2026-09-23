@@ -140,6 +140,7 @@ let package = Package(
                 .target(name: "KumoneObjC", condition: .when(platforms: [.macOS])),
             ],
             path: "Tests/KumoneCoreTests",
+            resources: [.copy("Fixtures")],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
             ] + cltTestingSwiftSettings,

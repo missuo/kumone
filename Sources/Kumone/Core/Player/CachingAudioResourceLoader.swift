@@ -1028,7 +1028,7 @@ final class CachingAudioResourceLoader: NSObject {
         return (lowerBound, inclusiveUpperBound + 1, totalLength)
     }
 
-    private static func fileExtension(for url: URL, contentType: String?) -> String? {
+    static func fileExtension(for url: URL, contentType: String?) -> String? {
         let pathExtension = url.pathExtension.lowercased()
         if !pathExtension.isEmpty,
            pathExtension.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }),

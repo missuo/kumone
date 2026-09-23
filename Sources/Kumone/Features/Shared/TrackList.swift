@@ -39,9 +39,29 @@ struct TrackRow: View {
     @State private var isHovering = false
     @State private var showAddToPlaylist = false
     @State private var isReducingRecommendation = false
+    /// Only this track's download state, so another row's transfer cannot
+    /// re-evaluate this body four times a second.
+    @ObservedObject private var downloadState: TrackDownloadState
+
+    init(track: Track, index: Int, style: TrackRowStyle = .full, playability: TrackPlayability = .playable,
+         trailingText: String? = nil, removableFromPlaylistID: Int? = nil, onRemoved: (() -> Void)? = nil,
+         onRecommendationReduced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
+        self.track = track
+        self.index = index
+        self.style = style
+        self.playability = playability
+        self.trailingText = trailingText
+        self.removableFromPlaylistID = removableFromPlaylistID
+        self.onRemoved = onRemoved
+        self.onRecommendationReduced = onRecommendationReduced
+        self.onPlay = onPlay
+        _downloadState = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
+    }
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
-    private var isPlayable: Bool { playability == .playable }
+    private var isOffline: Bool { downloadState.isOffline }
+    private var isPlayable: Bool { playability == .playable || isOffline }
+    private var needsNetwork: Bool { downloadState.needsNetwork }
     private var showsArtwork: Bool { style != .albumTrack }
 
     private var hidesLeadingIndex: Bool {
@@ -112,7 +132,7 @@ struct TrackRow: View {
                 }
             }
 
-            if let reason = playability.reason {
+            if let reason = playability.reason, !isOffline {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
@@ -128,13 +148,14 @@ struct TrackRow: View {
             }
 
             likeAndDuration
+                .padding(.leading, isCompact ? 12 : 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, isCompact ? 6 : 5)
         // Fixed row height keeps lazy-stack height estimation exact,
         // preventing scroll-offset jumps in long lists (#3).
         .frame(height: rowHeight)
-        .opacity(isPlayable ? 1 : 0.45)
+        .opacity(isPlayable && !needsNetwork ? 1 : 0.45)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
                 .fill(isHovering ? Color.primary.opacity(0.06) : .clear)
@@ -145,17 +166,22 @@ struct TrackRow: View {
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
-            if isPlayable { onPlay() }
+            playSelectedTrack()
         }
         #else
         .onTapGesture {
-            if isPlayable { onPlay() }
+            playSelectedTrack()
         }
         #endif
         .contextMenu { contextMenuItems }
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track)
         }
+    }
+
+    private func playSelectedTrack() {
+        if needsNetwork { ToastCenter.shared.show(String(localized: "此歌曲需要联网播放")) }
+        else if isPlayable { onPlay() }
     }
 
     @ViewBuilder
@@ -273,6 +299,12 @@ struct TrackRow: View {
 
     private var likeAndDuration: some View {
         HStack(spacing: 8) {
+            #if os(macOS)
+            // A saved track already keeps the button visible through its own state.
+            TrackDownloadButton(track: track, isVisible: isHovering)
+            #else
+            TrackDownloadButton(track: track, isVisible: false)
+            #endif
             let liked = account.isLiked(track.id)
             Button {
                 Task { await account.toggleLike(trackID: track.id) }
@@ -294,6 +326,7 @@ struct TrackRow: View {
     @ViewBuilder
     private var contextMenuItems: some View {
         Button("播放") { onPlay() }
+        TrackDownloadActions(track: track)
         Button("下一首播放") {
             player.addToPlayNext(track)
         }
@@ -553,6 +586,7 @@ struct TrackListView: View {
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
+    var selection: Binding<Set<Int>>?
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -561,7 +595,7 @@ struct TrackListView: View {
         LazyVStack(spacing: 1) {
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 let recommendationHandler = onRecommendationReduced
-                TrackRow(
+                let row = TrackRow(
                     track: track,
                     index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
                     style: style,
@@ -575,6 +609,27 @@ struct TrackListView: View {
                     player.play(tracks: playableTracks, source: source, startAt: track,
                                 context: context)
                 }
+                if let selection {
+                    let selected = selection.wrappedValue.contains(track.id)
+                    Button {
+                        if selected { selection.wrappedValue.remove(track.id) }
+                        else { selection.wrappedValue.insert(track.id) }
+                    } label: {
+                        HStack(spacing: 0) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                                .frame(width: 32)
+                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                        .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                    .accessibilityIdentifier("select-download-\(track.id)")
+                } else { row }
             }
         }
     }
@@ -584,6 +639,9 @@ struct TrackListView: View {
     }
 
     private func playability(of track: Track) -> TrackPlayability {
+        // Read, not observed: each row watches its own download state, so a
+        // transfer elsewhere must not rebuild the whole list.
+        if DownloadManager.shared.offlineTracksByID[track.id] != nil { return .playable }
         // With unblock enabled, gray tracks resolve from third-party sources.
         if SettingsManager.shared.canResolveUnblockedTracks { return .playable }
         return track.playability(

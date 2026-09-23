@@ -122,19 +122,26 @@ final class SettingsManager: ObservableObject {
         static let mainWindowAmbientBackgroundIntensity = "settings.mainWindowAmbientBackgroundIntensity"
         static let enableAudioCache = "settings.enableAudioCache"
         static let audioCacheSizeMB = "settings.audioCacheSizeMB"
+        static let audioCacheAutomatic = "settings.audioCacheAutomatic"
     }
 
     @Published var audioQuality: AudioQuality {
         didSet { UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality) }
     }
 
-    static let audioCacheSizeRangeMB = 100...1_000
+    static let audioCacheSizeRangeMB = 100...10_000
     static let audioCacheSizeStepMB = 100
 
     /// Use locally stored audio files before resolving a remote source and
     /// retain completed remote playback for future requests.
     @Published var enableAudioCache: Bool {
         didSet { UserDefaults.standard.set(enableAudioCache, forKey: Keys.enableAudioCache) }
+    }
+
+    /// Size the song cache from the device's free space instead of
+    /// `audioCacheSizeMB`; see `AutomaticCacheLimit`.
+    @Published var audioCacheAutomatic: Bool {
+        didSet { UserDefaults.standard.set(audioCacheAutomatic, forKey: Keys.audioCacheAutomatic) }
     }
 
     static func normalizedAudioCacheSizeMB(_ value: Int) -> Int {
@@ -316,6 +323,9 @@ final class SettingsManager: ObservableObject {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
+        // A size somebody chose stays chosen; the untouched default becomes automatic.
+        audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool
+            ?? (defaults.object(forKey: Keys.audioCacheSizeMB) as? Int).map { $0 == AudioCache.defaultMaximumSizeMB } ?? true
         let storedAudioCacheSizeMB = defaults.object(forKey: Keys.audioCacheSizeMB) as? Int
             ?? AudioCache.defaultMaximumSizeMB
         let normalizedAudioCacheSizeMB = Self.normalizedAudioCacheSizeMB(storedAudioCacheSizeMB)
