@@ -16,12 +16,22 @@ final class StorageSpaceModel: ObservableObject {
          accountScope: @escaping @MainActor () -> String? = { AccountStore.shared.offlineScope }) {
         self.audio = audio
         self.images = images
+        let musicCaches = Self.musicCacheDirectories
         self.reader = reader ?? StorageUsageReader(
-            roots: KumonePaths.storageRoots + [images.directory, Bundle.main.bundleURL],
-            imageDirectory: images.directory, musicCacheDirectories: [],
+            roots: KumonePaths.storageRoots + [images.directory, Bundle.main.bundleURL] + musicCaches,
+            imageDirectory: images.directory, musicCacheDirectories: musicCaches,
             downloadDirectory: audio.directory.appendingPathComponent("downloads"),
             volumeURL: KumonePaths.applicationSupport)
         self.accountScope = accountScope
+    }
+
+    /// The song cache the player on this platform actually writes to.
+    static var musicCacheDirectories: [URL] {
+        #if os(macOS)
+        [KumoneDirectories.caches("Audio")]
+        #else
+        [AudioCache.shared.directory]
+        #endif
     }
 
     func reload(clearMessage: Bool = true) async {
@@ -52,10 +62,17 @@ final class StorageSpaceModel: ObservableObject {
             switch category {
             case .imageCache:
                 try await images.clear()
-                message = String(localized: "图片缓存已清理")
+                message = String(localized: "图片缓存已清除")
+            case .musicCache:
+                #if os(macOS)
+                await EngineAudioCache.shared.removeAll()
+                #else
+                try await AudioCache.shared.clear()
+                #endif
+                message = String(localized: "歌曲缓存已清除")
             default: return
             }
-        } catch { message = String(localized: "缓存清理失败，请稍后重试") }
+        } catch { message = String(localized: "缓存清除失败，请稍后重试") }
         await reload(clearMessage: false)
     }
 }

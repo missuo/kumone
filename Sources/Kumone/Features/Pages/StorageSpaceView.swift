@@ -4,6 +4,7 @@ import SwiftUI
 struct StorageSpaceView: View {
     let onManageDownloads: () -> Void
     @StateObject private var model = StorageSpaceModel()
+    @EnvironmentObject private var settings: SettingsManager
     @State private var clearing: StorageCategory?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -47,26 +48,45 @@ struct StorageSpaceView: View {
                 usageRow("图片缓存", icon: "photo.on.rectangle", category: .imageCache)
                 Button(role: .destructive) { clearing = .imageCache } label: {
                     HStack {
-                        Text("清理图片缓存")
+                        Text("清除图片缓存")
                         if model.clearingCategory == .imageCache { Spacer(); ProgressView().controlSize(.small) }
                     }
                 }
                     .disabled(busy || (model.snapshot?[.imageCache] ?? 0) == 0)
             } footer: {
-                Text("浏览时保存的临时图片。清理后可重新加载，已下载歌曲的离线封面会保留。")
+                Text("浏览时保存的临时图片。清除后可重新加载，已下载歌曲的离线封面会保留。")
             }
 
             Section {
-                usageRow("音乐缓存", icon: "music.note", category: .musicCache)
+                usageRow("歌曲缓存", icon: "music.note", category: .musicCache)
+                #if os(macOS)
+                Picker("歌曲缓存上限", selection: $settings.audioCacheLimit) {
+                    Text("512 MB").tag(Int64(512) << 20)
+                    Text("2 GB").tag(Int64(2) << 30)
+                    Text("8 GB").tag(Int64(8) << 30)
+                    Text("不限").tag(Int64(0))
+                }
+                #else
+                Toggle("歌曲缓存", isOn: $settings.enableAudioCache)
+                if settings.enableAudioCache {
+                    Picker("歌曲缓存上限", selection: $settings.audioCacheSizeMB) {
+                        ForEach(Array(stride(from: SettingsManager.audioCacheSizeRangeMB.lowerBound,
+                                             through: SettingsManager.audioCacheSizeRangeMB.upperBound,
+                                             by: SettingsManager.audioCacheSizeStepMB)), id: \.self) { megabytes in
+                            Text(format(Int64(megabytes) * 1_000_000)).tag(megabytes)
+                        }
+                    }
+                }
+                #endif
                 Button(role: .destructive) { clearing = .musicCache } label: {
                     HStack {
-                        Text("清理音乐缓存")
+                        Text("清除歌曲缓存")
                         if model.clearingCategory == .musicCache { Spacer(); ProgressView().controlSize(.small) }
                     }
                 }
                     .disabled(busy || (model.snapshot?[.musicCache] ?? 0) == 0)
             } footer: {
-                Text("播放时保存的临时音频。清理不会移除已下载歌曲，正在使用的音频也会保留。")
+                Text("最近播放过的歌曲会暂存在本机，断网时也能重播。已下载的歌曲不占用这里的空间。")
             }
 
             Section {
@@ -116,22 +136,33 @@ struct StorageSpaceView: View {
                 await model.reload()
             }
         }
+        #if os(macOS)
+        .onChange(of: settings.audioCacheLimit) { _, _ in
+            Task { await model.reload() }
+        }
+        #else
+        .task(id: [settings.enableAudioCache ? settings.audioCacheSizeMB : 0]) {
+            guard settings.enableAudioCache else { return }
+            try? await AudioCache.shared.enforce(maximumSizeMB: settings.audioCacheSizeMB)
+            await model.reload()
+        }
+        #endif
         .alert(clearTitle, isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }), presenting: clearing) { category in
-            Button("清理", role: .destructive) {
+            Button("清除", role: .destructive) {
                 Task { await model.clear(category) }
                 clearing = nil
             }
             Button("取消", role: .cancel) { clearing = nil }
         } message: { category in
             Text(category == .imageCache
-                 ? String(localized: "清理临时图片缓存，保留已下载歌曲的离线封面。")
-                 : String(localized: "清理后，未下载的缓存歌曲需要联网才能再次播放。已下载和正在使用的音频会保留。"))
+                 ? String(localized: "清除临时图片缓存，保留已下载歌曲的离线封面。")
+                 : String(localized: "清除后，缓存过的歌曲需要联网才能再次播放。已下载的歌曲不受影响。"))
         }
     }
 
     private var busy: Bool { model.isLoading || model.isClearing }
     private var clearTitle: String {
-        clearing == .imageCache ? String(localized: "清理图片缓存？") : String(localized: "清理音乐缓存？")
+        clearing == .imageCache ? String(localized: "清除图片缓存？") : String(localized: "清除歌曲缓存？")
     }
     private var deviceName: String {
         #if os(macOS)

@@ -84,6 +84,9 @@ actor AudioCache {
     private var clearAfterRelease: Set<URL> = []
     private var maximumSizeMB = AudioCache.defaultMaximumSizeMB
 
+    /// Where the cache lives, for storage accounting.
+    nonisolated var directory: URL { cacheDirectory }
+
     init(cacheDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.cacheDirectory = cacheDirectory ?? fileManager.urls(

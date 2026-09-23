@@ -5,12 +5,8 @@ struct SettingsView: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
     @Environment(\.dismiss) private var dismiss
-    @State private var audioCacheUsage: String = String(localized: "计算中…")
-    @State private var imageCacheUsage: String = String(localized: "计算中…")
-    @State private var cacheError: String?
     #if os(macOS)
     @ObservedObject private var downloader = StemModelDownloader.shared
-    @State private var audioCacheSize: String = String(localized: "计算中…")
     #endif
 
     var body: some View {
@@ -197,93 +193,6 @@ struct SettingsView: View {
                 } label: {
                     Label("存储空间", systemImage: "internaldrive")
                 }
-                #if os(iOS)
-                // The cross-platform #109 song cache. On macOS the real playback
-                // cache is EngineAudioCache (its own controls below), so these
-                // controls would be inert there — keep them iOS-only.
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle(
-                        "歌曲缓存",
-                        isOn: Binding(
-                            get: { settings.enableAudioCache },
-                            set: { enabled in
-                                settings.enableAudioCache = enabled
-                                if enabled {
-                                    Task { await enforceAudioCacheLimit() }
-                                }
-                            }
-                        )
-                    )
-                    Text("关闭后将不读取或缓存歌曲")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if settings.enableAudioCache {
-                        Slider(
-                            value: Binding(
-                                get: { Double(settings.audioCacheSizeMB) },
-                                set: { settings.audioCacheSizeMB = Int($0.rounded()) }
-                            ),
-                            in: Double(SettingsManager.audioCacheSizeRangeMB.lowerBound)...Double(
-                                SettingsManager.audioCacheSizeRangeMB.upperBound
-                            ),
-                            step: Double(SettingsManager.audioCacheSizeStepMB)
-                        )
-                        HStack {
-                            Text("100 MB")
-                            Spacer()
-                            Text("1 GB")
-                        }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("\(audioCacheUsage) / \(audioCacheLimit)")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清理") {
-                            Task { await clearAudioCache() }
-                        }
-                    }
-                }
-                #endif
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("图片缓存")
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("已占用")
-                            Text(imageCacheUsage)
-                        }
-                        .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清理") {
-                            Task { await clearImageCache() }
-                        }
-                    }
-                }
-                if let cacheError {
-                    Text(cacheError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                #if os(macOS)
-                LabeledContent("歌曲缓存", value: audioCacheSize)
-                Picker("歌曲缓存上限", selection: $settings.audioCacheLimit) {
-                    Text("512 MB").tag(Int64(512) << 20)
-                    Text("2 GB").tag(Int64(2) << 30)
-                    Text("8 GB").tag(Int64(8) << 30)
-                    Text("不限").tag(Int64(0))
-                }
-                .onChange(of: settings.audioCacheLimit) { _, _ in
-                    updateAudioCacheSize()
-                }
-                Button("清除歌曲缓存") {
-                    Task {
-                        await EngineAudioCache.shared.removeAll()
-                        updateAudioCacheSize()
-                        ToastCenter.shared.show(String(localized: "歌曲缓存已清除"))
-                    }
-                }
-                #endif
             }
 
             Section("账号") {
@@ -323,22 +232,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .task {
-            await refreshCacheUsage()
-            await enforceAudioCacheLimit()
-            #if os(macOS)
-            updateAudioCacheSize()
-            #endif
-        }
-        #if os(macOS)
-        .onChange(of: settings.audioCacheSizeMB) { _, _ in
-            Task { await enforceAudioCacheLimit() }
-        }
-        #else
-        .onChange(of: settings.audioCacheSizeMB) { _ in
-            Task { await enforceAudioCacheLimit() }
-        }
-        #endif
     }
     #if os(macOS)
 
@@ -357,67 +250,12 @@ struct SettingsView: View {
                 set: { settings.automixStemsEnabled = $0 })
     }
 
-    private func updateAudioCacheSize() {
-        Task {
-            let bytes = await EngineAudioCache.shared.totalUsageBytes()
-            audioCacheSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-        }
-    }
     #endif
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
-    private var audioCacheLimit: String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(settings.audioCacheSizeMB) * 1_000_000,
-            countStyle: .file
-        )
-    }
-
-    private func refreshCacheUsage() async {
-        do {
-            audioCacheUsage = (try await AudioCache.shared.usage()).formatted
-        } catch {
-            cacheError = error.localizedDescription
-        }
-        do {
-            imageCacheUsage = (try await ImageCache.shared.usage()).formatted
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
-
-    private func enforceAudioCacheLimit() async {
-        guard settings.enableAudioCache else { return }
-        do {
-            try await AudioCache.shared.enforce(maximumSizeMB: settings.audioCacheSizeMB)
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
-
-    private func clearAudioCache() async {
-        do {
-            try await AudioCache.shared.clear()
-            ToastCenter.shared.show(String(localized: "歌曲缓存已清除"))
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
-
-    private func clearImageCache() async {
-        do {
-            try await ImageCache.shared.clear()
-            ToastCenter.shared.show(String(localized: "图片缓存已清除"))
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
 }
 
 #if os(macOS)
