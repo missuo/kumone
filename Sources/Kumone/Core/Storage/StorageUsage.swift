@@ -6,18 +6,7 @@ enum StorageCategory: String, CaseIterable, Hashable {
 
 struct AudioStorageFile {
     let url: URL
-    let assetID: String
     let accountScope: String
-    let trackID: Int
-    let retained: Bool
-    let complete: Bool
-    let inUse: Bool
-}
-
-struct MusicCacheClearResult {
-    var removed = 0
-    var inUse = 0
-    var failed = 0
 }
 
 struct DeviceStorageCapacity: Equatable {
@@ -36,8 +25,6 @@ struct DeviceStorageCapacity: Equatable {
 
 struct StorageUsageSnapshot {
     var bytes: [StorageCategory: Int64] = [:]
-    var musicCacheSongs = 0
-    var clearableMusicCacheBytes: Int64 = 0
     var otherAccountDownloads: Int64 = 0
     var device: DeviceStorageCapacity?
     var partial = false
@@ -53,17 +40,19 @@ struct StorageUsageSnapshot {
 actor StorageUsageReader {
     let roots: [URL]
     let imageDirectory: URL
+    let musicCacheDirectories: [URL]
     let downloadDirectory: URL
     let volumeURL: URL
 
-    init(roots: [URL], imageDirectory: URL, downloadDirectory: URL, volumeURL: URL) {
+    init(roots: [URL], imageDirectory: URL, musicCacheDirectories: [URL], downloadDirectory: URL, volumeURL: URL) {
         self.roots = roots
         self.imageDirectory = imageDirectory.standardizedFileURL
+        self.musicCacheDirectories = musicCacheDirectories.map(\.standardizedFileURL)
         self.downloadDirectory = downloadDirectory.standardizedFileURL
         self.volumeURL = volumeURL
     }
 
-    func read(audioFiles: [AudioStorageFile], downloadAssetIDs: Set<String>, accountScope: String?) -> StorageUsageSnapshot {
+    func read(audioFiles: [AudioStorageFile], accountScope: String?) -> StorageUsageSnapshot {
         var snapshot = StorageUsageSnapshot()
         if let values = try? volumeURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey]),
            let total = values.volumeTotalCapacity, let available = values.volumeAvailableCapacity, total > 0 {
@@ -71,7 +60,6 @@ actor StorageUsageReader {
         }
         let assets = Dictionary(audioFiles.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
         var visited: Set<String> = []
-        var cachedSongs: Set<String> = []
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
                                         .totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .fileSizeKey]
 
@@ -85,15 +73,11 @@ actor StorageUsageReader {
                 let category: StorageCategory
                 if Self.contains(url, in: imageDirectory) {
                     category = .imageCache
+                } else if musicCacheDirectories.contains(where: { Self.contains(url, in: $0) }) {
+                    category = .musicCache
                 } else if let asset = assets[path] {
-                    if asset.retained || downloadAssetIDs.contains(asset.assetID) {
-                        category = .downloads
-                        if asset.accountScope != accountScope { snapshot.otherAccountDownloads += size }
-                    } else {
-                        category = .musicCache
-                        if asset.complete { cachedSongs.insert("\(asset.accountScope):\(asset.trackID)") }
-                        if !asset.inUse { snapshot.clearableMusicCacheBytes += size }
-                    }
+                    category = .downloads
+                    if asset.accountScope != accountScope { snapshot.otherAccountDownloads += size }
                 } else if Self.contains(url, in: downloadDirectory), ["audio", "resume"].contains(url.pathExtension) {
                     category = .downloads
                 } else { category = .appData }
@@ -121,7 +105,6 @@ actor StorageUsageReader {
                 count(url)
             }
         }
-        snapshot.musicCacheSongs = cachedSongs.count
         snapshot.measuredAt = Date()
         return snapshot
     }

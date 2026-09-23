@@ -22,6 +22,17 @@ struct OfflineAudioFixture {
     }
 }
 
+extension OfflineStore {
+    /// Imports bytes the way a finished transfer does: from a whole file.
+    func importFixture(_ data: Data, descriptor: OfflineAudioDescriptor) async throws {
+        let input = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kumone-import-\(UUID()).\(descriptor.identity.format.rawValue)")
+        try data.write(to: input)
+        defer { try? FileManager.default.removeItem(at: input) }
+        try await importDownload(at: input, descriptor: descriptor)
+    }
+}
+
 /// Real loopback HTTP keeps Foundation/AVFoundation networking in the test.
 /// Responses can ignore Range or be delayed; no external account is involved.
 final class AudioFixtureServer: @unchecked Sendable {

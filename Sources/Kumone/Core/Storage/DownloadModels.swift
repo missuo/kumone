@@ -143,3 +143,20 @@ actor DownloadCatalogStore {
     }
     private func resumeURL(_ id: UUID) -> URL { directory.appendingPathComponent("\(id.uuidString).resume") }
 }
+
+/// URLSession failures that mean the network is unusable right now, as
+/// opposed to a server that answered and refused.
+enum ConnectivityFailure {
+    static func matches(_ error: Error) -> Bool {
+        var value = error as NSError
+        for _ in 0..<4 {
+            if value.domain == NSURLErrorDomain,
+               [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+                NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
+                NSURLErrorDataNotAllowed, NSURLErrorInternationalRoamingOff].contains(value.code) { return true }
+            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+            value = underlying
+        }
+        return false
+    }
+}

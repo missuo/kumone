@@ -87,14 +87,11 @@ struct NeteaseDownloadTests {
             }
             let resource = try NeteaseAPI.downloadResource(data: data, track: track, accountScope: "probe")
             let store = OfflineStore(directory: root.appendingPathComponent("offline"), minimumFreeBytes: 0)
-            let source = AudioTransferCoordinator(resource: resource, store: store)
-            do {
-                try await source.download()
-                let record = try #require(try await store.record(id: resource.descriptor.identity.id))
-                #expect(record.state == .complete)
-                print("Offline probe: track=\(trackID) format=\(resource.descriptor.identity.format.rawValue) quality=\(resource.descriptor.identity.quality) bytes=\(resource.descriptor.byteCount) duration=\(resource.descriptor.duration) complete=\(record.state == .complete)")
-                await source.close()
-            } catch { await source.close(); throw error }
+            let (file, _) = try await URLSession.shared.download(from: resource.url)
+            try await store.importDownload(at: file, descriptor: resource.descriptor)
+            let record = try #require(try await store.record(id: resource.descriptor.identity.id))
+            #expect(record.state == .complete)
+            print("Offline probe: track=\(trackID) format=\(resource.descriptor.identity.format.rawValue) quality=\(resource.descriptor.identity.quality) bytes=\(resource.descriptor.byteCount) duration=\(resource.descriptor.duration) complete=\(record.state == .complete)")
         } catch {
             let error = error as NSError
             // URLSession errors include signed media URLs in userInfo. Keep

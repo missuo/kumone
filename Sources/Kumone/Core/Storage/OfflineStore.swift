@@ -1,39 +1,20 @@
-import Combine
 import Foundation
 
+/// Downloaded audio on disk plus the SQLite index that describes it. Every
+/// file arrives whole from a finished transfer, is verified in a staging
+/// directory and only then becomes playable.
 actor OfflineStore {
     static let shared = OfflineStore(directory: KumonePaths.applicationSupport.appendingPathComponent("Offline", isDirectory: true))
-    /// Durable commit granularity for streamed chunks. Losing at most this much
-    /// of a partial cache after a crash costs a refetch, never correctness.
-    static let commitInterval: Int64 = 2 * 1024 * 1024
-
-    /// One open staging handle per streaming entry. Chunks reach the file
-    /// immediately; the index claims them only after an fsync, so a crash can
-    /// lose ranges but can never publish ranges the file does not hold.
-    private final class CacheWriteSession {
-        let handle: FileHandle
-        let byteCount: Int64
-        var ranges: AudioByteRanges
-        var pending: Int64 = 0
-        var headroom: Int64 = 0
-
-        init(handle: FileHandle, ranges: AudioByteRanges, byteCount: Int64) {
-            self.handle = handle
-            self.ranges = ranges
-            self.byteCount = byteCount
-        }
-    }
 
     nonisolated let directory: URL
-    nonisolated let cacheCompletions = PassthroughSubject<OfflineAudioDescriptor, Never>()
     private let minimumFreeBytes: Int64
     private var database: OfflineAudioDatabase?
-    private var sessions: [String: CacheWriteSession] = [:]
-    private var writers: [String: UUID] = [:]
+    /// Assets whose file is being moved into place, so two transfers of the
+    /// same asset cannot race each other.
+    private var importing: Set<String> = []
     private var leases: [UUID: String] = [:]
     private var validating: Set<String> = []
     private var downloadReservations: [String: Int64] = [:]
-    private var cacheReservations: [String: Int64] = [:]
     private let validateAudio: @Sendable (URL, OfflineAudioDescriptor) async throws -> Void
     private let freeSpace: @Sendable (URL) throws -> Int64
 
@@ -56,197 +37,29 @@ actor OfflineStore {
         #endif
     }
 
-    func begin(_ descriptor: OfflineAudioDescriptor, writer: UUID) throws {
-        try descriptor.validate()
-        let db = try preparedDatabase()
-        let id = descriptor.identity.id
-        guard writers[id] == nil || writers[id] == writer else { throw OfflineAudioError.busy }
-        if var existing = try db.record(id: id) {
-            guard existing.descriptor == descriptor, existing.state != .deleting else { throw OfflineAudioError.changedResource }
-            guard existing.state != .verifying else { throw OfflineAudioError.busy }
-            let extent = existing.ranges.ranges.last?.upperBound ?? 0
-            let stagingSize = (try? stagingURL(existing).resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-            if existing.state == .missing || (existing.state == .partial && stagingSize < extent) {
-                guard !leases.values.contains(id) else { throw OfflineAudioError.busy }
-                try removeFiles(existing)
-                guard FileManager.default.createFile(atPath: stagingURL(existing).path, contents: nil) else { throw OfflineAudioError.unavailable }
-                existing.state = .partial
-                existing.ranges = AudioByteRanges()
-                try db.save(existing)
-            }
-        } else {
-            let record = OfflineAudioRecord(descriptor: descriptor)
-            try makeDirectory(stagingURL(record).deletingLastPathComponent())
-            try makeDirectory(audioURL(record).deletingLastPathComponent())
-            guard FileManager.default.createFile(atPath: stagingURL(record).path, contents: nil) else { throw OfflineAudioError.unavailable }
-            try db.save(record)
-        }
-        writers[id] = writer
-    }
+    func record(id: String) throws -> OfflineAudioRecord? { try preparedDatabase().record(id: id) }
 
-    func releaseWriter(id: String, writer: UUID) {
-        guard writers[id] == writer else { return }
-        // Skipping a track keeps whatever was streamed, so make it durable now.
-        try? flushWrites(id: id)
-        closeWriteSession(id: id)
-        writers[id] = nil
-        cacheReservations[id] = nil
-    }
-
-    /// Chunks land in the staging file immediately and are visible to readers
-    /// in this process; only every `commitInterval` bytes does the store pay an
-    /// fsync plus an index upsert, always in that order.
-    func write(_ data: Data, at offset: Int64, id: String, writer: UUID) throws {
-        let db = try preparedDatabase()
-        guard writers[id] == writer else { throw OfflineAudioError.unavailable }
-        let session = try writeSession(id: id, database: db)
-        let count = Int64(data.count)
-        guard offset >= 0, offset <= session.byteCount, count <= session.byteCount - offset else { throw OfflineAudioError.invalidResponse }
-        if session.headroom < count {
-            let reserved = cacheReservations[id] == nil ? 0 : downloadReservations.values.reduce(0, +)
-            session.headroom = try freeSpace(directory) - reserved - minimumFreeBytes
-            guard session.headroom >= count else { throw OfflineAudioError.insufficientSpace }
-        }
-        do {
-            try session.handle.seek(toOffset: UInt64(offset))
-            try session.handle.write(contentsOf: data)
-        } catch { throw Self.isOutOfSpace(error) ? OfflineAudioError.insufficientSpace : error }
-        session.headroom -= count
-        session.pending += count
-        session.ranges.insert(offset..<(offset + count))
-        if cacheReservations[id] != nil {
-            cacheReservations[id] = max(0, session.byteCount - session.ranges.byteCount)
-        }
-        if session.pending >= Self.commitInterval { try commit(id: id, session: session, database: db) }
-    }
-
-    func read(id: String, at offset: Int64, maximum: Int) throws -> Data? {
-        guard maximum > 0, offset >= 0,
-              let record = try streamed(preparedDatabase().record(id: id)),
-              [.partial, .verifying, .complete].contains(record.state)
-                || (record.state == .deleting && leases.values.contains(id)) else { return nil }
-        let count = record.ranges.availableLength(at: offset, maximum: maximum)
-        guard count > 0 else { return nil }
-        let url = record.state == .complete || (record.state == .deleting && FileManager.default.fileExists(atPath: audioURL(record).path))
-            ? audioURL(record) : stagingURL(record)
-        let file = try FileHandle(forReadingFrom: url)
-        defer { try? file.close() }
-        try file.seek(toOffset: UInt64(offset))
-        let data = try file.read(upToCount: count)
-        guard let data, data.count == count else { throw OfflineAudioError.incomplete }
-        return data
-    }
-
-    func record(id: String) throws -> OfflineAudioRecord? { try streamed(preparedDatabase().record(id: id)) }
-
-    /// Make every streamed range durable without waiting for the next batch.
-    func flushPendingWrites() {
-        for id in sessions.keys { try? flushWrites(id: id) }
-    }
-
-    /// The in-memory range set is the truth while a session streams; the index
-    /// trails it by at most one batch.
-    private func streamed(_ record: OfflineAudioRecord?) -> OfflineAudioRecord? {
-        guard var record, let session = sessions[record.id] else { return record }
-        record.ranges = session.ranges
-        return record
-    }
-
-    private func writeSession(id: String, database db: OfflineAudioDatabase) throws -> CacheWriteSession {
-        if let session = sessions[id] { return session }
-        guard let record = try db.record(id: id), record.state == .partial else { throw OfflineAudioError.unavailable }
-        let session = CacheWriteSession(handle: try FileHandle(forWritingTo: stagingURL(record)),
-                                        ranges: record.ranges, byteCount: record.descriptor.byteCount)
-        sessions[id] = session
-        return session
-    }
-
-    private func commit(id: String, session: CacheWriteSession, database db: OfflineAudioDatabase) throws {
-        guard session.pending > 0 else { return }
-        do { try session.handle.synchronize() }
-        catch { throw Self.isOutOfSpace(error) ? OfflineAudioError.insufficientSpace : error }
-        if var record = try db.record(id: id), record.state == .partial {
-            record.ranges = session.ranges
-            try db.save(record)
-        }
-        session.pending = 0
-        session.headroom = 0
-    }
-
-    private func flushWrites(id: String) throws {
-        guard let session = sessions[id], let database else { return }
-        try commit(id: id, session: session, database: database)
-    }
-
-    /// Drops the handle without committing: callers either flushed already or
-    /// are about to delete the file.
-    private func closeWriteSession(id: String) {
-        try? sessions.removeValue(forKey: id)?.handle.close()
-    }
-
-    private static func isOutOfSpace(_ error: Error) -> Bool {
-        var value = error as NSError
-        for _ in 0..<4 {
-            if value.domain == NSPOSIXErrorDomain, value.code == Int(ENOSPC) { return true }
-            if value.domain == NSCocoaErrorDomain, value.code == NSFileWriteOutOfSpaceError { return true }
-            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
-            value = underlying
-        }
-        return false
-    }
-
+    /// Every song that still has audio here, or is about to; their metadata
+    /// stays on disk while everything else is pruned.
     func metadataTrackIDs() throws -> [String: Set<Int>] {
         var result: [String: Set<Int>] = [:]
-        for record in try preparedDatabase().allRecords() {
-            let inUse = writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id)
-            if !record.retainedBy.isEmpty || inUse || ([.partial, .complete, .verifying].contains(record.state) && record.ranges.byteCount > 0) {
-                result[record.descriptor.identity.accountScope, default: []].insert(record.descriptor.identity.trackID)
-            }
+        for record in try preparedDatabase().allRecords() where record.state != .deleting {
+            result[record.descriptor.identity.accountScope, default: []].insert(record.descriptor.identity.trackID)
         }
         return result
     }
 
     func storageFiles() throws -> [AudioStorageFile] {
         try preparedDatabase().allRecords().flatMap { record in
-            let inUse = writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id)
-            return [audioURL(record), stagingURL(record)].map { url in
-                AudioStorageFile(url: url, assetID: record.id, accountScope: record.descriptor.identity.accountScope,
-                    trackID: record.descriptor.identity.trackID, retained: !record.retainedBy.isEmpty,
-                    complete: record.state == .complete, inUse: inUse)
-            }
+            [audioURL(record), stagingURL(record)].map { AudioStorageFile(url: $0, accountScope: record.descriptor.identity.accountScope) }
         }
     }
 
-    func clearMusicCache(excluding downloadAssetIDs: Set<String> = []) throws -> MusicCacheClearResult {
-        var result = MusicCacheClearResult()
-        for record in try preparedDatabase().allRecords() where record.retainedBy.isEmpty && !downloadAssetIDs.contains(record.id) {
-            if writers[record.id] != nil || validating.contains(record.id) || leases.values.contains(record.id) {
-                result.inUse += 1
-                continue
-            }
-            do { try remove(id: record.id); result.removed += 1 }
-            catch { result.failed += 1 }
-        }
-        return result
-    }
-
-    func reserveDownload(token: String, bytes: Int64, context: MusicCacheContext = .init(policy: .automatic)) throws {
-        let db = try preparedDatabase()
-        let others = downloadReservations.filter { $0.key != token }.values.reduce(0, +) + cacheReservations.values.reduce(0, +)
+    /// Reserve disk for a transfer that has not landed yet, alongside every
+    /// other transfer still in flight.
+    func reserveDownload(token: String, bytes: Int64) throws {
         guard bytes >= 0 else { throw OfflineAudioError.insufficientSpace }
-        if try freeSpace(directory) - others - bytes < minimumFreeBytes {
-            let records = try db.allRecords().filter { $0.retainedBy.isEmpty && !context.protectedAssetIDs.contains($0.id) }
-            let candidates = evictionCandidates(records, context: context)
-            let reclaimable = candidates.reduce(Int64(0)) { $0 + cacheFileBytes($1) }
-            // Do not discard useful cache if even removing it cannot fit this download.
-            guard try freeSpace(directory) + reclaimable - others - bytes >= minimumFreeBytes else {
-                throw OfflineAudioError.insufficientSpace
-            }
-            for record in candidates {
-                if try freeSpace(directory) - others - bytes >= minimumFreeBytes { break }
-                try remove(id: record.id)
-            }
-        }
+        let others = downloadReservations.filter { $0.key != token }.values.reduce(0, +)
         guard try freeSpace(directory) - others - bytes >= minimumFreeBytes else { throw OfflineAudioError.insufficientSpace }
         downloadReservations[token] = bytes
     }
@@ -256,96 +69,6 @@ actor OfflineStore {
     }
 
     func releaseDownloadReservation(token: String) { downloadReservations[token] = nil }
-
-    /// Admit a whole current-track cache before it starts, accounting for
-    /// partial files and all outstanding writes. No files are preallocated.
-    func beginCaching(_ descriptor: OfflineAudioDescriptor, writer: UUID, context: MusicCacheContext) throws {
-        try descriptor.validate()
-        guard context.policy != .disabled else { throw OfflineAudioError.unavailable }
-        let db = try preparedDatabase(), id = descriptor.identity.id
-        guard writers[id] == nil, !context.protectedAssetIDs.contains(id) else { throw OfflineAudioError.busy }
-        let existing = try db.record(id: id)
-        guard existing?.retainedBy.isEmpty != false else { throw OfflineAudioError.retained }
-        let stagingSize = existing.flatMap { try? stagingURL($0).resourceValues(forKeys: [.fileSizeKey]).fileSize }.map(Int64.init) ?? 0
-        let received = existing.map { stagingSize >= ($0.ranges.ranges.last?.upperBound ?? 0) ? $0.ranges.byteCount : 0 } ?? 0
-        let remaining = max(0, descriptor.byteCount - received) + 4096
-        // Reject a file that cannot fit even on its own before evicting useful
-        // songs. Disk-space failure should not empty the existing cache.
-        #if os(macOS)
-        let isMac = true
-        #else
-        let isMac = false
-        #endif
-        let used = try db.allRecords().filter { $0.retainedBy.isEmpty && !context.protectedAssetIDs.contains($0.id) }
-            .reduce(0) { $0 + cacheFileBytes($1) }
-        let possible = context.policy.limit(free: try freeSpace(directory), cacheBytes: used,
-            downloadReservations: downloadReservations.values.reduce(0, +), floor: minimumFreeBytes, isMac: isMac)
-        guard descriptor.byteCount + 4096 <= possible else { throw OfflineAudioError.insufficientSpace }
-        let result = try reconcileCache(context, additionalBytes: remaining, protecting: id)
-        guard result.used + cacheReservations.values.reduce(0, +) + remaining <= result.limit,
-              try freeSpace(directory) - downloadReservations.values.reduce(0, +)
-                - cacheReservations.values.reduce(0, +) - remaining >= minimumFreeBytes else {
-            throw OfflineAudioError.insufficientSpace
-        }
-        try begin(descriptor, writer: writer)
-        cacheReservations[id] = remaining
-        if !context.isPrefetch, var record = try db.record(id: id) {
-            record.lastPlayed = Date()
-            try db.save(record)
-        }
-    }
-
-    @discardableResult
-    func reconcileCache(_ context: MusicCacheContext, additionalBytes: Int64 = 0, protecting: String? = nil) throws -> MusicCacheCapacity {
-        let db = try preparedDatabase()
-        let records = try db.allRecords().filter { $0.retainedBy.isEmpty && !context.protectedAssetIDs.contains($0.id) }
-        var sizes = Dictionary(uniqueKeysWithValues: records.map { ($0.id, cacheFileBytes($0)) })
-        var used = sizes.values.reduce(0, +)
-        #if os(macOS)
-        let isMac = true
-        #else
-        let isMac = false
-        #endif
-        let pending = downloadReservations.values.reduce(0, +)
-        let limit = context.policy.limit(free: try freeSpace(directory), cacheBytes: used,
-            downloadReservations: pending, floor: minimumFreeBytes, isMac: isMac)
-        guard context.policy != .disabled else { return .init(limit: 0, used: used) }
-        let reserved = cacheReservations.values.reduce(0, +) + additionalBytes
-        let target = used + reserved > limit ? limit * 9 / 10 : limit
-        for record in evictionCandidates(records, context: context, protecting: protecting) {
-            let enoughDisk = try freeSpace(directory) - pending - reserved >= minimumFreeBytes
-            if used + reserved <= target && enoughDisk { break }
-            try remove(id: record.id)
-            used -= sizes.removeValue(forKey: record.id) ?? 0
-        }
-        return .init(limit: limit, used: used)
-    }
-
-    private func evictionCandidates(_ records: [OfflineAudioRecord], context: MusicCacheContext,
-                                    protecting: String? = nil) -> [OfflineAudioRecord] {
-        func priority(_ record: OfflineAudioRecord) -> Int {
-            if record.state != .complete { return 0 }
-            let liked = context.likedTracks[record.descriptor.identity.accountScope]?
-                .contains(record.descriptor.identity.trackID) ?? true
-            return liked ? 2 : 1
-        }
-        return records.filter {
-            $0.id != protecting && writers[$0.id] == nil && !validating.contains($0.id) && !leases.values.contains($0.id)
-                && context.protectedTracks[$0.descriptor.identity.accountScope]?.contains($0.descriptor.identity.trackID) != true
-        }.sorted {
-            if priority($0) != priority($1) { return priority($0) < priority($1) }
-            if ($0.lastPlayed == nil) != ($1.lastPlayed == nil) { return $0.lastPlayed == nil }
-            return ($0.lastPlayed ?? $0.verifiedModificationDate ?? .distantPast)
-                < ($1.lastPlayed ?? $1.verifiedModificationDate ?? .distantPast)
-        }
-    }
-
-    private func cacheFileBytes(_ record: OfflineAudioRecord) -> Int64 {
-        [audioURL(record), stagingURL(record)].reduce(0) { total, url in
-            let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
-            return total + Int64(values?.totalFileAllocatedSize ?? values?.fileSize ?? 0)
-        }
-    }
 
     func availableRecords(accountScope: String) throws -> [OfflineAudioRecord] {
         let db = try preparedDatabase()
@@ -375,47 +98,45 @@ actor OfflineStore {
         return nil
     }
 
-    /// Background URLSession already owns a whole temporary file. Import it on
-    /// the same volume, then use the same integrity gate as streamed audio.
+    /// Background URLSession already owns a whole temporary file. Move it onto
+    /// this volume, verify it, then publish it.
     func importDownload(at url: URL, descriptor: OfflineAudioDescriptor) async throws {
-        let writer = UUID(), id = descriptor.identity.id
-        try begin(descriptor, writer: writer)
-        defer { if writers[id] == writer { writers[id] = nil } }
+        try descriptor.validate()
         let db = try preparedDatabase()
-        guard var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
-        if record.state == .complete { return }
+        let id = descriptor.identity.id
+        guard !importing.contains(id), !validating.contains(id) else { throw OfflineAudioError.busy }
+        importing.insert(id)
+        defer { importing.remove(id) }
+        var record: OfflineAudioRecord
+        if let existing = try db.record(id: id) {
+            guard existing.descriptor == descriptor, existing.state != .deleting else { throw OfflineAudioError.changedResource }
+            if existing.state == .complete { return }
+            record = existing
+        } else {
+            record = OfflineAudioRecord(descriptor: descriptor)
+        }
+        try makeDirectory(stagingURL(record).deletingLastPathComponent())
+        try makeDirectory(audioURL(record).deletingLastPathComponent())
         guard try url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) == descriptor.byteCount else {
             throw OfflineAudioError.incomplete
         }
-        record.ranges = AudioByteRanges()
-        try db.save(record)
-        let staging = stagingURL(record)
-        closeWriteSession(id: id)
-        if FileManager.default.fileExists(atPath: staging.path) { try FileManager.default.removeItem(at: staging) }
-        try FileManager.default.moveItem(at: url, to: staging)
-        record.ranges.insert(0..<descriptor.byteCount)
-        try db.save(record)
-        try await finalize(id: id, writer: writer)
-    }
-
-    func finalize(id: String, writer: UUID) async throws {
-        let db = try preparedDatabase()
-        guard writers[id] == writer else { throw OfflineAudioError.unavailable }
-        try flushWrites(id: id)
-        closeWriteSession(id: id)
-        guard var record = try db.record(id: id) else { throw OfflineAudioError.unavailable }
-        if record.state == .complete { return }
-        guard record.state == .partial, !validating.contains(id), record.ranges.covers(record.descriptor.byteCount) else {
-            throw OfflineAudioError.incomplete
-        }
+        // Whatever an earlier attempt left behind is replaced by this file.
+        try removeFiles(record)
+        try FileManager.default.moveItem(at: url, to: stagingURL(record))
         record.state = .verifying
         try db.save(record)
+        try await verify(record, database: db)
+    }
+
+    private func verify(_ candidate: OfflineAudioRecord, database db: OfflineAudioDatabase) async throws {
+        var record = candidate
+        let id = record.id
         validating.insert(id)
         defer { validating.remove(id) }
         let staging = stagingURL(record)
-        let descriptor = record.descriptor
         do {
-            try await validateAudio(staging, descriptor)
+            try await validateAudio(staging, record.descriptor)
+            // Removal while verifying wins: the file is deleted, not published.
             guard let current = try db.record(id: id), current.state == .verifying else { throw CancellationError() }
             record = current
             try FileManager.default.moveItem(at: staging, to: audioURL(record))
@@ -423,7 +144,6 @@ actor OfflineStore {
             record.state = .complete
             record.verifiedModificationDate = try audioURL(record).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             try db.save(record)
-            if cacheReservations[id] != nil { cacheCompletions.send(descriptor) }
         } catch {
             try removeFiles(record)
             guard let current = try db.record(id: id) else { throw error }
@@ -431,8 +151,8 @@ actor OfflineStore {
             if record.retainedBy.isEmpty || record.state == .deleting {
                 try db.remove(id: id)
             } else {
+                // The download still wants this song; only its file is gone.
                 record.state = .missing
-                record.ranges = AudioByteRanges()
                 try db.save(record)
             }
             throw error
@@ -447,15 +167,14 @@ actor OfflineStore {
         for candidate in records {
             if !allowLowerQuality {
                 guard let requested = qualities.firstIndex(of: preferredQuality),
-                      let cached = qualities.firstIndex(of: candidate.descriptor.identity.quality), cached >= requested else { continue }
+                      let stored = qualities.firstIndex(of: candidate.descriptor.identity.quality), stored >= requested else { continue }
             }
             guard var record = try availableRecord(candidate, database: db) else { continue }
-            let url = audioURL(record)
             record.lastPlayed = Date()
             try db.save(record)
             let token = UUID()
             leases[token] = record.id
-            return OfflinePlaybackLease(token: token, descriptor: record.descriptor, url: url)
+            return OfflinePlaybackLease(token: token, descriptor: record.descriptor, url: audioURL(record))
         }
         return nil
     }
@@ -479,6 +198,8 @@ actor OfflineStore {
             }
     }
 
+    /// Completed assets are checked lazily here, so a file edited or truncated
+    /// behind the app's back never plays; a full library rehash is unnecessary.
     private func availableRecord(_ candidate: OfflineAudioRecord, database db: OfflineAudioDatabase) throws -> OfflineAudioRecord? {
         var record = candidate
         let url = audioURL(record)
@@ -493,24 +214,15 @@ actor OfflineStore {
             return record
         } catch {
             record.state = .missing
-            record.ranges = AudioByteRanges()
             try db.save(record)
             if !leases.values.contains(record.id) { try removeFiles(record) }
             return nil
         }
     }
 
+    /// A file removed while it was playing is deleted once its last lease ends.
     func release(_ lease: OfflinePlaybackLease) throws {
-        try releasePlaybackRead(token: lease.token)
-    }
-
-    func protectPlaybackRead(id: String, token: UUID) throws {
-        guard let record = try preparedDatabase().record(id: id), record.state != .deleting else { throw OfflineAudioError.unavailable }
-        leases[token] = id
-    }
-
-    func releasePlaybackRead(token: UUID) throws {
-        guard let id = leases.removeValue(forKey: token), !leases.values.contains(id),
+        guard let id = leases.removeValue(forKey: lease.token), !leases.values.contains(id),
               let record = try preparedDatabase().record(id: id), record.state == .deleting else { return }
         try removeFiles(record)
         try preparedDatabase().remove(id: id)
@@ -523,24 +235,25 @@ actor OfflineStore {
         try db.save(record)
     }
 
+    /// Dropping the last owner deletes the file: nothing keeps audio that no
+    /// download refers to any more.
     func removeRetention(id: String, owner: String) throws {
         let db = try preparedDatabase()
         guard var record = try db.record(id: id) else { return }
         record.retainedBy.remove(owner)
         try db.save(record)
+        if record.retainedBy.isEmpty { try remove(id: id) }
     }
 
-    /// Deletion intent is durable. A late writer cannot resurrect the entry.
+    /// Deletion intent is durable. A verification still running cannot
+    /// resurrect the entry.
     func remove(id: String) throws {
         let db = try preparedDatabase()
         guard var record = try db.record(id: id) else { return }
         guard record.retainedBy.isEmpty else { throw OfflineAudioError.retained }
         record.state = .deleting
         try db.save(record)
-        closeWriteSession(id: id)
-        writers[id] = nil
-        cacheReservations[id] = nil
-        guard !leases.values.contains(id), !validating.contains(id) else { return }
+        guard !leases.values.contains(id), !validating.contains(id), !importing.contains(id) else { return }
         try removeFiles(record)
         try db.remove(id: id)
     }
@@ -562,10 +275,7 @@ actor OfflineStore {
         var removed: [String] = []
         var failure: Error?
         for record in records {
-            closeWriteSession(id: record.id)
-            writers[record.id] = nil
-            cacheReservations[record.id] = nil
-            guard !leases.values.contains(record.id), !validating.contains(record.id) else { continue }
+            guard !leases.values.contains(record.id), !validating.contains(record.id), !importing.contains(record.id) else { continue }
             do { try removeFiles(record); removed.append(record.id) }
             catch { failure = error }
         }
@@ -573,17 +283,28 @@ actor OfflineStore {
         if let failure { throw failure }
     }
 
+    /// Audio no download owns. Earlier builds kept such files as a playback
+    /// cache; they go once the download catalog has claimed what it recognises.
+    /// `keeping` names assets a job still refers to, retained or not.
+    func removeUnretained(keeping: Set<String> = []) throws {
+        for record in try preparedDatabase().allRecords()
+        where record.retainedBy.isEmpty && record.state != .deleting && !keeping.contains(record.id) {
+            guard !importing.contains(record.id), !validating.contains(record.id) else { continue }
+            try remove(id: record.id)
+        }
+    }
+
     private func preparedDatabase() throws -> OfflineAudioDatabase {
         if let database { return database }
         try makeDirectory(directory)
         let db = try OfflineAudioDatabase(url: directory.appendingPathComponent("index.sqlite"))
-        // Recover interrupted commits and discard deletion tombstones. Completed
-        // assets are checked lazily on acquire, avoiding a full library rehash.
+        // Recover interrupted verifications and discard deletion tombstones.
         for var record in try db.allRecords() {
-            if record.state == .deleting {
+            switch record.state {
+            case .deleting:
                 try removeFiles(record)
                 try db.remove(id: record.id)
-            } else if record.state == .verifying {
+            case .verifying:
                 let final = audioURL(record)
                 let candidate = FileManager.default.fileExists(atPath: final.path) ? final : stagingURL(record)
                 do {
@@ -598,14 +319,19 @@ actor OfflineStore {
                     if record.retainedBy.isEmpty { try db.remove(id: record.id) }
                     else {
                         record.state = .missing
-                        record.ranges = AudioByteRanges()
                         try db.save(record)
                     }
                 }
-            } else if record.state == .partial, !FileManager.default.fileExists(atPath: stagingURL(record).path) {
-                record.state = .missing
-                record.ranges = AudioByteRanges()
-                try db.save(record)
+            case .partial:
+                // Streamed partial files from earlier builds are never resumed.
+                try removeFiles(record)
+                if record.retainedBy.isEmpty { try db.remove(id: record.id) }
+                else {
+                    record.state = .missing
+                    try db.save(record)
+                }
+            case .complete, .missing:
+                break
             }
         }
         try removeOrphans(database: db)
@@ -636,7 +362,6 @@ actor OfflineStore {
     }
 
     private func removeFiles(_ record: OfflineAudioRecord) throws {
-        closeWriteSession(id: record.id)
         for url in [stagingURL(record), audioURL(record)] where FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }

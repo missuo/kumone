@@ -68,38 +68,14 @@ struct OfflineAudioResource {
     let url: URL
 }
 
-/// Half-open intervals. File length alone does not prove coverage of a sparse file.
-struct AudioByteRanges: Codable, Equatable {
-    private(set) var ranges: [Range<Int64>] = []
-
-    mutating func insert(_ range: Range<Int64>) {
-        guard !range.isEmpty else { return }
-        var merged: [Range<Int64>] = []
-        for next in (ranges + [range]).sorted(by: { $0.lowerBound < $1.lowerBound }) {
-            if let last = merged.last, next.lowerBound <= last.upperBound {
-                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, next.upperBound)
-            } else {
-                merged.append(next)
-            }
-        }
-        ranges = merged
-    }
-
-    func availableLength(at offset: Int64, maximum: Int) -> Int {
-        guard let range = ranges.first(where: { $0.contains(offset) }) else { return 0 }
-        return Int(min(Int64(maximum), range.upperBound - offset))
-    }
-
-    func covers(_ byteCount: Int64) -> Bool { ranges == [0..<byteCount] }
-    var byteCount: Int64 { ranges.reduce(0) { $0 + ($1.upperBound - $1.lowerBound) } }
-}
-
 struct OfflineAudioRecord: Codable {
+    /// `partial` only appears in indexes written by earlier builds, which
+    /// streamed audio into the store; it is retired on the next launch.
     enum State: String, Codable { case partial, verifying, complete, missing, deleting }
     let descriptor: OfflineAudioDescriptor
-    var ranges = AudioByteRanges()
-    var state: State = .partial
+    var state: State = .verifying
     var retainedBy: Set<String> = []
+    /// Orders the offline "recently played" list.
     var lastPlayed: Date?
     var verifiedModificationDate: Date?
     var id: String { descriptor.identity.id }

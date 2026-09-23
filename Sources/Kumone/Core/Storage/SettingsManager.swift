@@ -93,7 +93,6 @@ final class SettingsManager: ObservableObject {
 
     private enum Keys {
         static let quality = "settings.audioQuality"
-        static let musicCache = "settings.musicCachePolicy"
         static let appearance = "settings.appearance"
         static let nowPlayingMode = "settings.nowPlayingMode"
         static let showTranslation = "settings.showLyricsTranslation"
@@ -111,17 +110,7 @@ final class SettingsManager: ObservableObject {
     }
 
     @Published var audioQuality: AudioQuality {
-        didSet {
-            UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality)
-            NotificationCenter.default.post(name: .playbackQualityChanged, object: nil)
-        }
-    }
-
-    @Published var musicCachePolicy: MusicCachePolicy {
-        didSet {
-            UserDefaults.standard.set(musicCachePolicy.rawValue, forKey: Keys.musicCache)
-            NotificationCenter.default.post(name: .musicCachePolicyChanged, object: nil)
-        }
+        didSet { UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality) }
     }
 
     @Published var appearance: AppAppearance {
@@ -199,7 +188,6 @@ final class SettingsManager: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
-        musicCachePolicy = defaults.string(forKey: Keys.musicCache).flatMap(MusicCachePolicy.init) ?? .default
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true

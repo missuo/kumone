@@ -4,8 +4,6 @@ import SwiftUI
 struct StorageSpaceView: View {
     let onManageDownloads: () -> Void
     @StateObject private var model = StorageSpaceModel()
-    @ObservedObject private var cache = PlaybackCacheController.shared
-    @EnvironmentObject private var settings: SettingsManager
     @State private var clearing: StorageCategory?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -60,24 +58,15 @@ struct StorageSpaceView: View {
 
             Section {
                 usageRow("音乐缓存", icon: "music.note", category: .musicCache)
-                Picker("缓存上限", selection: $settings.musicCachePolicy) {
-                    ForEach(MusicCachePolicy.options) { policy in
-                        Text(policy.title).tag(policy)
-                    }
-                }
-                if settings.musicCachePolicy == .automatic, let capacity = cache.capacity {
-                    LabeledContent("当前自动上限", value: format(capacity.limit))
-                        .foregroundStyle(.secondary)
-                }
                 Button(role: .destructive) { clearing = .musicCache } label: {
                     HStack {
                         Text("清理音乐缓存")
                         if model.clearingCategory == .musicCache { Spacer(); ProgressView().controlSize(.small) }
                     }
                 }
-                    .disabled(busy || (model.snapshot?.clearableMusicCacheBytes ?? 0) == 0)
+                    .disabled(busy || (model.snapshot?[.musicCache] ?? 0) == 0)
             } footer: {
-                Text("自动缓存音乐，完整缓存的歌曲可离线播放。")
+                Text("播放时保存的临时音频。清理不会移除已下载歌曲，正在使用的音频也会保留。")
             }
 
             Section {
@@ -124,23 +113,12 @@ struct StorageSpaceView: View {
         }
         .task(id: scenePhase) {
             if scenePhase == .active, !model.isClearing, clearing == nil {
-                await cache.reconcile()
                 await model.reload()
             }
         }
-        .task(id: settings.musicCachePolicy) {
-            await cache.reconcile()
-            await model.reload()
-        }
         .alert(clearTitle, isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }), presenting: clearing) { category in
             Button("清理", role: .destructive) {
-                Task {
-                    await model.clear(category)
-                    if category == .musicCache {
-                        await cache.reconcile(forceMetadataCleanup: true)
-                        await model.reload()
-                    }
-                }
+                Task { await model.clear(category) }
                 clearing = nil
             }
             Button("取消", role: .cancel) { clearing = nil }

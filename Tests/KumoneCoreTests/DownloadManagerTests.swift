@@ -72,7 +72,6 @@ private final class DownloadHarness {
     init(resolver: DownloadManager.Resolver? = nil, online: Bool = true, expensive: Bool = false,
          metadataReader: ((Int, String) async -> Track?)? = nil, freeBytes: Int64? = nil,
          metadataFetcher: @escaping DownloadManager.MetadataFetcher = { _, _ in },
-         prepareResource: @escaping (OfflineAudioResource) async -> Void = { _ in },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-download-tests-\(UUID())")
         fixture = try OfflineAudioFixture()
@@ -87,7 +86,7 @@ private final class DownloadHarness {
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
                                   accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: metadataFetcher,
-                                  metadataReader: metadataReader, prepareResource: prepareResource, retrySleep: retrySleep)
+                                  metadataReader: metadataReader, retrySleep: retrySleep)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
 
@@ -186,49 +185,12 @@ struct DownloadManagerTests {
         replacement.open()
     }
 
-    @Test(arguments: [false, true])
-    func automaticCacheCompletionRefreshesOfflineAvailability(forCompletion: Bool) async throws {
-        let h = try DownloadHarness(online: false)
-        let server = try await AudioFixtureServer(fixture: h.fixture)
-        defer { server.stop(); h.close() }
-        await h.manager.start()
-        try await h.metadata.save(track: h.track, scope: "test-account")
-        let source = AudioTransferCoordinator(resource: h.fixture.resource(url: server.url), store: h.store,
-                                              cacheContext: .init(policy: .automatic))
-        try await source.prepare()
-        #expect(h.manager.offlineTracksByID[1] == nil)
-        try await source.download(forCompletion: forCompletion)
-        try await waitForDownload { h.manager.offlineTracksByID[1] != nil }
-        #expect(!h.manager.network.connected)
-        #expect(h.manager.offlineTracksByID[1]?.isDownloaded == false)
-        #expect(!h.manager.isDownloaded(trackID: 1) && h.manager.jobs.isEmpty)
-        // Account-scoped events must not put the old account's cache in a new list.
-        h.manager.activate(accountScope: "other-account")
-        #expect(h.manager.offlineTracksByID.isEmpty)
-        await source.close()
-    }
-
-    @Test func prefetchedAudioIsAvailableBeforeOptionalMetadataFinishes() async throws {
-        let h = try DownloadHarness(online: false), gate = DownloadRestoreGate()
-        let server = try await AudioFixtureServer(fixture: h.fixture)
-        defer { gate.open(); server.stop(); h.close() }
-        await h.manager.start()
-        let prefetcher = QueuePrefetcher(store: h.store, metadata: h.metadata,
-            resolver: { _, _, _ in h.fixture.resource(url: server.url) },
-            metadataFetcher: { _, _ in await gate.wait() })
-        prefetcher.update(.init(scope: "test-account", currentTrackID: 2, tracks: [h.track], quality: "exhigh",
-                                context: .init(policy: .automatic), pendingDownloadTrackIDs: []))
-        try await waitForDownload { gate.entered && h.manager.offlineTracksByID[1] != nil }
-        #expect(h.manager.offlineTracksByID[1]?.track.id == h.track.id)
-        #expect(h.manager.downloadedTracks.isEmpty)
-        gate.open()
-        await prefetcher.cancel().value
-    }
-
     @Test func removingAnEarlierJobDuringPreparationKeepsTheRemainingJobIdentity() async throws {
         let gate = DownloadRestoreGate()
-        let h = try DownloadHarness(prepareResource: { resource in
-            if resource.descriptor.identity.trackID == 2 { await gate.wait() }
+        let h = try DownloadHarness(resolver: { track, quality, scope in
+            let resource = try await DownloadHarness.resolve(track: track, quality: quality, scope: scope)
+            if track.id == 2 { await gate.wait() }
+            return resource
         })
         defer { gate.open(); h.close() }
         let tracks = try (1...3).map { id in
@@ -347,9 +309,11 @@ struct DownloadManagerTests {
     @Test func backgroundPreparationExpirationRecoversOnForeground() async throws {
         let gate = DownloadRestoreGate()
         var preparations = 0
-        let h = try DownloadHarness(prepareResource: { _ in
+        let h = try DownloadHarness(resolver: { track, quality, scope in
+            let resource = try await DownloadHarness.resolve(track: track, quality: quality, scope: scope)
             preparations += 1
             if preparations == 1 { await gate.wait() }
+            return resource
         })
         defer { gate.open(); h.close() }
         await h.enqueue()
@@ -580,7 +544,7 @@ struct DownloadManagerTests {
             try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Track \(id)\",\"dt\":3000}".utf8))
         }
         var descriptors: [OfflineAudioDescriptor] = []
-        for (track, scope) in tracks.map({ ($0, "test-account") }) + [(tracks[0], "other-account")] {
+        for (track, scope) in tracks.prefix(3).map({ ($0, "test-account") }) + [(tracks[0], "other-account")] {
             let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: scope)
             descriptors.append(resource.descriptor)
             let input = h.root.appendingPathComponent("input.mp3")
@@ -588,7 +552,8 @@ struct DownloadManagerTests {
             try h.fixture.data.write(to: input)
             try await h.store.importDownload(at: input, descriptor: resource.descriptor)
             try await h.metadata.save(track: track, scope: scope)
-            if scope == "other-account" { try await h.store.retain(id: resource.descriptor.identity.id, owner: "other-download") }
+            // Audio nobody owns is garbage; seed every file with an owner.
+            try await h.store.retain(id: resource.descriptor.identity.id, owner: scope == "other-account" ? "other-download" : "seed:\(track.id)")
         }
         await h.manager.enqueue(tracks: Array(tracks.prefix(3)), owner: "playlist:a", name: "A", quality: "exhigh", allowsMetered: false)
         try await waitForDownload { h.manager.downloadedTracks.count == 3 && h.manager.pendingJobs.isEmpty }
@@ -600,7 +565,7 @@ struct DownloadManagerTests {
         #expect(await h.manager.deleteLocalAudio(trackIDs: [1, 2]))
         #expect(!counts.isEmpty && counts.allSatisfy { $0 == 1 })
         #expect(h.manager.downloadedSongs().map(\.id) == [3])
-        #expect(Set(h.manager.offlineTracks.map(\.id)) == [3, 4])
+        #expect(h.manager.offlineTracks.map(\.id) == [3])
         // A partly removed collection keeps every song, so the missing ones can
         // be downloaded again; one with nothing left stops claiming a page.
         #expect(h.manager.collections.first { $0.id == "playlist:a" }?.tracks.map(\.id) == [1, 2, 3])
@@ -626,6 +591,7 @@ struct DownloadManagerTests {
             let input = h.root.appendingPathComponent("input.mp3")
             try h.fixture.data.write(to: input)
             try await h.store.importDownload(at: input, descriptor: resource.descriptor)
+            try await h.store.retain(id: resource.descriptor.identity.id, owner: "seed:\(track.id)")
             try await h.metadata.save(track: track, scope: "test-account")
         }
         await h.manager.enqueue(tracks: tracks, owner: "playlist:a", name: "A", quality: "exhigh", allowsMetered: false)
@@ -959,7 +925,7 @@ struct DownloadManagerTests {
         #expect(h.transport.started.isEmpty)
         let resource = try await DownloadHarness.resolve(track: next, quality: "exhigh", scope: "test-account")
         await #expect(throws: OfflineAudioError.insufficientSpace) {
-            try await h.store.beginCaching(resource.descriptor, writer: UUID(), context: .init(policy: .gb1))
+            try await h.store.reserveDownload(token: "probe", bytes: resource.descriptor.byteCount)
         }
         await h.manager.pause(job.id)
         await h.manager.resume(try #require(h.manager.jobs.first { $0.track.id == 2 }?.id))
@@ -1021,11 +987,8 @@ struct DownloadManagerTests {
             let track = try JSONDecoder().decode(Track.self, from: JSONSerialization.data(withJSONObject: json))
             tracks.append(track)
             let resource = try await DownloadHarness.resolve(track: track, quality: "exhigh", scope: "test-account")
-            let writer = UUID()
-            try await h.store.begin(resource.descriptor, writer: writer)
-            try await h.store.write(h.fixture.data, at: 0, id: resource.descriptor.identity.id, writer: writer)
-            try await h.store.finalize(id: resource.descriptor.identity.id, writer: writer)
-            await h.store.releaseWriter(id: resource.descriptor.identity.id, writer: writer)
+            try await h.store.importFixture(h.fixture.data, descriptor: resource.descriptor)
+            try await h.store.retain(id: resource.descriptor.identity.id, owner: "download:\(id)")
             try await h.metadata.save(track: track, scope: "test-account")
         }
         await h.manager.enqueue(tracks: [tracks[1], tracks[0]], owner: "playlist:9", name: "Saved", quality: "exhigh", allowsMetered: false)
@@ -1454,39 +1417,11 @@ struct DownloadManagerTests {
         #expect(saved.collections.isEmpty && saved.jobs.isEmpty && h.transport.started.isEmpty)
     }
 
-    @Test func partialPlaybackCacheDoesNotBlockBackgroundDownload() async throws {
-        let h = try DownloadHarness()
-        defer { h.close() }
-        let server = try await AudioFixtureServer(fixture: h.fixture, delay: 0.05)
-        defer { server.stop() }
-        let resource = h.fixture.resource(url: server.url)
-        let source = AudioTransferCoordinator(resource: resource, store: h.store, cacheContext: .init(policy: .automatic))
-        _ = try await source.read(at: 0, maximum: 1_024)
-        let manager = DownloadManager(store: h.store, metadata: h.metadata, persistence: h.persistence,
-            transport: h.transport, accountScope: "test-account", resolver: { _, _, _ in resource }, metadataFetcher: { _, _ in },
-            prepareResource: { requested in
-                #expect(requested.descriptor == resource.descriptor)
-                await source.close()
-            })
-        defer { manager.shutdown() }
-        manager.setNetwork(.init(connected: true, expensive: false, constrained: false))
-        await manager.enqueue(tracks: [h.track], owner: "single:1", name: nil, quality: "exhigh", allowsMetered: false)
-        try await waitForDownload { h.transport.started.count == 1 }
-        #expect(await source.receivedByteCount < h.fixture.descriptor.byteCount)
-        try h.transport.finish(h.transport.started[0])
-        try await waitForDownload { manager.jobs.first?.status == .complete }
-        #expect(try await h.store.record(id: resource.descriptor.identity.id)?.retainedBy.isEmpty == false)
-        await source.close()
-    }
-
-    @Test func promotesCachedAudioWithoutNetwork() async throws {
+    @Test func reusesAudioAnotherCollectionOwnsWithoutNetwork() async throws {
         let h = try DownloadHarness(online: false)
         defer { h.close() }
-        let writer = UUID(), descriptor = h.fixture.descriptor
-        try await h.store.begin(descriptor, writer: writer)
-        try await h.store.write(h.fixture.data, at: 0, id: descriptor.identity.id, writer: writer)
-        try await h.store.finalize(id: descriptor.identity.id, writer: writer)
-        await h.store.releaseWriter(id: descriptor.identity.id, writer: writer)
+        try await h.store.importFixture(h.fixture.data, descriptor: h.fixture.descriptor)
+        try await h.store.retain(id: h.fixture.descriptor.identity.id, owner: "playlist:other")
         await h.enqueue()
         try await waitForDownload { h.manager.jobs.first?.status == .complete && !h.manager.offlineTracks.isEmpty }
         #expect(h.transport.started.isEmpty)
@@ -1661,26 +1596,23 @@ struct DownloadManagerTests {
         #expect(transport.started.isEmpty)
     }
 
-    @Test func removingDownloadDeletesAudioAndLeavesOtherCachePrivate() async throws {
+    @Test func removingADownloadLeavesOtherDownloadsAlone() async throws {
         let h = try DownloadHarness(online: false)
         defer { h.close() }
-        let cachedTrack = try JSONDecoder().decode(Track.self, from: Data("{\"id\":42,\"name\":\"Private cache\",\"dt\":3000}".utf8))
+        let cachedTrack = try JSONDecoder().decode(Track.self, from: Data("{\"id\":42,\"name\":\"Other download\",\"dt\":3000}".utf8))
         let cachedResource = try await DownloadHarness.resolve(track: cachedTrack, quality: "exhigh", scope: "test-account")
         for descriptor in [h.fixture.descriptor, cachedResource.descriptor] {
-            let writer = UUID()
-            try await h.store.begin(descriptor, writer: writer)
-            try await h.store.write(h.fixture.data, at: 0, id: descriptor.identity.id, writer: writer)
-            try await h.store.finalize(id: descriptor.identity.id, writer: writer)
-            await h.store.releaseWriter(id: descriptor.identity.id, writer: writer)
+            try await h.store.importFixture(h.fixture.data, descriptor: descriptor)
         }
+        try await h.store.retain(id: h.fixture.descriptor.identity.id, owner: "seed:1")
+        try await h.store.retain(id: cachedResource.descriptor.identity.id, owner: "download:42")
         try await h.metadata.save(track: cachedTrack, scope: "test-account")
         await h.enqueue(owner: "playlist:1")
-        try await waitForDownload { h.manager.downloadedSongs().count == 1 && h.manager.offlineTracks.count == 2 }
+        try await waitForDownload { h.manager.downloadedSongs().count == 2 && h.manager.pendingJobs.isEmpty }
         #expect(h.manager.downloadedSongs(in: "playlist:1").map(\.id) == [h.track.id])
         #expect(h.manager.downloadedSongs(in: "missing").isEmpty)
-        #expect(h.manager.pendingJobs.isEmpty)
         await h.manager.deleteLocalAudio(trackID: h.track.id)
-        #expect(h.manager.downloadedSongs().isEmpty)
+        #expect(h.manager.downloadedSongs().map(\.id) == [42])
         #expect(try await h.store.record(id: h.fixture.descriptor.identity.id) == nil)
         #expect(try await h.store.record(id: cachedResource.descriptor.identity.id)?.state == .complete)
         #expect(h.transport.started.isEmpty)

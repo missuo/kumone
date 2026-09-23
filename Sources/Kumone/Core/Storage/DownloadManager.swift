@@ -61,13 +61,7 @@ final class DownloadManager: ObservableObject {
         let root = OfflineStore.shared.directory.appendingPathComponent("downloads", isDirectory: true)
         let manager = DownloadManager(store: .shared, metadata: .shared, persistence: DownloadCatalogStore(directory: root),
                                       transport: BackgroundDownloadTransport(inbox: root.appendingPathComponent("inbox")),
-                                      accountScope: AccountStore.shared.offlineScope,
-                                      cacheContext: {
-                                          let account = AccountStore.shared
-                                          return .init(policy: SettingsManager.shared.musicCachePolicy,
-                                              likedTracks: account.offlineScope.map { [$0: account.likedTrackIDs] } ?? [:])
-                                      },
-                                      prepareResource: { await PlaybackCacheController.shared.prepareForBackgroundDownload($0) })
+                                      accountScope: AccountStore.shared.offlineScope)
         manager.observeForeground()
         if !KumonePaths.isOfflineUITest { manager.monitorNetwork() }
         Task { await manager.start() }
@@ -96,14 +90,6 @@ final class DownloadManager: ObservableObject {
 
     var storageAssetIDs: Set<String> {
         Set(catalog.jobs.filter { !$0.owners.isEmpty }.flatMap { [$0.assetID, $0.descriptor?.identity.id].compactMap { $0 } })
-    }
-
-    var metadataTrackIDs: [String: Set<Int>] {
-        var result: [String: Set<Int>] = [:]
-        for job in catalog.jobs where !job.owners.isEmpty {
-            result[job.accountScope, default: []].insert(job.track.id)
-        }
-        return result
     }
 
     func downloadedSongs(in collectionID: String? = nil) -> [Track] {
@@ -148,8 +134,6 @@ final class DownloadManager: ObservableObject {
     private let resolver: Resolver
     private let metadataFetcher: MetadataFetcher
     private let metadataReader: (Int, String) async -> Track?
-    private let cacheContext: () -> MusicCacheContext
-    private let prepareResource: (OfflineAudioResource) async -> Void
     private let retrySleep: (Duration) async throws -> Void
     private var catalog = DownloadCatalog()
     private var networkRetries: [UUID: Int] = [:]
@@ -158,7 +142,6 @@ final class DownloadManager: ObservableObject {
     private var displayWorkers: [UUID: (id: UUID, task: Task<Void, Never>)] = [:]
     private var restoration: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
-    private var cacheObservation: AnyCancellable?
     private var monitor: NWPathMonitor?
     private var backgroundCompletion: (() -> Void)?
     private var backgroundEventsDelivered = false
@@ -179,8 +162,6 @@ final class DownloadManager: ObservableObject {
          resolver: @escaping Resolver = { try await NeteaseAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
-         cacheContext: @escaping () -> MusicCacheContext = { .init(policy: .automatic) },
-         prepareResource: @escaping (OfflineAudioResource) async -> Void = { _ in },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.store = store
         self.metadata = metadata
@@ -188,19 +169,9 @@ final class DownloadManager: ObservableObject {
         self.transport = transport
         self.accountScope = accountScope
         self.resolver = resolver
-        self.prepareResource = prepareResource
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
         self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
-        self.cacheContext = cacheContext
         self.retrySleep = retrySleep
-        cacheObservation = store.cacheCompletions.receive(on: DispatchQueue.main).sink { [weak self] descriptor in
-            Task { @MainActor [weak self] in
-                guard let self, self.accountScope == descriptor.identity.accountScope else { return }
-                await self.start()
-                guard self.isReady, self.accountScope == descriptor.identity.accountScope else { return }
-                await self.mergeLibraryEntry(trackID: descriptor.identity.trackID, scope: descriptor.identity.accountScope)
-            }
-        }
     }
 
     func start() async {
@@ -257,6 +228,7 @@ final class DownloadManager: ObservableObject {
             // Existing completed files recover a crash between importing audio
             // and saving a complete job. No second download is necessary.
             await reconcileCompletedAssets()
+            try? await store.removeUnretained(keeping: storageAssetIDs)
             for job in catalog.jobs {
                 guard let token = job.token, let receivedBytes = received[token],
                       !receiptTokens.contains(token) else { continue }
@@ -266,9 +238,7 @@ final class DownloadManager: ObservableObject {
                     continue
                 }
                 do {
-                    var context = cacheContext()
-                    context.protectedAssetIDs.formUnion(storageAssetIDs)
-                    try await store.reserveDownload(token: token, bytes: max(0, descriptor.byteCount - receivedBytes), context: context)
+                    try await store.reserveDownload(token: token, bytes: max(0, descriptor.byteCount - receivedBytes))
                     guard current(job), let i = index(job.id) else {
                         transport.cancel(token: token)
                         await store.releaseDownloadReservation(token: token)
@@ -603,7 +573,6 @@ final class DownloadManager: ObservableObject {
         networkRetryTasks.values.forEach { $0.cancel() }
         networkRetryTasks.removeAll()
         eventTask?.cancel()
-        cacheObservation?.cancel()
         workers.values.forEach { $0.task.cancel() }
         displayWorkers.values.forEach { $0.task.cancel() }
         monitor?.cancel()
@@ -694,8 +663,6 @@ final class DownloadManager: ObservableObject {
                 try await persist()
                 return
             }
-            await prepareResource(resource)
-            guard current(job) else { return }
             if let local = try await store.reusableDescriptor(accountScope: job.accountScope, trackID: job.track.id,
                                                                quality: job.quality, retainingFor: job.retentionOwner) {
                 guard current(job) else {
@@ -722,10 +689,7 @@ final class DownloadManager: ObservableObject {
             // Valid resume bytes already occupy disk space; reserve only what
             // is still missing, alongside the other active transfers.
             let remainingBytes = resource.descriptor.byteCount - catalog.jobs[i].receivedBytes
-            var context = cacheContext()
-            context.protectedAssetIDs.formUnion(storageAssetIDs)
-            context.protectedAssetIDs.insert(resource.descriptor.identity.id)
-            try await store.reserveDownload(token: token, bytes: remainingBytes, context: context)
+            try await store.reserveDownload(token: token, bytes: remainingBytes)
             guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
             catalog.jobs[i].descriptor = resource.descriptor
             catalog.jobs[i].expectedBytes = resource.descriptor.byteCount
@@ -802,7 +766,7 @@ final class DownloadManager: ObservableObject {
             guard current(job) else { return }
             if let resumeData { try? await persistence.saveResumeData(resumeData, jobID: job.id) }
             guard current(job) else { return }
-            if AudioTransferCoordinator.isConnectivityFailure(NSError(domain: domain, code: code)) {
+            if ConnectivityFailure.matches(NSError(domain: domain, code: code)) {
                 await fail(job: job, error: NSError(domain: domain, code: code))
             } else {
                 let hadResumeData = await persistence.resumeData(jobID: job.id) != nil
@@ -875,7 +839,7 @@ final class DownloadManager: ObservableObject {
         guard current(job), let i = index(job.id) else { return }
         let delays: [Duration] = [.seconds(1), .seconds(2), .seconds(4)]
         let retries = networkRetries[job.id, default: 0]
-        let waitsForNetwork = AudioTransferCoordinator.isConnectivityFailure(error)
+        let waitsForNetwork = ConnectivityFailure.matches(error)
             && (!network.permits(catalog.jobs[i]) || retries < delays.count)
         catalog.jobs[i].status = waitsForNetwork ? .waitingNetwork : ((error as? OfflineAudioError) == .unavailable ? .unavailable : .failed)
         catalog.jobs[i].errorMessage = waitsForNetwork ? nil : Self.message(for: error)
@@ -1000,6 +964,10 @@ final class DownloadManager: ObservableObject {
         }
         if changed { publish(); try? await persist() }
         await pruneCollections()
+        // Metadata outlives audio only for downloads still on their way.
+        let pending = Dictionary(grouping: catalog.jobs.filter { !$0.owners.isEmpty && $0.status != .complete }, by: \.accountScope)
+            .mapValues { Set($0.map(\.track.id)) }
+        try? await metadata.pruneUnused(audio: store, protectedTracks: pending)
     }
 
     nonisolated private static func precedes(_ lhs: OfflineLibraryTrack, _ rhs: OfflineLibraryTrack) -> Bool {

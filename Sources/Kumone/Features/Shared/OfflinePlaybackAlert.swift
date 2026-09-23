@@ -16,7 +16,7 @@ struct OfflinePlaybackAlert: ViewModifier {
             Button("取消", role: .cancel) { player.offlineIssue = nil }
         } message: { issue in
             if let name = issue.trackName {
-                Text("《\(name)》尚未完整缓存。连接网络后可重试，或播放队列里已有的离线歌曲。")
+                Text("《\(name)》尚未下载。连接网络后可重试，或播放队列里已下载的歌曲。")
             } else {
                 Text("当前队列没有可离线播放的歌曲。连接网络后可继续，或前往已下载查看其他歌曲。")
             }

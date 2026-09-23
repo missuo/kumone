@@ -50,15 +50,10 @@ public struct IOSMainWindow: View {
                 }
             }
             .onChange(of: scenePhase) { phase in
-                if phase != .active {
-                    player.checkpointPosition()
-                    Task { await OfflineStore.shared.flushPendingWrites() }
-                }
-                else {
-                    Task {
-                        await DownloadManager.shared.refreshLibrary()
-                        if DownloadManager.shared.network.connected { await account.refreshLibrary() }
-                    }
+                guard phase == .active else { return }
+                Task {
+                    await DownloadManager.shared.refreshLibrary()
+                    if DownloadManager.shared.network.connected { await account.refreshLibrary() }
                 }
             }
             .task(id: settings.showMainWindowAmbientBackground) {
