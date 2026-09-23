@@ -90,12 +90,24 @@ final class NowPlayingManager {
             return .success
         }
 
+        #if os(macOS)
+        // Shuffle is one of the queue orders on macOS (`shuffleEnabled` is
+        // derived), so observe the order and map it back to on/off.
+        player.$queueOrder
+            .map { $0 == .shuffled }
+            .removeDuplicates()
+            .sink { enabled in
+                center.changeShuffleModeCommand.currentShuffleType = enabled ? .items : .off
+            }
+            .store(in: &playbackStateCancellables)
+        #else
         player.$shuffleEnabled
             .removeDuplicates()
             .sink { enabled in
                 center.changeShuffleModeCommand.currentShuffleType = enabled ? .items : .off
             }
             .store(in: &playbackStateCancellables)
+        #endif
 
         player.$repeatMode
             .removeDuplicates()

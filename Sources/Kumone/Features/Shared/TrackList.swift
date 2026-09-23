@@ -186,6 +186,14 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artwork: some View {
+        #if os(iOS)
+        Button(action: onPlay) {
+            artworkImage
+        }
+        .buttonStyle(.plain)
+        .disabled(!isPlayable)
+        .accessibilityLabel("播放：\(track.name)")
+        #else
         if track.album.id > 0, !track.album.name.isEmpty {
             Button {
                 openDestination(.album(track.album.id))
@@ -197,6 +205,7 @@ struct TrackRow: View {
         } else {
             artworkImage
         }
+        #endif
     }
 
     @ViewBuilder
@@ -226,6 +235,12 @@ struct TrackRow: View {
 
     @ViewBuilder
     private var artistLinks: some View {
+        #if os(iOS)
+        Text(track.artistNames)
+            .font(isCompact ? .footnote : .system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        #else
         let artists = track.artists.filter { $0.id > 0 && !$0.name.isEmpty }
         if artists.isEmpty {
             Text(track.artistNames)
@@ -251,6 +266,7 @@ struct TrackRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
+        #endif
     }
 
     private var rowHeight: CGFloat {
@@ -626,7 +642,7 @@ struct TrackListView: View {
     private func playability(of track: Track) -> TrackPlayability {
         if downloads.offlineTracksByID[track.id] != nil { return .playable }
         // With unblock enabled, gray tracks resolve from third-party sources.
-        if SettingsManager.shared.enableUnblock { return .playable }
+        if SettingsManager.shared.canResolveUnblockedTracks { return .playable }
         return track.playability(
             privilege: privileges[track.id],
             isLoggedIn: account.isLoggedIn,

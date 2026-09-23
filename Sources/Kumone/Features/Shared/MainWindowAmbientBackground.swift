@@ -69,63 +69,104 @@ enum MainWindowAmbientOpacity {
 struct MainWindowAmbientConfiguration {
     let showsAmbientBackground: Bool
     let showsTitlebarAmbientBackground: Bool
+    let showsNowPlaying: Bool
     let colors: ArtworkColors
-    let mainColumnWidth: CGFloat
+    let mainColumnLeadingInset: CGFloat
     let intensity: Double
     let isDark: Bool
 }
 
-/// Owns the AppKit state required to extend the artwork tint through the main
-/// window titlebar while preserving the window's original appearance.
+/// Shares titlebar extension between the artwork tint and now-playing page,
+/// restoring the original appearance when neither needs it.
 @MainActor
 final class MainWindowAmbientAppearanceController {
     private var configuration = MainWindowAmbientConfiguration(
         showsAmbientBackground: false,
         showsTitlebarAmbientBackground: false,
+        showsNowPlaying: false,
         colors: .fallback,
-        mainColumnWidth: 0,
+        mainColumnLeadingInset: 0,
         intensity: 1,
         isDark: false
     )
     private var titlebarWasTransparent: Bool?
     private var hadFullSizeContentView = false
     private var titlebarMask: TitlebarMaskView?
+    private var toolbarUpdateTask: Task<Void, Never>?
+    private var isUpdatingLayout = false
+
+    private var extendsContentIntoTitlebar: Bool {
+        configuration.showsAmbientBackground || configuration.showsNowPlaying
+    }
+
+    /// Fades the titlebar tint along with the window chrome while the
+    /// now-playing page covers it.
+    func setTitlebarMaskFadedOut(_ fadedOut: Bool) {
+        guard let titlebarMask else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = fadedOut ? 0.2 : 0.25
+            titlebarMask.animator().alphaValue = fadedOut ? 0 : 1
+        }
+    }
 
     func configure(_ configuration: MainWindowAmbientConfiguration, in window: NSWindow) {
-        let wasShowingAmbientBackground = self.configuration.showsAmbientBackground
+        let wasExtendingContent = extendsContentIntoTitlebar
+        let toolbarVisibilityChanged = self.configuration.showsTitlebarAmbientBackground
+            != configuration.showsTitlebarAmbientBackground
         self.configuration = configuration
 
-        guard wasShowingAmbientBackground != configuration.showsAmbientBackground else {
-            updateLayout(in: window)
-            return
-        }
-
-        if configuration.showsAmbientBackground {
+        if !wasExtendingContent, extendsContentIntoTitlebar {
             titlebarWasTransparent = window.titlebarAppearsTransparent
             hadFullSizeContentView = window.styleMask.contains(.fullSizeContentView)
-            updateLayout(in: window)
-        } else {
-            window.titlebarAppearsTransparent = titlebarWasTransparent ?? false
-            if hadFullSizeContentView {
-                window.styleMask.insert(.fullSizeContentView)
-            } else {
-                window.styleMask.remove(.fullSizeContentView)
-            }
+        }
+        updateLayout(in: window)
+        if !extendsContentIntoTitlebar {
             titlebarWasTransparent = nil
-            titlebarMask?.removeFromSuperview()
-            titlebarMask = nil
+        }
+
+        // SwiftUI can reset the window style after committing toolbar visibility.
+        // Reapply after that commit; a quick close/reopen cancels the old request.
+        if toolbarVisibilityChanged {
+            toolbarUpdateTask?.cancel()
+            toolbarUpdateTask = Task { @MainActor [weak self, weak window] in
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled, let self, let window else { return }
+                self.updateLayout(in: window)
+            }
         }
     }
 
     func updateLayout(in window: NSWindow) {
-        guard configuration.showsAmbientBackground else { return }
-        if !window.titlebarAppearsTransparent {
-            window.titlebarAppearsTransparent = true
+        // Changing styleMask can synchronously send windowDidResize back here.
+        guard !isUpdatingLayout else { return }
+        isUpdatingLayout = true
+        defer { isUpdatingLayout = false }
+
+        if extendsContentIntoTitlebar || titlebarWasTransparent != nil {
+            let transparent = extendsContentIntoTitlebar || titlebarWasTransparent == true
+            let fullSize = extendsContentIntoTitlebar || hadFullSizeContentView
+            let styleChanged = window.styleMask.contains(.fullSizeContentView) != fullSize
+            if window.titlebarAppearsTransparent != transparent {
+                window.titlebarAppearsTransparent = transparent
+            }
+            if styleChanged {
+                // Finish the new content geometry in the same transaction. A
+                // deferred layout can leave the backdrop behind during zoom.
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    context.allowsImplicitAnimation = false
+                    if fullSize {
+                        window.styleMask.insert(.fullSizeContentView)
+                    } else {
+                        window.styleMask.remove(.fullSizeContentView)
+                    }
+                    window.contentView?.superview?.layoutSubtreeIfNeeded()
+                }
+            }
         }
-        if !window.styleMask.contains(.fullSizeContentView) {
-            window.styleMask.insert(.fullSizeContentView)
-        }
-        guard configuration.showsTitlebarAmbientBackground else {
+
+        guard configuration.showsAmbientBackground,
+              configuration.showsTitlebarAmbientBackground else {
             titlebarMask?.removeFromSuperview()
             titlebarMask = nil
             return
@@ -137,13 +178,17 @@ final class MainWindowAmbientAppearanceController {
     private func installTitlebarMask(in window: NSWindow) {
         guard titlebarMask == nil, let contentView = window.contentView else { return }
         let mask = TitlebarMaskView()
+        mask.autoresizingMask = [.width, contentView.isFlipped ? .maxYMargin : .minYMargin]
         contentView.addSubview(mask, positioned: .above, relativeTo: nil)
         titlebarMask = mask
     }
 
     private func layoutTitlebarMask(in window: NSWindow) {
         guard let mask = titlebarMask, let contentView = window.contentView else { return }
-        let width = min(max(configuration.mainColumnWidth, 0), contentView.bounds.width)
+        // During zoom, SwiftUI's detail width can lag behind the window bounds.
+        // Anchor to the sidebar edge and size from AppKit's current bounds.
+        let leadingInset = max(configuration.mainColumnLeadingInset, 0)
+        let width = max(contentView.bounds.width - leadingInset, 0)
         guard width > 0 else {
             mask.isHidden = true
             return
@@ -195,7 +240,10 @@ private final class TitlebarMaskView: NSView {
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         gradientLayer.frame = bounds
+        CATransaction.commit()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

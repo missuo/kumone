@@ -13,9 +13,22 @@ final class SleepTimer: ObservableObject {
         }
     }
 
+    #if os(macOS)
+    @Published private(set) var state: State = .inactive {
+        didSet { if state != oldValue { onStateChange?(state) } }
+    }
+    #else
     @Published private(set) var state: State = .inactive
+    #endif
 
     var onDeadlineReached: (() -> Void)?
+    #if os(macOS)
+    /// Every change of `state`. The player uses it to drop an already-armed
+    /// hand-over the moment "stop after this track" is chosen, and to re-arm
+    /// one if that is cancelled — a hand-over would otherwise carry playback
+    /// past the end the listener asked to stop at.
+    var onStateChange: ((State) -> Void)?
+    #endif
 
     private var deadlineTask: Task<Void, Never>?
     private var generation = 0

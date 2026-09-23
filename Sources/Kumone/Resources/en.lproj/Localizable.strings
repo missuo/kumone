@@ -23,6 +23,9 @@
 "下一首" = "Next";
 "上一首" = "Previous";
 "随机播放" = "Shuffle";
+"AutoMix 顺序" = "AutoMix Order";
+"列表顺序" = "List Order";
+"播放顺序" = "Play Order";
 "循环模式" = "Repeat Mode";
 "喜欢" = "Like";
 "取消喜欢" = "Unlike";
@@ -31,7 +34,7 @@
 "检查更新…" = "Check for Updates…";
 "打开播放页" = "Open Now Playing";
 "私人漫游中" = "Personal FM";
-"音源" = "SRC";
+"音源" = "Audio Sources";
 "来自 %@" = "From %@";
 "音量" = "Volume";
 "未在播放" = "Not Playing";
@@ -208,7 +211,7 @@
 "高解析" = "Hi-Res";
 "无损与 Hi-Res 需要黑胶 VIP，未开通时自动回落到可用音质" = "Lossless and Hi-Res require VIP; falls back automatically otherwise";
 "灰色歌曲解锁" = "Unblock Gray Tracks";
-"无版权 / 下架歌曲自动从第三方音源（酷我、酷狗等）匹配播放" = "Unavailable tracks are matched from third-party sources (Kuwo, Kugou, etc.)";
+"无版权或下架歌曲将从已启用音源中匹配播放" = "Unavailable tracks are matched from enabled sources";
 "外观" = "Appearance";
 "主题" = "Theme";
 "跟随系统" = "System";
@@ -223,7 +226,10 @@
 "桌面歌词" = "Desktop Lyrics";
 "在屏幕上悬浮显示当前歌词，可拖动调整位置" = "Float the current lyric line on screen; drag to reposition";
 "存储" = "Storage";
+"歌曲缓存" = "Song Cache";
 "图片缓存" = "Image Cache";
+"已占用" = "Used";
+"清理" = "Clear";
 "清除缓存" = "Clear Cache";
 "账号" = "Account";
 "当前账号" = "Signed in as";
@@ -233,10 +239,16 @@
 "计算中…" = "Calculating…";
 "0 字节" = "Zero bytes";
 "缓存已清除" = "Cache cleared";
+"歌曲缓存已清除" = "Song cache cleared";
+"图片缓存已清除" = "Image cache cleared";
+"歌曲缓存上限" = "Song Cache Limit";
+"不限" = "Unlimited";
+"清除歌曲缓存" = "Clear Song Cache";
 
 /* Errors & toasts */
 "加载失败" = "Failed to Load";
 "重试" = "Retry";
+"播放失败，已跳过" = "Playback failed — skipped";
 "网络错误 (%lld)" = "Network error (%lld)";
 "接口错误 (%lld)" = "API error (%lld)";
 "需要登录" = "Sign-in required";
@@ -296,10 +308,54 @@
 "未检测到 TrollStore：检查更新会打开发布页，需用侧载工具重新安装（登录状态与设置保留）" = "No TrollStore: Check for Updates opens the release page; reinstall with your sideloading tool (sign-in and settings are kept)";
 "可能被网易云风控拦截而不可用，推荐使用扫码登录" = "May be blocked by NetEase risk control and unavailable — QR sign-in is recommended";
 
+/* Output device menu (macOS) */
+"系统默认" = "System Default";
+"输出设备：%@" = "Output Device: %@";
+"“%@”已断开，已切换到系统默认输出" = "“%@” disconnected — switched to the system default output";
+"系统默认 · %@" = "System Default · %@";
+"输出设备" = "Output";
+"跟随系统设置" = "Follows System Settings";
+"此 Mac" = "This Mac";
+"外接设备" = "External";
+"虚拟设备" = "Virtual";
+"蓝牙" = "Bluetooth";
+"虚拟" = "Virtual";
+"聚合" = "Aggregate";
+"AirPlay 音箱需先在控制中心或“声音”设置中选择一次，才会出现在这里" = "AirPlay speakers appear here after you’ve picked them once in Control Center or Sound settings";
+"声音设置…" = "Sound Settings…";
+"打开系统设置中的“声音”" = "Opens Sound in System Settings";
+
 /* Dock menu */
 "不循环" = "Off";
 "列表循环" = "Repeat All";
 "单曲循环" = "Repeat One";
+
+/* AutoMix settings (macOS) */
+"分析已下载的歌曲，自动衔接队列里的歌。所有分析都在本机完成。" = "Analyzes downloaded songs to blend one song in the queue into the next. All analysis happens on this Mac.";
+"自动过渡" = "Automatic Transitions";
+"在两首歌之间做节拍对齐的过渡。只分析本来就要播放的歌曲，不产生额外下载。" = "Beat-matched transitions between songs. Only songs that are about to play are analyzed, so nothing extra is downloaded.";
+"智能顺序" = "Smart Order";
+"按过渡效果重排队列，随机按钮会多出一个 AutoMix 状态。需要额外下载候选歌曲（标准音质）来打分。" = "Reorders the queue for the best transitions and adds an AutoMix state to the Shuffle button. Downloads extra candidate songs (Standard quality) to score them.";
+"统一歌曲响度" = "Normalize Loudness";
+"按每首歌的母带响度调整播放增益，下一首不会突然变响；需要开启 AutoMix" = "Adjusts playback gain to each song’s mastered loudness so the next song never jumps in volume. Requires AutoMix";
+"增强过渡（人声 / 鼓分离）" = "Enhanced Transitions (Vocal / Drum Separation)";
+"用本机 GPU 分离音轨，过渡更干净。需要下载模型，播放时会占用 GPU 并增加发热和耗电。" = "Separates stems on this Mac’s GPU for cleaner transitions. Requires a model download; uses the GPU during playback, adding heat and power use.";
+"对古典、现场录音、有声书等内容效果不佳，遇到这类歌单可在这里暂时关闭。" = "Works poorly with classical music, live recordings, audiobooks and the like — turn it off here while playing them.";
+
+/* AutoMix stem models (macOS) */
+"两轨模型（人声）" = "Two-Stem Model (Vocals)";
+"四轨模型（人声 / 鼓 / 贝斯 / 其他）" = "Four-Stem Model (Vocals / Drums / Bass / Other)";
+"从 GitHub 下载，校验后存放在本机" = "Downloaded from GitHub and verified, then stored on this Mac";
+"下载" = "Download";
+"未下载" = "Not Downloaded";
+"下载中 %lld%%" = "Downloading %lld%%";
+"校验中…" = "Verifying…";
+"已安装" = "Installed";
+"下载失败（HTTP %lld）" = "Download failed (HTTP %lld)";
+"文件大小不符：应为 %lld 字节，实际 %lld 字节" = "Size mismatch: expected %lld bytes, got %lld";
+"校验未通过，文件可能已损坏" = "Verification failed — the file may be damaged";
+"文件不完整，请重新下载" = "Incomplete file — download it again";
+"校验未通过，请重新下载" = "Verification failed — download it again";
 
 // Downloads
 "下载任务" = "Download Queue";
@@ -319,7 +375,6 @@
 "下载 %lld 首歌曲可能消耗较多流量" = "Downloading %lld songs may use a lot of data";
 "下载全部" = "Download All";
 "等待歌单完整加载后下载全部歌曲" = "Download all songs once the complete playlist has loaded.";
-"下载" = "Download";
 "排队中" = "Queued";
 "获取下载地址" = "Preparing Download";
 "下载中" = "Downloading";

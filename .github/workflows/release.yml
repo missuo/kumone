@@ -54,7 +54,7 @@ jobs:
       - name: Build app (universal)
         run: |
           MARKETING_VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" \
-            ARCHES="arm64 x86_64" \
+            ARCHES="arm64 x86_64" FETCH_MLX_METALLIB=1 \
             Scripts/build-app.sh release
 
       - name: Codesign (Developer ID, hardened runtime)

@@ -73,6 +73,43 @@ struct PlayerBar: View {
         .help("打开播放页")
     }
 
+    // MARK: - Queue-order control
+
+    /// The queue-order button's three platform-dependent values. macOS cycles
+    /// `listed → shuffled → autoMix`; iOS has no AutoMix and toggles shuffle.
+
+    private var queueOrderIcon: String {
+        #if os(macOS)
+        player.queueOrder.symbolName
+        #else
+        "shuffle"
+        #endif
+    }
+
+    private var queueOrderIsActive: Bool {
+        #if os(macOS)
+        player.queueOrder != .listed
+        #else
+        player.shuffleEnabled
+        #endif
+    }
+
+    private var queueOrderHelp: LocalizedStringKey {
+        #if os(macOS)
+        player.queueOrder.controlHelp
+        #else
+        "随机播放"
+        #endif
+    }
+
+    private func cycleQueueOrder() {
+        #if os(macOS)
+        player.cycleQueueOrder()
+        #else
+        player.toggleShuffle()
+        #endif
+    }
+
     // MARK: - Center: transport + scrubber
 
     private var centerSection: some View {
@@ -84,13 +121,20 @@ struct PlayerBar: View {
                     }
                     .help("不喜欢，换一首")
                 } else {
+                    // One control for all three queue orders: the third state
+                    // is a *kind* of shuffle, so it lives inside the shuffle
+                    // button rather than beside it. The cycle skips it wherever
+                    // it could do nothing (AutoMix off, order off), which
+                    // leaves the familiar two-state button untouched there —
+                    // and iOS, which has no AutoMix at all, keeps the plain
+                    // two-state shuffle toggle. Only the three values below
+                    // differ per platform; the button itself is one button.
                     PlayerIconButton(
-                        icon: "shuffle", size: 12,
-                        isActive: player.shuffleEnabled
-                    ) {
-                        player.toggleShuffle()
-                    }
-                    .help("随机播放")
+                        icon: queueOrderIcon, size: 12,
+                        isActive: queueOrderIsActive,
+                        action: cycleQueueOrder
+                    )
+                    .help(queueOrderHelp)
                 }
 
                 PlayerIconButton(icon: "backward.fill", size: 14, disabled: player.isFMMode) {
@@ -208,6 +252,41 @@ struct PlayerBar: View {
 }
 
 // MARK: - Icon button
+#if os(macOS)
+
+/// How the one queue-order control presents each state. Here rather than on
+/// the enum itself so `QueueOrder` stays a pure Core type: three transports
+/// (this bar, the now-playing page, the Dock menu) read the same two answers.
+extension QueueOrder {
+    /// `wand.and.stars` for AutoMix: it reads as "smart shuffle" next to the
+    /// plain `shuffle` arrows, and the accent tint the button applies to any
+    /// non-listed state carries the rest.
+    var symbolName: String {
+        switch self {
+        case .listed, .shuffled: return "shuffle"
+        case .autoMix: return "wand.and.stars"
+        }
+    }
+
+    /// Tooltip / menu wording for the state the control is *in*.
+    var controlHelp: LocalizedStringKey {
+        switch self {
+        case .listed, .shuffled: return "随机播放"
+        case .autoMix: return "AutoMix 顺序"
+        }
+    }
+
+    /// The Dock menu names all three states — it is a list of them rather than
+    /// a button standing in one, so `listed` gets a word of its own.
+    var menuTitle: String {
+        switch self {
+        case .listed: return String(localized: "列表顺序")
+        case .shuffled: return String(localized: "随机播放")
+        case .autoMix: return String(localized: "AutoMix 顺序")
+        }
+    }
+}
+#endif
 
 struct PlayerIconButton: View {
     let icon: String

@@ -31,9 +31,23 @@ final class DockMenu: NSObject, NSMenuDelegate {
             action: #selector(previous), enabled: player.hasCurrentTrack)
         menu.addItem(.separator())
 
-        let shuffle = add(to: menu, title: String(localized: "随机播放"),
-                          action: #selector(toggleShuffle), enabled: true)
-        shuffle.state = player.shuffleEnabled ? .on : .off
+        // The queue order is one three-way choice, so it reads as a submenu
+        // for the same reason the repeat mode below does. The third entry
+        // appears only where it could do something; without it this is the
+        // two-state shuffle the menu always had, with its state spelled out.
+        let orderItem = NSMenuItem(title: String(localized: "播放顺序"),
+                                   action: nil, keyEquivalent: "")
+        let orderMenu = NSMenu()
+        orderMenu.autoenablesItems = false
+        for order in QueueOrder.allCases
+        where order != .autoMix || player.autoMixOrderAvailable {
+            let item = add(to: orderMenu, title: order.menuTitle,
+                           action: #selector(setQueueOrder(_:)), enabled: true)
+            item.representedObject = order.rawValue
+            item.state = player.queueOrder == order ? .on : .off
+        }
+        orderItem.submenu = orderMenu
+        menu.addItem(orderItem)
 
         // Three-way repeat reads better as a submenu than as one checkmark.
         let repeatItem = NSMenuItem(title: String(localized: "循环模式"),
@@ -81,7 +95,11 @@ final class DockMenu: NSObject, NSMenuDelegate {
     @objc private func togglePlayPause() { player.togglePlayPause() }
     @objc private func next() { player.next() }
     @objc private func previous() { player.previous() }
-    @objc private func toggleShuffle() { player.toggleShuffle() }
+    @objc private func setQueueOrder(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let order = QueueOrder(rawValue: raw) else { return }
+        player.setQueueOrder(order)
+    }
 
     @objc private func setRepeatMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,

@@ -103,6 +103,15 @@ actor ImageCache {
         return nil
     }
 
+    func usage() throws -> CacheUsage {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+        let bytes = files.reduce(Int64(0)) { total, file in
+            total + Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return CacheUsage(bytes: bytes)
+    }
+
     /// Existing views may finish loading their image, but requests started
     /// before the clear cannot refill either disk or memory caches afterwards.
     func clear() throws {

@@ -1,32 +1,36 @@
 import Foundation
 
+extension PlayContext {
+    var source: PlaySource {
+        switch kind {
+        case .playlist: return .playlist(id)
+        case .album: return .album(id)
+        case .artist: return .artist(id)
+        case .daily: return .daily
+        case .cloud: return .cloud
+        default: return .none
+        }
+    }
+
+    /// The saved download collection this place maps to, if it can be one.
+    var downloadCollectionID: String? {
+        switch kind {
+        case .playlist: return "playlist:\(id)"
+        case .album: return "album:\(id)"
+        default: return nil
+        }
+    }
+}
+
 struct PlaybackQueueCandidate: Equatable {
     enum Origin: Equatable { case inserted(Int), queue(Int), fm(Int) }
     let track: Track
     let origin: Origin
 }
 
-/// Stamped on the playback queue when it is installed straight from resolving a
-/// place, and dropped again the moment the queue changes. Replaying the place
-/// you are already listening to skips the refetch (and works offline), but only
-/// while the queue is still exactly what that place resolved to.
-struct ResolvedQueueToken: Equatable {
-    let context: PlayContext
-    let resolvedAt: Date
-
-    func reusable(for context: PlayContext, source: PlaySource, isFM: Bool,
-                  queueIsEmpty: Bool, now: Date = Date()) -> Bool {
-        guard self.context == context, !isFM, !queueIsEmpty,
-              context.source != .none, source == context.source else { return false }
-        // Daily recommendations are a different list tomorrow.
-        guard context.kind == .daily else { return true }
-        return Calendar.current.isDate(resolvedAt, inSameDayAs: now)
-    }
-}
-
 enum PlaybackQueuePlan {
     /// One bounded pass through the actual order. The original queue is never
-    /// sorted or filtered to produce an offline/prefetch view of it.
+    /// sorted or filtered to produce an offline view of it.
     static func next(queue: [Track], currentIndex: Int, inserted: [Track], fm: [Track],
                      isFM: Bool, repeatAll: Bool, limit: Int = .max) -> [PlaybackQueueCandidate] {
         guard limit > 0 else { return [] }
@@ -40,24 +44,6 @@ enum PlaybackQueuePlan {
             for index in (0...currentIndex).prefix(limit - result.count) {
                 result.append(.init(track: queue[index], origin: .queue(index)))
             }
-        }
-        return result
-    }
-}
-
-struct PrefetchLimits: Equatable {
-    var tracks = 5
-    var seconds: TimeInterval = 20 * 60
-    var bytes: Int64 = 100_000_000
-
-    func window(_ candidates: [Track]) -> [Track] {
-        var result: [Track] = []
-        var duration: TimeInterval = 0
-        for track in candidates {
-            guard result.count < tracks, track.duration.isFinite, track.duration > 0,
-                  duration + track.duration <= seconds else { break }
-            result.append(track)
-            duration += track.duration
         }
         return result
     }
@@ -88,4 +74,53 @@ struct OfflinePlaybackIssue: Identifiable {
     let id = UUID()
     let kind: Kind
     let trackName: String?
+}
+
+/// Resolves a place from what is on this device before asking the network: a
+/// playlist snapshot saved for offline browsing, or the songs downloaded from
+/// that place. Both players share it.
+@MainActor
+enum OfflineContextResolver {
+    typealias Resolution = (tracks: [Track], source: PlaySource)
+
+    static func resolve(_ context: PlayContext, offline: Bool,
+                        online: () async throws -> Resolution?) async throws -> Resolution? {
+        let downloads = DownloadManager.shared
+        let scope = AccountStore.shared.offlineScope
+        await downloads.start()
+        guard scope == AccountStore.shared.offlineScope, downloads.accountScope == scope else { throw CancellationError() }
+        if context.kind == .playlist, let scope,
+           let saved = await PlaylistSnapshotStore.shared.load(id: context.id, scope: scope) {
+            guard scope == AccountStore.shared.offlineScope else { throw CancellationError() }
+            let summary = AccountStore.shared.userPlaylists.first { $0.id == context.id }
+            if offline || !saved.needsBackgroundRefresh(summary: summary),
+               !saved.detail.tracks.isEmpty || saved.isComplete {
+                return (saved.detail.tracks, .playlist(context.id))
+            }
+        }
+        let liked = context.kind == .playlist && AccountStore.shared.likedSongsPlaylist?.id == context.id
+            ? AccountStore.shared.likedTrackIDs : []
+        let local = downloads.localTracks(for: context, likedTrackIDs: liked)
+        if offline {
+            if !local.isEmpty { return (local, context.source) }
+            throw URLError(.notConnectedToInternet)
+        }
+        do {
+            if context.kind == .playlist {
+                // Loading through the model saves the snapshot for offline browsing.
+                let model = PlaylistContent(playlistID: context.id)
+                await model.load()
+                guard model.detail != nil, !model.tracks.isEmpty || model.detail?.trackCount == 0 else {
+                    throw URLError(.cannotLoadFromNetwork)
+                }
+                return (model.tracks, .playlist(context.id))
+            }
+            return try await online()
+        } catch {
+            guard !Task.isCancelled else { throw CancellationError() }
+            // Nothing online but something stored: the downloads beat an error.
+            if !local.isEmpty { return (local, context.source) }
+            throw error
+        }
+    }
 }

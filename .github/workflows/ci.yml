@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      # Same invocation as release.yml, minus signing / notarization: the
+      # script's own ad-hoc signature is all an unsigned build gets.
+      - name: Build app (universal, unsigned)
+        run: |
+          ARCHES="arm64 x86_64" FETCH_MLX_METALLIB=1 \
+            Scripts/build-app.sh release
