@@ -86,7 +86,7 @@ private final class DownloadHarness {
         transport = FakeDownloadTransport(inbox: root.appendingPathComponent("inbox"))
         manager = DownloadManager(store: store, metadata: metadata, persistence: persistence, transport: transport,
                                   accountScope: "test-account", resolver: resolver ?? Self.resolve, metadataFetcher: metadataFetcher,
-                                  metadataReader: metadataReader, retrySleep: retrySleep)
+                                  metadataReader: metadataReader, cachedTracks: { [] }, retrySleep: retrySleep)
         manager.setNetwork(.init(connected: online, expensive: expensive, constrained: false))
     }
 

@@ -51,19 +51,23 @@ enum PlaybackQueuePlan {
 
 struct OfflineQueueSelection {
     let candidate: PlaybackQueueCandidate
-    let lease: OfflinePlaybackLease
+    /// Nil when the song sits in the platform's song cache rather than a download.
+    let lease: OfflinePlaybackLease?
     let skipped: Int
 }
 
 enum OfflineQueueSelector {
-    static func firstAvailable(_ candidates: [PlaybackQueueCandidate], scope: String, quality: String,
-                               store: OfflineStore) async throws -> OfflineQueueSelection? {
+    /// The first upcoming song that is on this device: downloaded, or else
+    /// held by the song cache.
+    static func firstAvailable(_ candidates: [PlaybackQueueCandidate], scope: String?, quality: String,
+                               store: OfflineStore, isCached: (Int) async -> Bool) async throws -> OfflineQueueSelection? {
         for (skipped, candidate) in candidates.enumerated() {
             try Task.checkCancellation()
-            if let lease = try await store.acquire(accountScope: scope, trackID: candidate.track.id, preferredQuality: quality) {
+            if let scope, let lease = try await store.acquire(accountScope: scope, trackID: candidate.track.id, preferredQuality: quality) {
                 if Task.isCancelled { try? await store.release(lease); throw CancellationError() }
                 return .init(candidate: candidate, lease: lease, skipped: skipped)
             }
+            if await isCached(candidate.track.id) { return .init(candidate: candidate, lease: nil, skipped: skipped) }
         }
         return nil
     }

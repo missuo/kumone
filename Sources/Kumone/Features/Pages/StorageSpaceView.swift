@@ -6,6 +6,9 @@ struct StorageSpaceView: View {
     @StateObject private var model = StorageSpaceModel()
     @EnvironmentObject private var settings: SettingsManager
     @State private var clearing: StorageCategory?
+    #if os(iOS)
+    @State private var automaticLimitMB: Int?
+    #endif
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -69,10 +72,13 @@ struct StorageSpaceView: View {
                 #else
                 Toggle("歌曲缓存", isOn: $settings.enableAudioCache)
                 if settings.enableAudioCache {
-                    Picker("歌曲缓存上限", selection: $settings.audioCacheSizeMB) {
-                        ForEach(Array(stride(from: SettingsManager.audioCacheSizeRangeMB.lowerBound,
-                                             through: SettingsManager.audioCacheSizeRangeMB.upperBound,
-                                             by: SettingsManager.audioCacheSizeStepMB)), id: \.self) { megabytes in
+                    Picker("歌曲缓存上限", selection: cacheLimitSelection) {
+                        if let automaticLimitMB {
+                            Text("自动（\(format(Int64(automaticLimitMB) * 1_000_000))）").tag(0)
+                        } else {
+                            Text("自动").tag(0)
+                        }
+                        ForEach(manualCacheLimitsMB, id: \.self) { megabytes in
                             Text(format(Int64(megabytes) * 1_000_000)).tag(megabytes)
                         }
                     }
@@ -141,9 +147,11 @@ struct StorageSpaceView: View {
             Task { await model.reload() }
         }
         #else
-        .task(id: [settings.enableAudioCache ? settings.audioCacheSizeMB : 0]) {
+        .task(id: [settings.enableAudioCache ? (settings.audioCacheAutomatic ? -1 : settings.audioCacheSizeMB) : 0]) {
             guard settings.enableAudioCache else { return }
-            try? await AudioCache.shared.enforce(maximumSizeMB: settings.audioCacheSizeMB)
+            let limit = await settings.effectiveAudioCacheSizeMB()
+            automaticLimitMB = settings.audioCacheAutomatic ? limit : nil
+            try? await AudioCache.shared.enforce(maximumSizeMB: limit)
             await model.reload()
         }
         #endif
@@ -161,6 +169,25 @@ struct StorageSpaceView: View {
     }
 
     private var busy: Bool { model.isLoading || model.isClearing }
+    #if os(iOS)
+    /// Tag 0 is the automatic limit; the rest are megabytes.
+    private var cacheLimitSelection: Binding<Int> {
+        Binding(get: { settings.audioCacheAutomatic ? 0 : settings.audioCacheSizeMB },
+                set: { value in
+                    if value == 0 { settings.audioCacheAutomatic = true }
+                    else { settings.audioCacheAutomatic = false; settings.audioCacheSizeMB = value }
+                })
+    }
+    private var manualCacheLimitsMB: [Int] {
+        var sizes = [500, 1_000, 2_000, 5_000, 10_000]
+        // A size chosen on the old slider stays selectable until it is changed.
+        if !settings.audioCacheAutomatic, !sizes.contains(settings.audioCacheSizeMB) {
+            sizes.append(settings.audioCacheSizeMB)
+            sizes.sort()
+        }
+        return sizes
+    }
+    #endif
     private var clearTitle: String {
         clearing == .imageCache ? String(localized: "清除图片缓存？") : String(localized: "清除歌曲缓存？")
     }

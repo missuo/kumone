@@ -408,6 +408,8 @@
 
 // Storage settings
 "存储空间" = "Storage";
+"自动" = "Automatic";
+"自动（%@）" = "Automatic (%@)";
 "清除图片缓存" = "Clear Image Cache";
 "浏览时保存的临时图片。清除后可重新加载，已下载歌曲的离线封面会保留。" = "Temporary images saved while browsing. They can be loaded again; offline artwork for downloaded songs is kept.";
 "最近播放过的歌曲会暂存在本机，断网时也能重播。已下载的歌曲不占用这里的空间。" = "Recently played songs are kept on this device so they can replay without a connection. Downloads don’t count toward this.";

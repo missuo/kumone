@@ -1020,11 +1020,18 @@ final class PlayerService: ObservableObject {
                                 localLease: OfflinePlaybackLease? = nil) async {
         // A downloaded copy beats the network, and is all there is without one.
         if let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
-            playOfflineFile(lease, for: track, generation: generation)
+            playLocalFile(lease.url, lease: lease, for: track, generation: generation)
             return
         }
         guard generation == resolveGeneration else { return }
         if usesOfflineQueue {
+            // Without a network, the cache is the last place to look.
+            if let cached = await EngineAudioCache.shared.cachedFileURL(trackID: track.id) {
+                guard generation == resolveGeneration else { return }
+                playLocalFile(cached, lease: nil, for: track, generation: generation)
+                return
+            }
+            guard generation == resolveGeneration else { return }
             unavailableOffline(track, generation: generation)
             return
         }
@@ -1230,7 +1237,7 @@ final class PlayerService: ObservableObject {
                 guard generation == resolveGeneration else { return }
                 // The network is gone mid-song; a download of it plays on.
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
-                    playOfflineFile(lease, for: track, generation: generation, from: resumeAt)
+                    playLocalFile(lease.url, lease: lease, for: track, generation: generation, from: resumeAt)
                     return
                 }
                 guard generation == resolveGeneration else { return }
@@ -2903,18 +2910,19 @@ final class PlayerService: ObservableObject {
         return lease
     }
 
-    /// Plays a downloaded file on the active deck. Downloads are not cache
-    /// entries, so they carry no key: no analysis and no loudness trim.
-    private func playOfflineFile(_ lease: OfflinePlaybackLease, for track: Track, generation: Int,
-                                 from position: TimeInterval = 0) {
+    /// Plays a file already on this device: a download (with its lease) or,
+    /// offline, a cache entry found without a key. Neither gets an analysis
+    /// or a loudness trim, so hand-overs from it fall back to gapless.
+    private func playLocalFile(_ url: URL, lease: OfflinePlaybackLease?, for track: Track, generation: Int,
+                               from position: TimeInterval = 0) {
         consecutiveFailures = 0
-        servedQuality = lease.descriptor.identity.quality
+        servedQuality = lease?.descriptor.identity.quality
         currentCacheKey = nil
         currentRemoteURL = nil
         engine.stop(deck: activeDeck)
         deckFiles[activeDeck] = nil
-        guard let fileDuration = try? engine.loadFile(at: lease.url, on: activeDeck, trimDB: 0) else {
-            Task { try? await OfflineStore.shared.release(lease) }
+        guard let fileDuration = try? engine.loadFile(at: url, on: activeDeck, trimDB: 0) else {
+            if let lease { Task { try? await OfflineStore.shared.release(lease) } }
             deckLoaded = false
             unavailableOffline(track, generation: generation)
             return
@@ -2922,9 +2930,10 @@ final class PlayerService: ObservableObject {
         offlinePlaybackLease = lease
         deckLoaded = true
         hasLocalFile = true
-        deckFiles[activeDeck] = lease.url
-        // Not `currentLocalURL`: that is the cache file the stem pre-render and
-        // the lyric sidecar write next to, and downloads are not cache entries.
+        deckFiles[activeDeck] = url
+        // Only a cache file is `currentLocalURL`: the stem pre-render and the
+        // lyric sidecar write next to it, and downloads are not cache entries.
+        currentLocalURL = lease == nil ? url : nil
         isBuffering = false
         duration = fileDuration
         if isPlaying {
@@ -2986,14 +2995,12 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         offlineScan = Task { [weak self] in
             guard let self, !Task.isCancelled, self.offlineScanID == requestID else { return }
-            var selected: OfflineQueueSelection?
-            if let scope {
-                selected = try? await OfflineQueueSelector.firstAvailable(candidates, scope: scope,
-                    quality: SettingsManager.shared.audioQuality.rawValue, store: .shared)
-            }
+            let selected = try? await OfflineQueueSelector.firstAvailable(candidates, scope: scope,
+                quality: SettingsManager.shared.audioQuality.rawValue, store: .shared,
+                isCached: { await EngineAudioCache.shared.cachedFileURL(trackID: $0) != nil })
             guard !Task.isCancelled, self.offlineScanID == requestID, self.resolveGeneration == generation,
                   self.offlineAccountScope == scope else {
-                if let selected { try? await OfflineStore.shared.release(selected.lease) }
+                if let lease = selected?.lease { try? await OfflineStore.shared.release(lease) }
                 return
             }
             self.offlineScan = nil
@@ -3006,7 +3013,7 @@ final class PlayerService: ObservableObject {
             }
             // The queue may have been edited while the scan ran.
             guard self.stillHolds(selected.candidate) else {
-                try? await OfflineStore.shared.release(selected.lease)
+                if let lease = selected.lease { try? await OfflineStore.shared.release(lease) }
                 self.advanceOffline(initialSkipped: initialSkipped, excludingFailedCurrent: excludingFailedCurrent)
                 return
             }

@@ -66,6 +66,27 @@ actor EngineAudioCache {
         return url
     }
 
+    /// Any complete cached file of the track, newest first: offline there is
+    /// no network answer to derive a key from.
+    func cachedFileURL(trackID: Int) -> URL? {
+        let prefix = "\(trackID)-"
+        return allFiles()
+            .filter { $0.url.lastPathComponent.hasPrefix(prefix) && !Self.isAuxiliary($0.url) }
+            .max { $0.modified < $1.modified }?.url
+    }
+
+    /// Tracks with a complete cached file, for offline availability.
+    func cachedTrackIDs() -> Set<Int> {
+        Set(allFiles().compactMap { entry in
+            guard !Self.isAuxiliary(entry.url) else { return nil }
+            return Int(entry.url.lastPathComponent.prefix { $0 != "-" })
+        })
+    }
+
+    private static func isAuxiliary(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(partSuffix) || url.pathExtension == lyricsExtension
+    }
+
     /// Stable temporary path for progressive writes of the same key.
     /// Pure path math (directory creation is idempotent), so not isolated.
     nonisolated func partFileURL(for key: Key) -> URL {

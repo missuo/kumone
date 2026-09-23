@@ -81,6 +81,9 @@ final class DownloadManager: ObservableObject {
     private(set) var downloadedTracks: [OfflineLibraryTrack] = []
     private(set) var downloadedTrackIDs: Set<Int> = []
     private(set) var offlineTracksByID: [Int: OfflineLibraryTrack] = [:]
+    /// Songs the platform's song cache can play without the network. Downloads
+    /// know nothing about the cache, but a row offline needs one answer.
+    private(set) var cachedTrackIDs: Set<Int> = []
     private(set) var jobsByTrackID: [Int: DownloadJob] = [:]
     private(set) var pendingJobsByTrackID: [Int: DownloadJob] = [:]
     func isDownloaded(trackID: Int) -> Bool { downloadedTrackIDs.contains(trackID) }
@@ -134,6 +137,7 @@ final class DownloadManager: ObservableObject {
     private let resolver: Resolver
     private let metadataFetcher: MetadataFetcher
     private let metadataReader: (Int, String) async -> Track?
+    private let cachedTracks: () async -> Set<Int>
     private let retrySleep: (Duration) async throws -> Void
     private var catalog = DownloadCatalog()
     private var networkRetries: [UUID: Int] = [:]
@@ -162,6 +166,7 @@ final class DownloadManager: ObservableObject {
          resolver: @escaping Resolver = { try await NeteaseAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
+         cachedTracks: @escaping () async -> Set<Int> = { await DownloadManager.platformCachedTrackIDs() },
          retrySleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.store = store
         self.metadata = metadata
@@ -171,6 +176,7 @@ final class DownloadManager: ObservableObject {
         self.resolver = resolver
         self.metadataFetcher = metadataFetcher ?? { await metadata.fetchDisplayData(track: $0, scope: $1) }
         self.metadataReader = metadataReader ?? { await metadata.track(id: $0, scope: $1) }
+        self.cachedTracks = cachedTracks
         self.retrySleep = retrySleep
     }
 
@@ -561,6 +567,7 @@ final class DownloadManager: ObservableObject {
             }
         }
         publish()
+        if value.isKnown, !value.connected { Task { await refreshCachedTracks() } }
         if isReady { Task { try? await persist() } }
         if isReady {
             for job in catalog.jobs where job.status == .complete && job.metadataPending { fetchMetadata(job) }
@@ -969,6 +976,23 @@ final class DownloadManager: ObservableObject {
         let pending = Dictionary(grouping: catalog.jobs.filter { !$0.owners.isEmpty && $0.status != .complete }, by: \.accountScope)
             .mapValues { Set($0.map(\.track.id)) }
         try? await metadata.pruneUnused(audio: store, protectedTracks: pending)
+        await refreshCachedTracks()
+    }
+
+    func refreshCachedTracks() async {
+        let ids = await cachedTracks()
+        guard ids != cachedTrackIDs else { return }
+        cachedTrackIDs = ids
+        refreshTrackStates()
+    }
+
+    static func platformCachedTrackIDs() async -> Set<Int> {
+        #if os(macOS)
+        return await EngineAudioCache.shared.cachedTrackIDs()
+        #else
+        guard SettingsManager.shared.enableAudioCache else { return [] }
+        return (try? await AudioCache.shared.cachedTrackIDs()) ?? []
+        #endif
     }
 
     nonisolated private static func precedes(_ lhs: OfflineLibraryTrack, _ rhs: OfflineLibraryTrack) -> Bool {
@@ -1072,7 +1096,7 @@ final class DownloadManager: ObservableObject {
 
     private func refresh(_ state: TrackDownloadState) {
         let job = pendingJobsByTrackID[state.trackID]
-        let isOffline = offlineTracksByID[state.trackID] != nil
+        let isOffline = offlineTracksByID[state.trackID] != nil || cachedTrackIDs.contains(state.trackID)
         state.apply(.init(jobID: job?.id, status: job?.status, isDownloaded: downloadedTrackIDs.contains(state.trackID),
                           isOffline: isOffline, needsNetwork: network.isKnown && !network.connected && !isOffline,
                           accountScope: accountScope))

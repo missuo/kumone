@@ -114,6 +114,11 @@ actor AudioCache {
         return entry
     }
 
+    /// Tracks with a complete cached copy, for offline availability.
+    func cachedTrackIDs() throws -> Set<Int> {
+        Set(try completedEntries().map(\.metadata.trackID))
+    }
+
     func retain(_ entry: AudioCacheEntry) -> UUID {
         let leaseID = UUID()
         leases[leaseID] = entry.fileURL

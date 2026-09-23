@@ -699,10 +699,6 @@ final class PlayerService: ObservableObject {
             return
         }
         guard generation == resolveGeneration else { return }
-        if usesOfflineQueue {
-            unavailableOffline(track, generation: generation)
-            return
-        }
 
         if cacheEnabled {
             do {
@@ -735,6 +731,14 @@ final class PlayerService: ObservableObject {
             }
         }
 
+        // Without a network, the cache is the last place to look.
+        if usesOfflineQueue {
+            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock) { return }
+            guard generation == resolveGeneration else { return }
+            unavailableOffline(track, generation: generation)
+            return
+        }
+
         var data: SongURLData?
         do {
             data = try await NeteaseAPI.songURL(ids: [track.id], level: quality).first
@@ -752,6 +756,8 @@ final class PlayerService: ObservableObject {
                 }
                 guard generation == resolveGeneration else { return }
                 if usesOfflineQueue {
+                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock) { return }
+                    guard generation == resolveGeneration else { return }
                     unavailableOffline(track, generation: generation)
                     return
                 }
@@ -859,6 +865,8 @@ final class PlayerService: ObservableObject {
         var asset = AVURLAsset(url: url)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
+            let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
+            guard generation == resolveGeneration else { return .superseded }
             let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .netease
             do {
                 let loader = try CachingAudioResourceLoader(
@@ -867,7 +875,7 @@ final class PlayerService: ObservableObject {
                     requestedQuality: SettingsManager.shared.audioQuality.rawValue,
                     servedQuality: servedQuality,
                     source: source,
-                    maximumCacheSizeMB: SettingsManager.shared.audioCacheSizeMB
+                    maximumCacheSizeMB: cacheLimitMB
                 )
                 guard generation == resolveGeneration else {
                     loader.cancel()
@@ -1219,14 +1227,12 @@ final class PlayerService: ObservableObject {
         isPlaying = false
         offlineScan = Task { [weak self] in
             guard let self, !Task.isCancelled, self.offlineScanID == requestID else { return }
-            var selected: OfflineQueueSelection?
-            if let scope {
-                selected = try? await OfflineQueueSelector.firstAvailable(candidates, scope: scope,
-                    quality: SettingsManager.shared.audioQuality.rawValue, store: .shared)
-            }
+            let selected = try? await OfflineQueueSelector.firstAvailable(candidates, scope: scope,
+                quality: SettingsManager.shared.audioQuality.rawValue, store: .shared,
+                isCached: { await self.isCachedForOffline($0) })
             guard !Task.isCancelled, self.offlineScanID == requestID, self.resolveGeneration == generation,
                   self.offlineAccountScope == scope else {
-                if let selected { try? await OfflineStore.shared.release(selected.lease) }
+                if let lease = selected?.lease { try? await OfflineStore.shared.release(lease) }
                 return
             }
             self.offlineScan = nil
@@ -1239,7 +1245,7 @@ final class PlayerService: ObservableObject {
             }
             // The queue may have been edited while the scan ran.
             guard self.stillHolds(selected.candidate) else {
-                try? await OfflineStore.shared.release(selected.lease)
+                if let lease = selected.lease { try? await OfflineStore.shared.release(lease) }
                 self.advanceOffline(initialSkipped: initialSkipped, excludingFailedCurrent: excludingFailedCurrent)
                 return
             }
@@ -1255,6 +1261,13 @@ final class PlayerService: ObservableObject {
             self.startPlaying(selected.candidate.track, localLease: selected.lease)
             if skipped > 0 { ToastCenter.shared.show(String(localized: "已跳过 \(skipped) 首未下载歌曲")) }
         }
+    }
+
+    /// Whether the song cache can play the track without the network.
+    private func isCachedForOffline(_ trackID: Int) async -> Bool {
+        guard SettingsManager.shared.enableAudioCache else { return false }
+        let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
+        return (try? await AudioCache.shared.fallbackEntry(for: trackID, allowsUnblock: allowsUnblock)) != nil
     }
 
     private func stillHolds(_ candidate: PlaybackQueueCandidate) -> Bool {
