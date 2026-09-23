@@ -65,8 +65,9 @@ final class PlaylistContent: ObservableObject {
         isLoadingMore = false
         errorMessage = nil
         defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false } }
-        guard let scope else { return }
-        if let snapshots, let saved = await snapshots.load(id: playlistID, scope: scope) {
+        // Without an account scope (the profile is still loading, or failed to)
+        // there is no snapshot to read or write; the network still answers.
+        if let scope, let snapshots, let saved = await snapshots.load(id: playlistID, scope: scope) {
             guard valid(generation, scope: scope) else { return }
             let saved = applyingRecommendations(to: saved)
             detail = saved.detail
@@ -78,10 +79,13 @@ final class PlaylistContent: ObservableObject {
         guard valid(generation, scope: scope) else { return }
         if detail == nil, let summary { detail = PlaylistDetail(summary: summary) }
         guard allowNetwork else { return }
-        let token = await snapshots?.beginRefresh(id: playlistID, scope: scope, background: background)
-        if snapshots != nil, token == nil { return }
+        var token: UUID?
+        if let scope, let snapshots {
+            token = await snapshots.beginRefresh(id: playlistID, scope: scope, background: background)
+            if token == nil { return }
+        }
         defer {
-            if let snapshots, let token {
+            if let snapshots, let scope, let token {
                 Task { await snapshots.finishRefresh(id: playlistID, scope: scope, token: token) }
             }
         }
@@ -122,7 +126,7 @@ final class PlaylistContent: ObservableObject {
         }
     }
 
-    private func loadRemainingTracks(generation: Int, scope: String, token: UUID?, background: Bool) async throws {
+    private func loadRemainingTracks(generation: Int, scope: String?, token: UUID?, background: Bool) async throws {
         guard let detail, tracks.count < detail.trackIds.count else { return }
         isLoadingMore = true
         let loadedIDs = Set(tracks.map(\.id))
@@ -140,21 +144,21 @@ final class PlaylistContent: ObservableObject {
         }
     }
 
-    private func valid(_ generation: Int, scope: String) -> Bool {
+    private func valid(_ generation: Int, scope: String?) -> Bool {
         generation == loadGeneration && !Task.isCancelled && scope == accountScope()
     }
 
-    private func current(_ generation: Int, scope: String, token: UUID?, background: Bool) async -> Bool {
+    private func current(_ generation: Int, scope: String?, token: UUID?, background: Bool) async -> Bool {
         guard valid(generation, scope: scope) else { return false }
         // Each visible caller finishes its own list. The newest refresh alone
         // may save the shared snapshot; superseded background work can stop.
-        if background, let snapshots, let token,
+        if background, let snapshots, let scope, let token,
            !(await snapshots.isCurrent(id: playlistID, scope: scope, token: token)) { return false }
         return valid(generation, scope: scope)
     }
 
-    private func save(scope: String, token: UUID?) async {
-        guard let snapshots, let token, var detail, scope == accountScope(), !Task.isCancelled else { return }
+    private func save(scope: String?, token: UUID?) async {
+        guard let snapshots, let scope, let token, var detail, scope == accountScope(), !Task.isCancelled else { return }
         detail.tracks = tracks
         try? await snapshots.save(.init(detail: detail, privileges: privileges), scope: scope, token: token)
     }

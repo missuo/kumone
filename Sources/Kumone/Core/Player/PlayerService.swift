@@ -701,20 +701,44 @@ final class PlayerService: ObservableObject {
     /// the listener clicked rather than its first occurrence.
     func jumpToUpcoming(at index: Int, matching trackID: Int) {
         guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
+        var indexUnchanged = false
         switch selected.origin {
-        case .inserted(let offset): playNextList.removeSubrange(0...offset)
+        case .inserted(let offset):
+            playNextList.removeSubrange(0...offset)
+            indexUnchanged = true
         case .queue(let offset):
             if !playNextList.isEmpty { playNextList.removeAll() }
             currentIndex = offset
         case .fm: return
         }
-        startPlaying(selected.track, indexUnchanged: selected.origin != .queue(currentIndex))
+        startPlaying(selected.track, indexUnchanged: indexUnchanged)
     }
 
+    /// Removes the row itself: a repeated song leaves the occurrence the
+    /// listener chose, not its first one, so the current index stays put.
     func removeUpcoming(at index: Int, matching trackID: Int) {
         guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
-        if case .inserted(let offset) = selected.origin { playNextList.remove(at: offset) }
-        else { removeFromUpcoming(selected.track) }
+        switch selected.origin {
+        case .inserted(let offset): playNextList.remove(at: offset)
+        case .queue(let offset): removeQueueRow(at: offset, trackID: selected.track.id)
+        case .fm: return
+        }
+    }
+
+    /// The row sits after the current index in the active order; the other
+    /// orders drop one copy of the same song so all stay the same length.
+    private func removeQueueRow(at offset: Int, trackID: Int) {
+        switch queueOrder {
+        case .listed: queue.remove(at: offset)
+        case .shuffled: shuffledQueue.remove(at: offset)
+        case .autoMix: autoMixQueue.remove(at: offset)
+        }
+        if queueOrder != .listed, let idx = queue.firstIndex(where: { $0.id == trackID }) { queue.remove(at: idx) }
+        if queueOrder != .shuffled, let idx = shuffledQueue.firstIndex(where: { $0.id == trackID }) { shuffledQueue.remove(at: idx) }
+        if queueOrder != .autoMix, let idx = autoMixQueue.firstIndex(where: { $0.id == trackID }) { autoMixQueue.remove(at: idx) }
+        // The chain may have been planning around the track that just left.
+        refreshAutoMixLookahead(force: true)
+        schedulePrefetch()
     }
 
     /// The row at `index` of `upcomingTracks`, if it still shows `trackID`.

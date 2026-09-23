@@ -576,7 +576,6 @@ final class SpectrumBarsView: PlatformView {
 // MARK: - Track list
 
 struct TrackListView: View {
-    @ObservedObject private var downloads = DownloadManager.shared
     let tracks: [Track]
     var style: TrackRowStyle = .full
     var privileges: [Int: TrackPrivilege] = [:]
@@ -640,7 +639,9 @@ struct TrackListView: View {
     }
 
     private func playability(of track: Track) -> TrackPlayability {
-        if downloads.offlineTracksByID[track.id] != nil { return .playable }
+        // Read, not observed: each row watches its own download state, so a
+        // transfer elsewhere must not rebuild the whole list.
+        if DownloadManager.shared.offlineTracksByID[track.id] != nil { return .playable }
         // With unblock enabled, gray tracks resolve from third-party sources.
         if SettingsManager.shared.canResolveUnblockedTracks { return .playable }
         return track.playability(

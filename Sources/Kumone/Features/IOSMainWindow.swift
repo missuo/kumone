@@ -19,6 +19,12 @@ public struct IOSMainWindow: View {
     }
 
     @State private var selectedTab: IOSTab = .home
+
+    /// Returning from the lock screen every few minutes must not rescan
+
+    /// every download and playlist each time.
+
+    @State private var lastForegroundRefresh: Date?
     @State private var showLogin = false
     @State private var homePath: [Destination] = []
     @State private var explorePath: [Destination] = []
@@ -51,6 +57,8 @@ public struct IOSMainWindow: View {
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }
+                if let last = lastForegroundRefresh, Date().timeIntervalSince(last) < 300 { return }
+                lastForegroundRefresh = Date()
                 Task {
                     await DownloadManager.shared.refreshLibrary()
                     if DownloadManager.shared.network.connected { await account.refreshLibrary() }

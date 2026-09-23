@@ -19,9 +19,9 @@ private final class DeferredAPIProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { Self.state.set(self) }
     override func stopLoading() {}
-    func finish(token: String = "old-session-returned-late", code: Int = 200) {
+    func finish(token: String? = "old-session-returned-late", code: Int = 200) {
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-            headerFields: ["Set-Cookie": "MUSIC_U=\(token); Path=/; Secure"])!
+            headerFields: token.map { ["Set-Cookie": "MUSIC_U=\($0); Path=/; Secure"] })!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data("{\"code\":\(code)}".utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -59,6 +59,30 @@ struct AccountIsolationTests {
         reply.finish(token: "synthetic-rejected", code: 301)
         _ = try await refreshing.value
         #expect(client.authenticationFingerprint != before)
+    }
+
+    @Test(arguments: [false, true])
+    func anonymousRequestSurvivesALoginThatFinishesFirst(carriesSession: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-anonymous-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DeferredAPIProtocol.self]
+        let client = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let request = Task { try await client.weapi("/test-only") }
+        for _ in 0..<200 where DeferredAPIProtocol.state.get() == nil { try await Task.sleep(for: .milliseconds(5)) }
+        let pending = try #require(DeferredAPIProtocol.state.get())
+        client.setCookies(["MUSIC_U": "synthetic-session-a"])
+        if carriesSession {
+            // A late login reply for another session must not be taken as this one's.
+            pending.finish()
+            await #expect(throws: CancellationError.self) { _ = try await request.value }
+        } else {
+            // Plain data from before the login is not the new account's, but it
+            // is not stale either: the page that asked can still show it.
+            pending.finish(token: nil)
+            #expect(try await !request.value.isEmpty)
+        }
+        #expect(client.cookie(named: "MUSIC_U") == "synthetic-session-a")
     }
 
     @Test(arguments: [false, true], ["/test-only", "/login/token/refresh"])

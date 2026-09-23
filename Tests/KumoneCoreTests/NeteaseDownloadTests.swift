@@ -35,6 +35,24 @@ struct NeteaseDownloadTests {
         }
     }
 
+    @Test func aSongWithoutItsOwnDurationTakesTheResponseTime() throws {
+        // Cloud drive and simplified entries can omit dt.
+        let track = try JSONDecoder().decode(Track.self, from: Data("""
+        {"id":1,"name":"Fixture"}
+        """.utf8))
+        func response(time: Int) throws -> SongURLData {
+            try JSONDecoder().decode(SongURLData.self, from: Data("""
+            {"id":1,"url":"https://example.test/audio.mp3","size":100,"type":"mp3","level":"exhigh",
+            "md5":"0123456789abcdef0123456789abcdef","time":\(time),"code":200,"freeTrialInfo":null}
+            """.utf8))
+        }
+        let resource = try NeteaseAPI.downloadResource(data: response(time: 180_000), track: track, accountScope: "test")
+        #expect(resource.descriptor.duration == 180)
+        #expect(throws: OfflineAudioError.unavailable) {
+            try NeteaseAPI.downloadResource(data: response(time: 0), track: track, accountScope: "test")
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["KUMONE_LIVE_AUDIO_PROBE"] == "1"), .timeLimit(.minutes(3)))
     func liveDownloadProbe() async throws {
         let encryptedDNS = ProcessInfo.processInfo.environment["KUMONE_PROBE_ENCRYPTED_DNS"] == "1"

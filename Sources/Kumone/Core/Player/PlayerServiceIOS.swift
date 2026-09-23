@@ -512,20 +512,40 @@ final class PlayerService: ObservableObject {
     /// the listener clicked rather than its first occurrence.
     func jumpToUpcoming(at index: Int, matching trackID: Int) {
         guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
+        var indexUnchanged = false
         switch selected.origin {
-        case .inserted(let offset): playNextList.removeSubrange(0...offset)
+        case .inserted(let offset):
+            playNextList.removeSubrange(0...offset)
+            indexUnchanged = true
         case .queue(let offset):
             if !playNextList.isEmpty { playNextList.removeAll() }
             currentIndex = offset
         case .fm: return
         }
-        startPlaying(selected.track, indexUnchanged: selected.origin != .queue(currentIndex))
+        startPlaying(selected.track, indexUnchanged: indexUnchanged)
     }
 
+    /// Removes the row itself: a repeated song leaves the occurrence the
+    /// listener chose, not its first one, so the current index stays put.
     func removeUpcoming(at index: Int, matching trackID: Int) {
         guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
-        if case .inserted(let offset) = selected.origin { playNextList.remove(at: offset) }
-        else { removeFromUpcoming(selected.track) }
+        switch selected.origin {
+        case .inserted(let offset): playNextList.remove(at: offset)
+        case .queue(let offset): removeQueueRow(at: offset, trackID: selected.track.id)
+        case .fm: return
+        }
+    }
+
+    /// The row sits after the current index in the active order; the other
+    /// order drops one copy of the same song so both stay the same length.
+    private func removeQueueRow(at offset: Int, trackID: Int) {
+        if shuffleEnabled {
+            shuffledQueue.remove(at: offset)
+            if let idx = queue.firstIndex(where: { $0.id == trackID }) { queue.remove(at: idx) }
+        } else {
+            queue.remove(at: offset)
+            if let idx = shuffledQueue.firstIndex(where: { $0.id == trackID }) { shuffledQueue.remove(at: idx) }
+        }
     }
 
     /// The row at `index` of `upcomingTracks`, if it still shows `trackID`.
@@ -1031,7 +1051,10 @@ final class PlayerService: ObservableObject {
         }
         if let previousOfflineLease { Task { try? await OfflineStore.shared.release(previousOfflineLease) } }
         if resumeAt > 0 {
-            let time = CMTime(seconds: min(resumeAt, max(0, duration - 0.1)), preferredTimescale: 600)
+            // The item's own length when known; the published duration may
+            // still belong to the previous song or be unknown.
+            let length = durationMS.map { TimeInterval($0) / 1000 } ?? duration
+            let time = CMTime(seconds: length > 0.1 ? min(resumeAt, length - 0.1) : resumeAt, preferredTimescale: 600)
             _ = await engine.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
             guard generation == resolveGeneration else { return .superseded }
         }

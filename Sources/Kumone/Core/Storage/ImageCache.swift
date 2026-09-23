@@ -41,8 +41,9 @@ actor ImageCache {
             return cached
         }
         let requestGeneration = generation
-        if let onCachedImage,
-           let preview = diskImage(for: key) ?? cachedVariant(for: url) {
+        // The exact file, decoded once: it is both the preview and the answer.
+        let exact = onCachedImage == nil ? nil : diskImage(for: key)
+        if let onCachedImage, let preview = exact ?? cachedVariant(for: url) {
             await onCachedImage(preview)
         }
         guard !Task.isCancelled else { return nil }
@@ -55,7 +56,7 @@ actor ImageCache {
         }
         let task = Task<PlatformImage?, Never> { [self] in
             let fileURL = directory.appendingPathComponent(key)
-            if let image = diskImage(for: key) {
+            if let image = exact ?? diskImage(for: key) {
                 return image
             }
             if let data = await offlineArtwork(url),

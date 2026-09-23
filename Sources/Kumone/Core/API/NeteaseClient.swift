@@ -157,9 +157,9 @@ final class NeteaseClient: @unchecked Sendable {
     }
 
     private func absorbSetCookies(from response: HTTPURLResponse, url: URL, epoch: UInt64, preservingSession: Bool) -> Bool {
-        guard let fields = response.allHeaderFields as? [String: String] else { return authenticationState.epoch == epoch }
+        guard let fields = response.allHeaderFields as? [String: String] else { return true }
         let parsed = HTTPCookie.cookies(withResponseHeaderFields: fields, for: url)
-        guard !parsed.isEmpty else { return authenticationState.epoch == epoch }
+        guard !parsed.isEmpty else { return true }
         var new: [String: String] = [:]
         for c in parsed where !c.value.isEmpty && c.value != "\"\"" {
             new[c.name] = c.value
@@ -234,9 +234,12 @@ final class NeteaseClient: @unchecked Sendable {
 
     private func perform(_ request: URLRequest, authentication: (epoch: UInt64, binding: String?), absorbResponseCookies: Bool = true) async throws -> Data {
         try Task.checkCancellation()
-        guard isCurrent(authentication) else { throw CancellationError() }
+        // A request sent without a login carries no account's data, so a login
+        // finishing while it is in flight does not make its answer stale.
+        let anonymous = authentication.binding == nil
+        guard anonymous || isCurrent(authentication) else { throw CancellationError() }
         let (data, response) = try await session.data(for: request)
-        guard isCurrent(authentication) else { throw CancellationError() }
+        guard anonymous || isCurrent(authentication) else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse else { throw NeteaseAPIError.http(-1) }
         let refreshSucceeded = request.url?.path == "/weapi/login/token/refresh"
             && (200..<300).contains(http.statusCode)

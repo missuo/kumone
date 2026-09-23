@@ -445,14 +445,18 @@ enum NeteaseAPI {
               components.host != nil else { throw OfflineAudioError.unavailable }
         components.scheme = "https"
         guard let url = components.url else { throw OfflineAudioError.invalidResource }
-        // Some download responses omit time. Track metadata then supplies the
-        // independent duration check, including protection against a trial URL.
-        if data.time > 0, abs(Double(data.time) / 1000 - track.duration) > max(2, track.duration * 0.03) {
+        // Some download responses omit time, and some songs (cloud drive,
+        // simplified entries) omit dt. Whichever is known supplies the duration;
+        // when both are, they must agree, which also rejects a trial URL.
+        let responseDuration = data.time > 0 ? Double(data.time) / 1000 : 0
+        if responseDuration > 0, track.duration > 0, abs(responseDuration - track.duration) > max(2, track.duration * 0.03) {
             throw OfflineAudioError.invalidAudio
         }
+        let duration = track.duration > 0 ? track.duration : responseDuration
+        guard duration > 0 else { throw OfflineAudioError.unavailable }
         let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id, source: "netease",
                                             quality: quality, format: format, contentMD5: md5)
-        let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: Int64(data.size), duration: track.duration)
+        let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: Int64(data.size), duration: duration)
         try descriptor.validate()
         return OfflineAudioResource(descriptor: descriptor, url: url)
     }

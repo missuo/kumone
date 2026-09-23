@@ -31,6 +31,19 @@ import Testing
         #expect(calls == 2)
     }
 
+    @Test func aPlaylistLoadsFromTheNetworkWhileTheProfileIsStillUnknown() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshots = PlaylistSnapshotStore(directory: root)
+        let data = try response(ids: [1, 2], loaded: [1, 2])
+        // A login cookie whose profile has not arrived yet has no scope: the
+        // page still loads, and nothing is saved under an account it cannot name.
+        let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { nil }, detailLoader: { _ in data })
+        await model.load()
+        #expect(model.tracks.count == 2 && model.errorMessage == nil && !model.isLoading)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).isEmpty)
+    }
+
     @Test func backgroundFreshnessHonorsVersionCountAgeAndCompleteness() throws {
         let now = Date()
         func summary(count: Int = 2, version: Int? = nil) throws -> PlaylistSummary {

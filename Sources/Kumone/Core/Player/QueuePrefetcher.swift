@@ -128,7 +128,7 @@ final class QueuePrefetcher {
                 guard source.byteCount <= limits.bytes - windowBytes else { windowStopped = true; return }
                 let stored = try await store(source, track: track, quality: request.quality, limitMB: limitMB, ticket: ticket)
                 guard isCurrent(ticket) else { return }
-                guard let stored else { windowStopped = true; return }
+                guard let stored else { continue }
                 windowBytes += stored
                 await completion(track, request.scope)
                 if isCurrent(ticket) { completedTrackIDs.append(track.id) }
@@ -142,7 +142,8 @@ final class QueuePrefetcher {
     }
 
     /// Downloads one song into the cache. Returns its byte count, or nil when
-    /// the cache would not keep it at the current limit.
+    /// the cache would not keep it: too large for the limit, cleared meanwhile,
+    /// or of a type it cannot name.
     private func store(_ source: QueuePrefetchSource, track: Track, quality: String, limitMB: Int, ticket: Int) async throws -> Int64? {
         var urlRequest = URLRequest(url: source.url)
         urlRequest.allowsExpensiveNetworkAccess = false
