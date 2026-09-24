@@ -120,7 +120,7 @@ actor EngineAudioCache {
             return try await existing.value
         }
         let task = Task<URL, Error> {
-            let (temp, response) = try await URLSession.shared.download(from: remote)
+            let (temp, response) = try await Self.fetch(remote)
             if let http = response as? HTTPURLResponse,
                !(200..<300).contains(http.statusCode) {
                 try? FileManager.default.removeItem(at: temp)
@@ -138,6 +138,20 @@ actor EngineAudioCache {
         inflight[key] = task
         defer { inflight[key] = nil }
         return try await task.value
+    }
+
+    /// Downloads `remote`, starting on its CDN twin when its host failed
+    /// recently, and retrying once on the twin when the host cannot be
+    /// reached (see `NeteaseCDNHost`).
+    private static func fetch(_ remote: URL) async throws -> (URL, URLResponse) {
+        let first = NeteaseCDNHost.preferred(for: remote)
+        do {
+            return try await URLSession.shared.download(from: first)
+        } catch where NeteaseCDNHost.isHostUnreachable(error) {
+            guard let twin = NeteaseCDNHost.alternate(for: first) else { throw error }
+            NeteaseCDNHost.markUnreachable(first)
+            return try await URLSession.shared.download(from: twin)
+        }
     }
 
     /// The in-flight coalesced download for this key, if any — lets callers
