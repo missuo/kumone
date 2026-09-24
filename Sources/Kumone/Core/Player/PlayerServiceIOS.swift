@@ -186,9 +186,22 @@ final class PlayerService: ObservableObject {
     private var consecutiveFailures = 0
     private var attemptedUnblockSources: Set<AudioSourceID> = []
     private var currentUnblockSourceID: AudioSourceID?
-    /// The resolve generation that already spent its retry on the CDN twin
-    /// host, so a twin that fails too is not bounced back to the original.
-    private var cdnTwinRetryGeneration: Int?
+    /// The resolve generation that already spent its one reload after a
+    /// failed item, so a reload that fails too gives up instead of looping.
+    private var itemRetryGeneration: Int?
+    /// Set when a failure skips to the next song, so that skip keeps counting
+    /// toward the stop after five in a row instead of resetting it.
+    private var advancingAfterFailure = false
+    /// A seek asked for before the item could take one: AVPlayerItem throws
+    /// on a seek with a completion handler until it is ready to play. Applied
+    /// when it is; a newer seek replaces it.
+    private var pendingSeek: PendingSeek?
+
+    private struct PendingSeek {
+        let generation: Int
+        let seconds: TimeInterval
+        let completion: (@MainActor () -> Void)?
+    }
     private var scrobbled = false
     private var startScrobbled = false
 
@@ -267,7 +280,8 @@ final class PlayerService: ObservableObject {
             forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
-                guard let self, !self.isScrubbing else { return }
+                // A held seek owns the position until its item is ready.
+                guard let self, !self.isScrubbing, self.pendingSeek == nil else { return }
                 let seconds = time.seconds
                 guard seconds.isFinite else { return }
 
@@ -440,12 +454,25 @@ final class PlayerService: ObservableObject {
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
         progress = seconds
         updateLyricsCursor(at: seconds)
+        dropPendingSeek()
+        guard engine.currentItem?.status == .readyToPlay else {
+            pendingSeek = PendingSeek(generation: resolveGeneration, seconds: seconds, completion: completion)
+            NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+            return
+        }
         engine.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in
             guard let completion else { return }
             Task { @MainActor in completion() }
         }
         NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+    }
+
+    /// Forgets a held seek, still telling its caller the seek is over.
+    private func dropPendingSeek() {
+        guard let dropped = pendingSeek else { return }
+        pendingSeek = nil
+        dropped.completion?()
     }
 
     func toggleShuffle() {
@@ -712,6 +739,12 @@ final class PlayerService: ObservableObject {
         AudioSpectrum.shared.beginPreparing()
         resolveGeneration += 1
         let generation = resolveGeneration
+        dropPendingSeek()
+        if advancingAfterFailure {
+            advancingAfterFailure = false
+        } else {
+            consecutiveFailures = 0
+        }
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
@@ -724,14 +757,18 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    /// - Parameter skipsLocalCopies: set when the downloaded or cached copy
+    ///   just failed to play, so the reload fetches the song again instead
+    ///   of the same file.
     private func resolveAndLoad(_ track: Track, generation: Int,
-                                localLease: OfflinePlaybackLease? = nil) async {
+                                localLease: OfflinePlaybackLease? = nil,
+                                skipsLocalCopies: Bool = false) async {
         let quality = SettingsManager.shared.audioQuality.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
-        let cacheEnabled = SettingsManager.shared.enableAudioCache
+        let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
 
         // A downloaded copy beats the network, and is all there is without one.
-        if let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
+        if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
             await playOfflineFile(lease, for: track, generation: generation)
             return
         }
@@ -885,6 +922,7 @@ final class PlayerService: ObservableObject {
             return
         }
         if consecutiveFailures < 5 {
+            advancingAfterFailure = true
             advanceToNext(userInitiated: false)
         } else {
             isPlaying = false
@@ -897,7 +935,6 @@ final class PlayerService: ObservableObject {
         durationMS: Int?,
         generation: Int
     ) async -> ResolvedURLLoadResult {
-        consecutiveFailures = 0
         // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
         let remote = NeteaseCDNHost.preferred(for: url)
 
@@ -1018,26 +1055,30 @@ final class PlayerService: ObservableObject {
         }
 
         itemStatusObservation?.invalidate()
-        itemStatusObservation = nil
         let sourceID = currentUnblockSourceID
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard item.status == .failed else { return }
-            let error = item.error
-            let connectivity = error.map(ConnectivityFailure.matches) ?? false
-            Task { @MainActor in
-                if let sourceID {
-                    self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
-                } else if let remoteURL {
-                    self?.handleRemoteItemFailure(
-                        track: track,
-                        generation: generation,
-                        remoteURL: remoteURL,
-                        durationMS: durationMS,
-                        error: error
-                    )
-                } else if connectivity {
-                    self?.handleConnectivityItemFailure(track: track, generation: generation)
+            switch item.status {
+            case .readyToPlay:
+                Task { @MainActor in
+                    self?.itemBecameReady(generation: generation)
                 }
+            case .failed:
+                let error = item.error
+                Task { @MainActor in
+                    if let sourceID {
+                        self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
+                    } else {
+                        self?.handleItemFailure(
+                            track: track,
+                            generation: generation,
+                            remoteURL: remoteURL,
+                            durationMS: durationMS,
+                            error: error
+                        )
+                    }
+                }
+            default:
+                break
             }
         }
 
@@ -1123,14 +1164,28 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    /// A NetEase stream failed. A host that could not be reached gets one
-    /// retry on its CDN twin, resuming where playback stopped. A network that
-    /// is down goes to the downloaded copy; anything else skips the track
-    /// instead of leaving the player spinning on a dead item.
-    private func handleRemoteItemFailure(
+    /// The song is playing for real: the failure streak is over, and a seek
+    /// held while the item loaded can land.
+    private func itemBecameReady(generation: Int) {
+        guard generation == resolveGeneration else { return }
+        consecutiveFailures = 0
+        guard let held = pendingSeek, held.generation == generation else { return }
+        pendingSeek = nil
+        seek(to: held.seconds, completion: held.completion)
+    }
+
+    /// A NetEase stream or a cached file failed. The song gets one reload,
+    /// resuming where it stopped: on the CDN twin when the host could not be
+    /// reached (the caching loader already swaps hosts itself, so this covers
+    /// streams that bypass it), otherwise from a freshly resolved URL, since a
+    /// signature may have expired, the network changed, or the local file
+    /// was bad. With no network at all, or when the reload fails for lack of
+    /// one, a downloaded copy takes over; any other second failure goes to the
+    /// third-party sources, then skips.
+    private func handleItemFailure(
         track: Track,
         generation: Int,
-        remoteURL: URL,
+        remoteURL: URL?,
         durationMS: Int?,
         error: Error?
     ) {
@@ -1143,27 +1198,46 @@ final class PlayerService: ObservableObject {
         itemStatusObservation = nil
         engine.replaceCurrentItem(with: nil)
         releaseCurrentPlaybackResources()
+        let connectivity = error.map(ConnectivityFailure.matches) ?? false
 
-        if let error, NeteaseCDNHost.isHostUnreachable(error),
-           cdnTwinRetryGeneration != generation,
-           let twin = NeteaseCDNHost.alternate(for: remoteURL) {
-            cdnTwinRetryGeneration = generation
-            NeteaseCDNHost.markUnreachable(remoteURL)
-            AudioSpectrum.shared.beginPreparing()
-            let resumeAt = progress
+        guard itemRetryGeneration != generation else {
+            if connectivity {
+                handleConnectivityItemFailure(track: track, generation: generation)
+                return
+            }
             Task {
-                let result = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation)
-                if case .loaded = result, resumeAt > 1 {
-                    seek(to: resumeAt)
+                guard SettingsManager.shared.canResolveUnblockedTracks,
+                      await resolveAndLoadUnblocked(track, generation: generation) else {
+                    guard generation == resolveGeneration else { return }
+                    handleUnplayable(track)
+                    return
                 }
             }
             return
         }
-        if let error, ConnectivityFailure.matches(error) {
+        itemRetryGeneration = generation
+        let twin = remoteURL.flatMap { url in
+            error.flatMap { NeteaseCDNHost.failover(from: url, after: $0) }
+        }
+        // No network at all: the downloaded copy is the only way on.
+        if twin == nil, connectivity, usesOfflineQueue {
             handleConnectivityItemFailure(track: track, generation: generation)
             return
         }
-        handleUnplayable(track)
+        AudioSpectrum.shared.beginPreparing()
+        // Held until the reloaded item is ready; a seek the listener makes
+        // meanwhile replaces it.
+        let resumeAt = progress
+        if resumeAt > 1 {
+            seek(to: resumeAt)
+        }
+        Task {
+            if let twin {
+                _ = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation)
+            } else {
+                await resolveAndLoad(track, generation: generation, skipsLocalCopies: remoteURL == nil)
+            }
+        }
     }
 
     private func releaseAudioCacheLease(_ leaseID: UUID) {
@@ -1302,7 +1376,6 @@ final class PlayerService: ObservableObject {
 
     private func playOfflineFile(_ lease: OfflinePlaybackLease, for track: Track, generation: Int,
                                  resumeAt: TimeInterval = 0) async {
-        consecutiveFailures = 0
         servedQuality = lease.descriptor.identity.quality
         _ = await installResolvedAsset(AVURLAsset(url: lease.url), for: track, generation: generation,
                                        durationMS: Int(lease.descriptor.duration * 1000),

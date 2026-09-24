@@ -146,11 +146,19 @@ actor EngineAudioCache {
     private static func fetch(_ remote: URL) async throws -> (URL, URLResponse) {
         let first = NeteaseCDNHost.preferred(for: remote)
         do {
-            return try await URLSession.shared.download(from: first)
-        } catch where NeteaseCDNHost.isHostUnreachable(error) {
-            guard let twin = NeteaseCDNHost.alternate(for: first) else { throw error }
-            NeteaseCDNHost.markUnreachable(first)
-            return try await URLSession.shared.download(from: twin)
+            let result = try await URLSession.shared.download(from: first)
+            NeteaseCDNHost.markReachable(first)
+            return result
+        } catch {
+            guard let twin = NeteaseCDNHost.failover(from: first, after: error) else { throw error }
+            do {
+                let result = try await URLSession.shared.download(from: twin)
+                NeteaseCDNHost.markReachable(twin)
+                return result
+            } catch {
+                _ = NeteaseCDNHost.failover(from: twin, after: error)
+                throw error
+            }
         }
     }
 

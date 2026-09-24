@@ -664,6 +664,7 @@ extension ProgressiveLoader: URLSessionDataDelegate {
             return
         }
         receivedResponse = true
+        NeteaseCDNHost.markReachable(remoteURL)
         if let http = response as? HTTPURLResponse {
             guard http.statusCode == 200 || http.statusCode == 206 else {
                 completionHandler(.cancel)
@@ -730,12 +731,13 @@ extension ProgressiveLoader: URLSessionDataDelegate {
 
     /// The host could not be reached before any response: reissue the same
     /// request on the CDN twin, once. Nothing from the failed request reached
-    /// the parser or the `.part` mirror, so playback just starts late.
+    /// the parser or the `.part` mirror, so playback just starts late. The
+    /// failure is reported even when the twin was already tried, so later
+    /// songs do not pay for this host again.
     private func retryOnTwinHost(after error: Error) -> Bool {
-        guard !triedTwinHost, NeteaseCDNHost.isHostUnreachable(error),
-              let twin = NeteaseCDNHost.alternate(for: remoteURL) else { return false }
+        guard let twin = NeteaseCDNHost.failover(from: remoteURL, after: error),
+              !triedTwinHost else { return false }
         triedTwinHost = true
-        NeteaseCDNHost.markUnreachable(remoteURL)
         remoteURL = twin
         startRequest(rangeOffset: requestRangeOffset)
         return true
