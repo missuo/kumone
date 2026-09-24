@@ -683,8 +683,11 @@ final class DownloadManager: ObservableObject {
             var resumeData = await persistence.resumeData(jobID: job.id)
             guard current(job), let i = index(job.id) else { return }
             let received = catalog.jobs[i].receivedBytes
+            // Resume data embeds the old URL. A CDN switch starts over, so
+            // discard it before reserving disk space for the full transfer.
             if resumeData != nil, catalog.jobs[i].descriptor != resource.descriptor
-                || received < 0 || received > resource.descriptor.byteCount {
+                || received < 0 || received > resource.descriptor.byteCount
+                || NeteaseCDNHost.preferred(for: resource.url) != resource.url {
                 resumeData = nil
                 try await persistence.saveResumeData(nil, jobID: job.id)
             }

@@ -63,6 +63,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
             continuation.yield(.failed(token: token, domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, resumeData: nil))
             return
         }
+        if let url = response.url { NeteaseCDNHost.markReachable(url) }
         do {
             try DownloadFileProtection.prepareDirectory(inbox)
             let fileName = "\(token).audio"
@@ -96,7 +97,11 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let token = task.taskDescription else { return }
         progressDates[token] = nil
+        if let url = task.response?.url { NeteaseCDNHost.markReachable(url) }
         guard let error = error as NSError? else { return }
+        if task.response == nil, let url = task.currentRequest?.url ?? task.originalRequest?.url {
+            _ = NeteaseCDNHost.failover(from: url, after: error)
+        }
         continuation.yield(.failed(token: token, domain: error.domain, code: error.code,
                                    resumeData: error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data))
     }
@@ -162,7 +167,8 @@ final class BackgroundDownloadTransport: DownloadTransport {
     }
 
     func start(resource: OfflineAudioResource, token: String, allowsMetered: Bool, resumeData: Data?) {
-        var request = URLRequest(url: resource.url)
+        let preferred = NeteaseCDNHost.preferred(for: resource.url)
+        var request = URLRequest(url: preferred)
         request.allowsCellularAccess = allowsMetered
         request.allowsExpensiveNetworkAccess = allowsMetered
         request.allowsConstrainedNetworkAccess = allowsMetered

@@ -30,8 +30,10 @@ struct QueuePrefetchSource {
 @MainActor
 final class QueuePrefetcher {
     typealias Resolver = (Track, String) async throws -> QueuePrefetchSource?
+    typealias Downloader = (URLRequest) async throws -> (URL, URLResponse)
     private let cache: AudioCache
     private let resolver: Resolver
+    private let download: Downloader
     private let cacheLimitMB: () async -> Int
     private let isDownloaded: @MainActor (Int) -> Bool
     private let completion: (Track, String?) async -> Void
@@ -49,12 +51,14 @@ final class QueuePrefetcher {
          cacheLimitMB: @escaping () async -> Int = { await SettingsManager.shared.effectiveAudioCacheSizeMB() },
          isDownloaded: @escaping @MainActor (Int) -> Bool = { DownloadManager.shared.isDownloaded(trackID: $0) },
          resolver: @escaping Resolver = QueuePrefetcher.resolveSongURL,
+         download: @escaping Downloader = { try await URLSession.shared.download(for: $0) },
          completion: @escaping (Track, String?) async -> Void = QueuePrefetcher.keepPlaybackData) {
         self.cache = cache
         self.limits = limits
         self.cacheLimitMB = cacheLimitMB
         self.isDownloaded = isDownloaded
         self.resolver = resolver
+        self.download = download
         self.completion = completion
     }
 
@@ -145,10 +149,10 @@ final class QueuePrefetcher {
     /// the cache would not keep it: too large for the limit, cleared meanwhile,
     /// or of a type it cannot name.
     private func store(_ source: QueuePrefetchSource, track: Track, quality: String, limitMB: Int, ticket: Int) async throws -> Int64? {
-        var urlRequest = URLRequest(url: source.url)
+        var urlRequest = URLRequest(url: NeteaseCDNHost.preferred(for: source.url))
         urlRequest.allowsExpensiveNetworkAccess = false
         urlRequest.allowsConstrainedNetworkAccess = false
-        let (temporary, response) = try await URLSession.shared.download(for: urlRequest)
+        let (temporary, response) = try await downloadWithFailover(urlRequest, ticket: ticket)
         let fileManager = FileManager.default
         var kept = false
         defer { if !kept { try? fileManager.removeItem(at: temporary) } }
@@ -178,6 +182,24 @@ final class QueuePrefetcher {
         case .deferredDiscard, .rejectedForCurrentLimit:
             try? await cache.discard(session)
             return nil
+        }
+    }
+
+    private func downloadWithFailover(_ request: URLRequest, ticket: Int, canRetry: Bool = true) async throws -> (URL, URLResponse) {
+        do {
+            let result = try await download(request)
+            if let url = result.1.url { NeteaseCDNHost.markReachable(url) }
+            return result
+        } catch {
+            // The async download API does not expose the response on failure.
+            // A timeout could be mid-body, so only report definite connection
+            // failures here rather than poisoning a host that already answered.
+            guard isCurrent(ticket), (error as NSError).code != NSURLErrorTimedOut,
+                  let url = request.url,
+                  let twin = NeteaseCDNHost.failover(from: url, after: error), canRetry else { throw error }
+            var retry = request
+            retry.url = twin
+            return try await downloadWithFailover(retry, ticket: ticket, canRetry: false)
         }
     }
 

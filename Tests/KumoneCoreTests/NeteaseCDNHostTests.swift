@@ -114,6 +114,56 @@ struct NeteaseCDNHostTests {
 
     // MARK: - CachingAudioResourceLoader
 
+    @Test @MainActor func prefetchRetriesDNSFailureAndNextSongStartsOnTwin() async throws {
+        let dead = url("m9401.music.126.net")
+        let twin = try #require(NeteaseCDNHost.alternate(for: dead))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let cache = AudioCache(cacheDirectory: directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var requests: [URLRequest] = []
+        let body = Data(repeating: 1, count: 1024)
+        let prefetcher = QueuePrefetcher(cache: cache, cacheLimitMB: { 100 }, isDownloaded: { _ in false },
+            resolver: { _, _ in .init(url: dead, servedQuality: "exhigh", byteCount: 1024, fileExtension: "mp3") },
+            download: { request in
+                requests.append(request)
+                if request.url == dead { throw URLError(.cannotFindHost) }
+                let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try body.write(to: temporary)
+                return (temporary, HTTPURLResponse(url: twin, statusCode: 200, httpVersion: nil,
+                                                  headerFields: ["Content-Type": "audio/mpeg"])!)
+            }, completion: { _, _ in })
+        defer { prefetcher.cancel() }
+        let tracks = try [1, 2, 3].map { id in
+            try JSONDecoder().decode(Track.self, from: Data("{\"id\":\(id),\"name\":\"Song\",\"dt\":3000}".utf8))
+        }
+        prefetcher.update(.init(scope: nil, currentTrackID: 1, tracks: tracks, quality: "exhigh",
+                                allowsUnblock: false, pendingDownloadTrackIDs: []))
+        for _ in 0..<600 {
+            if prefetcher.completedTrackIDs == [2, 3] { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(prefetcher.completedTrackIDs == [2, 3])
+        #expect(requests.map(\.url) == [dead, twin, twin])
+        #expect(requests.allSatisfy { !$0.allowsExpensiveNetworkAccess && !$0.allowsConstrainedNetworkAccess })
+        let entry = try #require(try await cache.entry(for: 2, requestedQuality: "exhigh", allowsUnblock: false))
+        #expect(try Data(contentsOf: entry.fileURL) == body)
+    }
+
+    @Test func backgroundDownloadReportsDNSButNotTimeoutAfterResponse() {
+        let dead = url("m9402.music.126.net")
+        let twin = NeteaseCDNHost.alternate(for: dead)!
+        let stream = AsyncStream<DownloadTransportEvent>.makeStream()
+        defer { stream.continuation.finish() }
+        let delegate = DownloadSessionDelegate(inbox: FileManager.default.temporaryDirectory, continuation: stream.continuation)
+        let task = CDNDownloadTask(url: dead)
+        task.taskDescription = "\(UUID()).\(UUID())"
+        delegate.urlSession(.shared, task: task, didCompleteWithError: URLError(.cannotFindHost))
+        #expect(NeteaseCDNHost.preferred(for: dead) == twin)
+        task.receivedResponse = HTTPURLResponse(url: dead, statusCode: 200, httpVersion: nil, headerFields: nil)
+        delegate.urlSession(.shared, task: task, didCompleteWithError: URLError(.timedOut))
+        #expect(NeteaseCDNHost.preferred(for: dead) == dead)
+    }
+
     /// The iOS path end to end: AVFoundation asks the caching loader for
     /// byte ranges, the first host fails DNS, and the asset still loads, from
     /// the twin.
@@ -141,6 +191,14 @@ struct NeteaseCDNHostTests {
         #expect(hosts.contains("m9301c.music.126.net"))
         #expect(NeteaseCDNHost.preferred(for: dead) == URL(string: "https://m9301c.music.126.net/x/song.caf")!)
     }
+}
+
+private final class CDNDownloadTask: URLSessionDownloadTask, @unchecked Sendable {
+    let url: URL
+    var receivedResponse: URLResponse?
+    init(url: URL) { self.url = url; super.init() }
+    override var currentRequest: URLRequest? { URLRequest(url: url) }
+    override var response: URLResponse? { receivedResponse }
 }
 
 /// Serves `body` with byte ranges for every host except the dead ones, which

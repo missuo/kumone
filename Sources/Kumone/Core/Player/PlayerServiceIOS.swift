@@ -192,16 +192,6 @@ final class PlayerService: ObservableObject {
     /// Set when a failure skips to the next song, so that skip keeps counting
     /// toward the stop after five in a row instead of resetting it.
     private var advancingAfterFailure = false
-    /// A seek asked for before the item could take one: AVPlayerItem throws
-    /// on a seek with a completion handler until it is ready to play. Applied
-    /// when it is; a newer seek replaces it.
-    private var pendingSeek: PendingSeek?
-
-    private struct PendingSeek {
-        let generation: Int
-        let seconds: TimeInterval
-        let completion: (@MainActor () -> Void)?
-    }
     private var scrobbled = false
     private var startScrobbled = false
 
@@ -280,8 +270,7 @@ final class PlayerService: ObservableObject {
             forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
-                // A held seek owns the position until its item is ready.
-                guard let self, !self.isScrubbing, self.pendingSeek == nil else { return }
+                guard let self, !self.isScrubbing else { return }
                 let seconds = time.seconds
                 guard seconds.isFinite else { return }
 
@@ -454,25 +443,12 @@ final class PlayerService: ObservableObject {
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
         progress = seconds
         updateLyricsCursor(at: seconds)
-        dropPendingSeek()
-        guard engine.currentItem?.status == .readyToPlay else {
-            pendingSeek = PendingSeek(generation: resolveGeneration, seconds: seconds, completion: completion)
-            NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
-            return
-        }
         engine.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                     toleranceBefore: .zero, toleranceAfter: .zero) { _ in
             guard let completion else { return }
             Task { @MainActor in completion() }
         }
         NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
-    }
-
-    /// Forgets a held seek, still telling its caller the seek is over.
-    private func dropPendingSeek() {
-        guard let dropped = pendingSeek else { return }
-        pendingSeek = nil
-        dropped.completion?()
     }
 
     func toggleShuffle() {
@@ -739,7 +715,6 @@ final class PlayerService: ObservableObject {
         AudioSpectrum.shared.beginPreparing()
         resolveGeneration += 1
         let generation = resolveGeneration
-        dropPendingSeek()
         if advancingAfterFailure {
             advancingAfterFailure = false
         } else {
@@ -762,14 +737,15 @@ final class PlayerService: ObservableObject {
     ///   of the same file.
     private func resolveAndLoad(_ track: Track, generation: Int,
                                 localLease: OfflinePlaybackLease? = nil,
-                                skipsLocalCopies: Bool = false) async {
+                                skipsLocalCopies: Bool = false,
+                                resumeAt: TimeInterval = 0) async {
         let quality = SettingsManager.shared.audioQuality.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
 
         // A downloaded copy beats the network, and is all there is without one.
         if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
-            await playOfflineFile(lease, for: track, generation: generation)
+            await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
             return
         }
         guard generation == resolveGeneration else { return }
@@ -796,7 +772,8 @@ final class PlayerService: ObservableObject {
                         for: track,
                         generation: generation,
                         durationMS: nil,
-                        cacheLease: lease
+                        cacheLease: lease,
+                        resumeAt: resumeAt
                     )
                     return
                 }
@@ -807,7 +784,7 @@ final class PlayerService: ObservableObject {
 
         // Without a network, the cache is the last place to look.
         if usesOfflineQueue {
-            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock) { return }
+            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
             guard generation == resolveGeneration else { return }
             unavailableOffline(track, generation: generation)
             return
@@ -825,12 +802,12 @@ final class PlayerService: ObservableObject {
             // else keeps upstream's path: third-party sources, then the cache.
             if ConnectivityFailure.matches(error) {
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
-                    await playOfflineFile(lease, for: track, generation: generation)
+                    await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
                     return
                 }
                 guard generation == resolveGeneration else { return }
                 if usesOfflineQueue {
-                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock) { return }
+                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
                     guard generation == resolveGeneration else { return }
                     unavailableOffline(track, generation: generation)
                     return
@@ -846,7 +823,7 @@ final class PlayerService: ObservableObject {
 
         // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
-            if await resolveAndLoadUnblocked(track, generation: generation) { return }
+            if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
         guard generation == resolveGeneration else { return }
 
@@ -854,7 +831,8 @@ final class PlayerService: ObservableObject {
             if cacheEnabled, await loadFallbackCache(
                 for: track,
                 generation: generation,
-                allowsUnblock: allowsUnblock
+                allowsUnblock: allowsUnblock,
+                resumeAt: resumeAt
             ) {
                 return
             }
@@ -867,13 +845,14 @@ final class PlayerService: ObservableObject {
             isTrial = true
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
-        _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation)
+        _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
     }
 
     private func resolveAndLoadUnblocked(
         _ track: Track,
         generation: Int,
-        requiresActivePlayback: Bool = false
+        requiresActivePlayback: Bool = false,
+        resumeAt: TimeInterval = 0
     ) async -> Bool {
         let enabledSources = SettingsManager.shared.enabledAudioSourceIDs
         guard !enabledSources.isEmpty else { return false }
@@ -902,7 +881,8 @@ final class PlayerService: ObservableObject {
             track,
             url: unblocked.url,
             durationMS: nil,
-            generation: generation
+            generation: generation,
+            resumeAt: resumeAt
         )
         guard case .loaded = loadResult else { return false }
 
@@ -933,7 +913,8 @@ final class PlayerService: ObservableObject {
         _ track: Track,
         url: URL,
         durationMS: Int?,
-        generation: Int
+        generation: Int,
+        resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
         // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
         let remote = NeteaseCDNHost.preferred(for: url)
@@ -973,14 +954,16 @@ final class PlayerService: ObservableObject {
             generation: generation,
             durationMS: durationMS,
             remoteURL: remote,
-            resourceLoader: resourceLoader
+            resourceLoader: resourceLoader,
+            resumeAt: resumeAt
         )
     }
 
     private func loadFallbackCache(
         for track: Track,
         generation: Int,
-        allowsUnblock: Bool
+        allowsUnblock: Bool,
+        resumeAt: TimeInterval = 0
     ) async -> Bool {
         do {
             guard let cached = try await AudioCache.shared.fallbackEntry(
@@ -1002,7 +985,8 @@ final class PlayerService: ObservableObject {
                 for: track,
                 generation: generation,
                 durationMS: nil,
-                cacheLease: lease
+                cacheLease: lease,
+                resumeAt: resumeAt
             )
             return true
         } catch {
@@ -1164,14 +1148,10 @@ final class PlayerService: ObservableObject {
         }
     }
 
-    /// The song is playing for real: the failure streak is over, and a seek
-    /// held while the item loaded can land.
+    /// The song is playing for real: the failure streak is over.
     private func itemBecameReady(generation: Int) {
         guard generation == resolveGeneration else { return }
         consecutiveFailures = 0
-        guard let held = pendingSeek, held.generation == generation else { return }
-        pendingSeek = nil
-        seek(to: held.seconds, completion: held.completion)
     }
 
     /// A NetEase stream or a cached file failed. The song gets one reload,
@@ -1225,17 +1205,12 @@ final class PlayerService: ObservableObject {
             return
         }
         AudioSpectrum.shared.beginPreparing()
-        // Held until the reloaded item is ready; a seek the listener makes
-        // meanwhile replaces it.
-        let resumeAt = progress
-        if resumeAt > 1 {
-            seek(to: resumeAt)
-        }
+        let resumeAt = progress > 1 ? progress : 0
         Task {
             if let twin {
-                _ = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation)
+                _ = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation, resumeAt: resumeAt)
             } else {
-                await resolveAndLoad(track, generation: generation, skipsLocalCopies: remoteURL == nil)
+                await resolveAndLoad(track, generation: generation, skipsLocalCopies: remoteURL == nil, resumeAt: resumeAt)
             }
         }
     }
