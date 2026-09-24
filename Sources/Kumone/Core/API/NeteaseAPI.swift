@@ -74,9 +74,10 @@ enum NeteaseAPI {
         }
     }
 
-    static func logout() async {
-        _ = try? await client.weapi("/logout")
-        client.clearAuthCookies()
+    static func logout(detachedCookies: [String: String]? = nil) async {
+        let oldCookies = detachedCookies ?? client.authenticationCookies()
+        if detachedCookies == nil { client.clearAuthCookies() }
+        _ = try? await client.weapi("/logout", cookieOverrides: oldCookies, absorbResponseCookies: false)
     }
 
     static func refreshLogin() async {
@@ -415,6 +416,49 @@ enum NeteaseAPI {
         var payload: [String: Any] = ["ids": idString, "level": level, "encodeType": "flac"]
         if level == "sky" { payload["immerseType"] = "c51" }
         return try await eapi(SongURLResponse.self, "/song/enhance/player/url/v1", payload).data
+    }
+
+    /// Download eligibility is resolved independently of the playback URL.
+    /// An injectable client lets the compatibility probe use an isolated cookie
+    /// jar without reading or changing the listener's current login.
+    static func songDownloadResource(track: Track, level: String, accountScope: String,
+                                     client: NeteaseClient = .shared) async throws -> OfflineAudioResource {
+        let data = try await songDownloadURL(id: track.id, level: level, client: client)
+        return try downloadResource(data: data, track: track, accountScope: accountScope)
+    }
+
+    static func songDownloadURL(id: Int, level: String, client: NeteaseClient = .shared) async throws -> SongURLData {
+        struct Response: Decodable { let data: SongURLData? }
+        let body = try await client.eapi("/song/enhance/download/url/v1",
+                                         ["id": id, "level": level, "immerseType": "c51"])
+        let response = try client.decoded(Response.self, from: body)
+        guard let data = response.data else { throw OfflineAudioError.unavailable }
+        return data
+    }
+
+    static func downloadResource(data: SongURLData, track: Track, accountScope: String) throws -> OfflineAudioResource {
+        guard data.id == track.id, data.code == 200, data.freeTrialInfo == nil,
+              let md5 = data.md5?.lowercased(), let quality = data.level,
+              let format = data.type.flatMap({ OfflineAudioFormat(rawValue: $0.lowercased()) }),
+              let rawURL = data.url, var components = URLComponents(string: rawURL),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+              components.host != nil else { throw OfflineAudioError.unavailable }
+        components.scheme = "https"
+        guard let url = components.url else { throw OfflineAudioError.invalidResource }
+        // Some download responses omit time, and some songs (cloud drive,
+        // simplified entries) omit dt. Whichever is known supplies the duration;
+        // when both are, they must agree, which also rejects a trial URL.
+        let responseDuration = data.time > 0 ? Double(data.time) / 1000 : 0
+        if responseDuration > 0, track.duration > 0, abs(responseDuration - track.duration) > max(2, track.duration * 0.03) {
+            throw OfflineAudioError.invalidAudio
+        }
+        let duration = track.duration > 0 ? track.duration : responseDuration
+        guard duration > 0 else { throw OfflineAudioError.unavailable }
+        let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id, source: "netease",
+                                            quality: quality, format: format, contentMD5: md5)
+        let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: Int64(data.size), duration: duration)
+        try descriptor.validate()
+        return OfflineAudioResource(descriptor: descriptor, url: url)
     }
 
     static func lyric(id: Int) async throws -> LyricResponse {

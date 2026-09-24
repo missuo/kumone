@@ -3,15 +3,23 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
-    @State private var audioCacheUsage: String = String(localized: "计算中…")
-    @State private var imageCacheUsage: String = String(localized: "计算中…")
-    @State private var cacheError: String?
+    @Environment(\.openDestination) private var openDestination
+    @Environment(\.dismiss) private var dismiss
     #if os(macOS)
     @ObservedObject private var downloader = StemModelDownloader.shared
-    @State private var audioCacheSize: String = String(localized: "计算中…")
     #endif
 
     var body: some View {
+        #if os(macOS)
+        NavigationStack { settingsForm }
+            .background(SettingsWindowToolbar())
+            .frame(width: 520, height: 620)
+        #else
+        settingsForm
+        #endif
+    }
+
+    private var settingsForm: some View {
         Form {
             Section("播放") {
                 Picker("音质", selection: $settings.audioQuality) {
@@ -175,93 +183,16 @@ struct SettingsView: View {
             }
 
             Section("存储") {
-                #if os(iOS)
-                // The cross-platform #109 song cache. On macOS the real playback
-                // cache is EngineAudioCache (its own controls below), so these
-                // controls would be inert there — keep them iOS-only.
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle(
-                        "歌曲缓存",
-                        isOn: Binding(
-                            get: { settings.enableAudioCache },
-                            set: { enabled in
-                                settings.enableAudioCache = enabled
-                                if enabled {
-                                    Task { await enforceAudioCacheLimit() }
-                                }
-                            }
-                        )
-                    )
-                    Text("关闭后将不读取或缓存歌曲")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if settings.enableAudioCache {
-                        Slider(
-                            value: Binding(
-                                get: { Double(settings.audioCacheSizeMB) },
-                                set: { settings.audioCacheSizeMB = Int($0.rounded()) }
-                            ),
-                            in: Double(SettingsManager.audioCacheSizeRangeMB.lowerBound)...Double(
-                                SettingsManager.audioCacheSizeRangeMB.upperBound
-                            ),
-                            step: Double(SettingsManager.audioCacheSizeStepMB)
-                        )
-                        HStack {
-                            Text("100 MB")
-                            Spacer()
-                            Text("1 GB")
-                        }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                NavigationLink {
+                    StorageSpaceView {
+                        #if os(iOS)
+                        dismiss()
+                        #endif
+                        openDestination(.downloaded)
                     }
-                    HStack {
-                        Text("\(audioCacheUsage) / \(audioCacheLimit)")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清理") {
-                            Task { await clearAudioCache() }
-                        }
-                    }
+                } label: {
+                    Label("存储空间", systemImage: "internaldrive")
                 }
-                #endif
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("图片缓存")
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("已占用")
-                            Text(imageCacheUsage)
-                        }
-                        .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清理") {
-                            Task { await clearImageCache() }
-                        }
-                    }
-                }
-                if let cacheError {
-                    Text(cacheError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                #if os(macOS)
-                LabeledContent("歌曲缓存", value: audioCacheSize)
-                Picker("歌曲缓存上限", selection: $settings.audioCacheLimit) {
-                    Text("512 MB").tag(Int64(512) << 20)
-                    Text("2 GB").tag(Int64(2) << 30)
-                    Text("8 GB").tag(Int64(8) << 30)
-                    Text("不限").tag(Int64(0))
-                }
-                .onChange(of: settings.audioCacheLimit) { _, _ in
-                    updateAudioCacheSize()
-                }
-                Button("清除歌曲缓存") {
-                    Task {
-                        await EngineAudioCache.shared.removeAll()
-                        updateAudioCacheSize()
-                        ToastCenter.shared.show(String(localized: "歌曲缓存已清除"))
-                    }
-                }
-                #endif
             }
 
             Section("账号") {
@@ -301,25 +232,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        #if os(macOS)
-        .frame(width: 440, height: 600)
-        #endif
-        .task {
-            await refreshCacheUsage()
-            await enforceAudioCacheLimit()
-            #if os(macOS)
-            updateAudioCacheSize()
-            #endif
-        }
-        #if os(macOS)
-        .onChange(of: settings.audioCacheSizeMB) { _, _ in
-            Task { await enforceAudioCacheLimit() }
-        }
-        #else
-        .onChange(of: settings.audioCacheSizeMB) { _ in
-            Task { await enforceAudioCacheLimit() }
-        }
-        #endif
     }
     #if os(macOS)
 
@@ -338,65 +250,37 @@ struct SettingsView: View {
                 set: { settings.automixStemsEnabled = $0 })
     }
 
-    private func updateAudioCacheSize() {
-        Task {
-            let bytes = await EngineAudioCache.shared.totalUsageBytes()
-            audioCacheSize = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-        }
-    }
     #endif
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
-    private var audioCacheLimit: String {
-        ByteCountFormatter.string(
-            fromByteCount: Int64(settings.audioCacheSizeMB) * 1_000_000,
-            countStyle: .file
-        )
+}
+
+#if os(macOS)
+/// A Settings scene keeps its preference-style toolbar even when given a
+/// scene-level windowToolbarStyle. Configure this window through AppKit so
+/// navigation shares the title bar instead of becoming a centered second row.
+struct SettingsWindowToolbar: NSViewRepresentable {
+    func makeNSView(context: Context) -> ToolbarHost { ToolbarHost() }
+
+    func updateNSView(_ nsView: ToolbarHost, context: Context) {
+        nsView.updateToolbar()
     }
 
-    private func refreshCacheUsage() async {
-        do {
-            audioCacheUsage = (try await AudioCache.shared.usage()).formatted
-        } catch {
-            cacheError = error.localizedDescription
+    final class ToolbarHost: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateToolbar()
         }
-        do {
-            imageCacheUsage = (try await ImageCache.shared.usage()).formatted
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
 
-    private func enforceAudioCacheLimit() async {
-        guard settings.enableAudioCache else { return }
-        do {
-            try await AudioCache.shared.enforce(maximumSizeMB: settings.audioCacheSizeMB)
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
-
-    private func clearAudioCache() async {
-        do {
-            try await AudioCache.shared.clear()
-            ToastCenter.shared.show(String(localized: "歌曲缓存已清除"))
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
-        }
-    }
-
-    private func clearImageCache() async {
-        do {
-            try await ImageCache.shared.clear()
-            ToastCenter.shared.show(String(localized: "图片缓存已清除"))
-            await refreshCacheUsage()
-        } catch {
-            cacheError = error.localizedDescription
+        func updateToolbar() {
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window, window.toolbarStyle != .unifiedCompact else { return }
+                window.toolbarStyle = .unifiedCompact
+            }
         }
     }
 }
+#endif

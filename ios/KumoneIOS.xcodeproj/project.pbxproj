@@ -11,6 +11,7 @@
 		912D4F61C71BE306BABD494B /* KumoneIOSFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 2D74B41A7A94ABA39956EC55 /* KumoneIOSFeature */; };
 		C2D27A1CAB9C74AB85AE8166 /* KumoneIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A494667EB444A90236506102 /* KumoneIOSApp.swift */; };
 		C777A61B1DD211B6FF64D88B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8B9C6A5A61A6330586810260 /* Assets.xcassets */; };
+		EC74DAC7ED94A1CFD01A6BB9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,6 +26,7 @@
 
 /* Begin PBXFileReference section */
 		0646F456C7BF38C0A8ED880E /* KumoneIOS.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KumoneIOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = ../Sources/Kumone/Resources/PrivacyInfo.xcprivacy; sourceTree = SOURCE_ROOT; };
 		2199D32FC69383EC32B19794 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KumoneIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		45602F996F250E88035F23A9 /* KumoneIOSPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; path = KumoneIOSPackage; sourceTree = SOURCE_ROOT; };
@@ -60,6 +62,7 @@
 			isa = PBXGroup;
 			children = (
 				4E1CC50B92220A5917A760E8 /* Config */,
+				07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */,
 				9C2BFF3109E01BC79A4469A4 /* KumoneIOS */,
 				CEC97C7667B5C3BA415E1C82 /* KumoneIOSUITests */,
 				06B27D73B868029A6CD07927 /* Packages */,
@@ -192,6 +195,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C777A61B1DD211B6FF64D88B /* Assets.xcassets in Resources */,
+				EC74DAC7ED94A1CFD01A6BB9 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

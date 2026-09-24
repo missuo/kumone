@@ -84,6 +84,9 @@ actor AudioCache {
     private var clearAfterRelease: Set<URL> = []
     private var maximumSizeMB = AudioCache.defaultMaximumSizeMB
 
+    /// Where the cache lives, for storage accounting.
+    nonisolated var directory: URL { cacheDirectory }
+
     init(cacheDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.cacheDirectory = cacheDirectory ?? fileManager.urls(
@@ -109,6 +112,14 @@ actor AudioCache {
         guard allowsUnblock || !entry.metadata.source.requiresUnblockEnabled else { return nil }
         try touch(entry.fileURL)
         return entry
+    }
+
+    /// Tracks with a complete cached copy this player may use, for offline
+    /// availability; the same rule as `fallbackEntry`.
+    func cachedTrackIDs(allowsUnblock: Bool) throws -> Set<Int> {
+        Set(try completedEntries()
+            .filter { allowsUnblock || !$0.metadata.source.requiresUnblockEnabled }
+            .map(\.metadata.trackID))
     }
 
     func retain(_ entry: AudioCacheEntry) -> UUID {

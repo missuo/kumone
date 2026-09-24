@@ -9,12 +9,12 @@ struct AudioCacheTests {
             (
                 SettingsManager.normalizedAudioCacheSizeMB(20),
                 SettingsManager.normalizedAudioCacheSizeMB(550),
-                SettingsManager.normalizedAudioCacheSizeMB(2_500)
+                SettingsManager.normalizedAudioCacheSizeMB(25_000)
             )
         }
         #expect(normalizedValues.0 == 100)
         #expect(normalizedValues.1 == 600)
-        #expect(normalizedValues.2 == 1_000)
+        #expect(normalizedValues.2 == 10_000)
     }
 
     @Test func exactQualityHitRestoresMetadata() async throws {

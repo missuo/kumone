@@ -18,7 +18,7 @@ struct NowPlayingView: View {
     #endif
 
     #if os(iOS)
-    @State private var loadedArtworkImage: PlatformImage?
+    @State private var loadedArtwork = CachedImageState()
     @State private var loadedArtworkColors: ArtworkColors = .fallback
     #endif
     @State private var activeIndex: Int?
@@ -97,7 +97,12 @@ struct NowPlayingView: View {
         #endif
         .preferredColorScheme(.dark)
         #if os(iOS)
-        .task(id: player.currentTrack?.id) {
+        .modifier(OfflinePlaybackAlert(player: player, onDownloads: { onOpenDestination(.downloaded) },
+            enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
+        .modifier(MeteredDownloadAlert(enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
+        #endif
+        #if os(iOS)
+        .task(id: currentArtworkURL) {
             await loadArtwork()
         }
         #endif
@@ -170,7 +175,7 @@ struct NowPlayingView: View {
         #if os(macOS)
         artworkStore.artwork
         #else
-        loadedArtworkImage
+        loadedArtwork.image(for: currentArtworkURL)
         #endif
     }
 
@@ -178,7 +183,7 @@ struct NowPlayingView: View {
         #if os(macOS)
         artworkStore.colors
         #else
-        loadedArtworkColors
+        artworkImage == nil ? .fallback : loadedArtworkColors
         #endif
     }
 
@@ -202,17 +207,28 @@ struct NowPlayingView: View {
     }
 
     #if os(iOS)
+    private var currentArtworkURL: URL? {
+        player.currentTrack?.album.picUrl?.resizedImageURL(768)
+    }
+
     private func loadArtwork() async {
+        loadedArtworkColors = .fallback
         guard let urlString = player.currentTrack?.album.picUrl,
-              let url = urlString.resizedImageURL(768) else {
-            loadedArtworkImage = nil
-            loadedArtworkColors = .fallback
+              let url = currentArtworkURL else {
+            loadedArtwork = CachedImageState()
             return
         }
-        if let image = await ImageCache.shared.image(for: url) {
-            loadedArtworkImage = image
-            loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: urlString)
+        loadedArtwork = CachedImageState(url: url)
+        let image = await ImageCache.shared.image(for: url) { preview in
+            applyArtwork(preview, for: url, cacheKey: urlString)
         }
+        if let image { applyArtwork(image, for: url, cacheKey: urlString) }
+    }
+
+    private func applyArtwork(_ image: PlatformImage, for url: URL, cacheKey: String) {
+        guard !Task.isCancelled, currentArtworkURL == url else { return }
+        loadedArtwork.finish(image, for: url)
+        loadedArtworkColors = ArtworkPalette.extract(from: image, cacheKey: cacheKey)
     }
     #endif
 
@@ -627,7 +643,8 @@ struct NowPlayingView: View {
                 .padding(.top, 16)
             MinimalTransportControls(
                 backdrop: colors,
-                showQueue: $showQueueOnMobile
+                showQueue: $showQueueOnMobile,
+                onOpenDestination: onOpenDestination
             )
                 .padding(.horizontal, 2)
         }
@@ -1310,6 +1327,8 @@ private struct CompactTrackHeader: View {
                     .accessibilityIdentifier("immersiveFavoriteButton")
 
                     Menu {
+                        TrackDownloadActions(track: track, showsIcons: true)
+                        Divider()
                         Button {
                             player.addToPlayNext(track)
                         } label: {
@@ -1608,8 +1627,8 @@ private struct CompactQueueContent: View {
                         ForEach(
                             Array(player.upcomingTracks.prefix(100).enumerated()),
                             id: \.offset
-                        ) { _, track in
-                            CompactQueueRow(track: track)
+                        ) { index, track in
+                            CompactQueueRow(track: track, upcomingIndex: index)
                         }
                     }
                 }
@@ -1656,12 +1675,13 @@ private struct CompactQueueContent: View {
 
 private struct CompactQueueRow: View {
     let track: Track
+    let upcomingIndex: Int
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            player.jumpTo(track)
+            player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
         } label: {
             HStack(spacing: 11) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
@@ -2110,6 +2130,8 @@ private struct MinimalTrackInfoRow: View {
 
     private func moreMenu(for track: Track) -> some View {
         Menu {
+            TrackDownloadActions(track: track, showsIcons: true)
+            Divider()
             Button {
                 airPlayRequest += 1
             } label: {
@@ -2168,6 +2190,7 @@ private struct MinimalTransportControls: View {
     @EnvironmentObject private var player: PlayerService
     let backdrop: ArtworkColors
     @Binding var showQueue: Bool
+    let onOpenDestination: (Destination) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2211,6 +2234,11 @@ private struct MinimalTransportControls: View {
         .buttonStyle(.pressable)
         .sheet(isPresented: $showQueue) {
             queueSheet
+                .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
+                    showQueue = false
+                    onOpenDestination(.downloaded)
+                }, enabled: showQueue && player.showNowPlaying))
+                .modifier(MeteredDownloadAlert(enabled: showQueue && player.showNowPlaying))
         }
     }
 
@@ -2286,8 +2314,8 @@ private struct MinimalQueueSheet: View {
                             ForEach(
                                 Array(player.upcomingTracks.prefix(100).enumerated()),
                                 id: \.offset
-                            ) { _, track in
-                                MinimalQueueRow(track: track, isCurrent: false)
+                            ) { index, track in
+                                MinimalQueueRow(track: track, isCurrent: false, upcomingIndex: index)
                             }
                         }
                     } else {
@@ -2348,13 +2376,15 @@ private struct MinimalQueueSectionLabel: View {
 private struct MinimalQueueRow: View {
     let track: Track
     let isCurrent: Bool
+    var upcomingIndex: Int? = nil
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
             guard !isCurrent else { return }
-            player.jumpTo(track)
+            if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
+            else { player.jumpTo(track) }
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)

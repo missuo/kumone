@@ -1,0 +1,215 @@
+import Combine
+import Foundation
+
+@MainActor
+final class PlaylistContent: ObservableObject {
+    let playlistID: Int
+    @Published var detail: PlaylistDetail?
+    @Published var tracks: [Track] = []
+    @Published var privileges: [Int: TrackPrivilege] = [:]
+    @Published var isLoading = true
+    @Published var isLoadingMore = false
+    @Published var errorMessage: String?
+    @Published var filter = ""
+    private(set) var loadedScope: String?
+    private var reducedRecommendationIDs: Set<Int> = []
+    private var recommendationReplacements: [Int: Track] = [:]
+    private var removedTrackIDs: Set<Int> = []
+    private var loadGeneration = 0
+    private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
+    private let tracksLoader: ([Int]) async throws -> NeteaseAPI.SongDetailResponse
+    private let snapshots: PlaylistSnapshotStore?
+    private let accountScope: @MainActor () -> String?
+
+    init(playlistID: Int,
+         snapshots: PlaylistSnapshotStore? = .shared,
+         accountScope: @escaping @MainActor () -> String? = { AccountStore.shared.offlineScope },
+         detailLoader: @escaping (Int) async throws -> NeteaseAPI.PlaylistDetailResponse = { try await NeteaseAPI.playlistDetail(id: $0) },
+         tracksLoader: @escaping ([Int]) async throws -> NeteaseAPI.SongDetailResponse = { try await NeteaseAPI.songDetails(ids: $0) }) {
+        self.playlistID = playlistID
+        self.detailLoader = detailLoader
+        self.tracksLoader = tracksLoader
+        self.snapshots = snapshots
+        self.accountScope = accountScope
+    }
+
+    var canDownloadAll: Bool {
+        guard let detail, !isLoading, !isLoadingMore, !tracks.isEmpty else { return false }
+        return detail.trackIds.count == detail.trackCount && Set(tracks.map(\.id)) == Set(detail.trackIds.map(\.id))
+    }
+
+    var filteredTracks: [Track] {
+        let query = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return tracks }
+        return tracks.filter {
+            $0.name.lowercased().contains(query)
+                || $0.artistNames.lowercased().contains(query)
+                || $0.album.name.lowercased().contains(query)
+        }
+    }
+
+    func load(allowNetwork: Bool = true, summary: PlaylistSummary? = nil, background: Bool = false) async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        let scope = accountScope()
+        if loadedScope != scope {
+            detail = nil
+            tracks = []
+            privileges = [:]
+            reducedRecommendationIDs = []
+            recommendationReplacements = [:]
+            loadedScope = scope
+        }
+        removedTrackIDs = []
+        isLoading = tracks.isEmpty
+        isLoadingMore = false
+        errorMessage = nil
+        defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false } }
+        // Without an account scope (the profile is still loading, or failed to)
+        // there is no snapshot to read or write; the network still answers.
+        if let scope, let snapshots, let saved = await snapshots.load(id: playlistID, scope: scope) {
+            guard valid(generation, scope: scope) else { return }
+            let saved = applyingRecommendations(to: saved)
+            detail = saved.detail
+            tracks = saved.detail.tracks
+            privileges = saved.privileges
+            isLoading = false
+            if background, !saved.needsBackgroundRefresh(summary: summary) { return }
+        }
+        guard valid(generation, scope: scope) else { return }
+        if detail == nil, let summary { detail = PlaylistDetail(summary: summary) }
+        guard allowNetwork else { return }
+        var token: UUID?
+        if let scope, let snapshots {
+            token = await snapshots.beginRefresh(id: playlistID, scope: scope, background: background)
+            if token == nil { return }
+        }
+        defer {
+            if let snapshots, let scope, let token {
+                Task { await snapshots.finishRefresh(id: playlistID, scope: scope, token: token) }
+            }
+        }
+        do {
+            let response = try await detailLoader(playlistID)
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
+            var loaded = response.playlist
+            // Some responses include songs but omit membership IDs. Preserve
+            // that order without treating a partial response as a complete list.
+            if loaded.trackIds.isEmpty, !loaded.tracks.isEmpty {
+                loaded.trackIds = loaded.tracks.map { TrackIDRef(id: $0.id) }
+            }
+            loaded = applyingRecommendations(to: .init(detail: loaded, privileges: [:])).detail
+            // A truncated membership response cannot remove the tail of a saved list.
+            if loaded.trackIds.count < loaded.trackCount, !tracks.isEmpty {
+                errorMessage = String(localized: "歌单数据不完整，请重试")
+                return
+            }
+            if !removedTrackIDs.isEmpty {
+                loaded.tracks.removeAll { removedTrackIDs.contains($0.id) }
+                loaded.trackIds.removeAll { removedTrackIDs.contains($0.id) }
+                loaded.trackCount = loaded.trackIds.count
+            }
+            let known = Dictionary((tracks + loaded.tracks).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            loaded.tracks = loaded.trackIds.compactMap { known[$0.id] }
+            detail = loaded
+            tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
+            let ids = Set(loaded.trackIds.map(\.id))
+            privileges = privileges.filter { ids.contains($0.key) }
+            merge(privileges: response.privileges)
+            isLoading = false
+            await save(scope: scope, token: token)
+            try await loadRemainingTracks(generation: generation, scope: scope, token: token, background: background)
+        } catch {
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
+            errorMessage = error is OfflineAudioError
+                ? String(localized: "无法加载歌单，请重试") : error.localizedDescription
+        }
+    }
+
+    private func loadRemainingTracks(generation: Int, scope: String?, token: UUID?, background: Bool) async throws {
+        guard let detail, tracks.count < detail.trackIds.count else { return }
+        isLoadingMore = true
+        let loadedIDs = Set(tracks.map(\.id))
+        let remaining = detail.trackIds.map(\.id).filter { !loadedIDs.contains($0) && !reducedRecommendationIDs.contains($0) }
+        for chunk in stride(from: 0, to: remaining.count, by: 500)
+            .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
+            let response = try await tracksLoader(chunk)
+            guard await current(generation, scope: scope, token: token, background: background) else { return }
+            let known = Dictionary((tracks + response.songs).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            tracks = (self.detail?.trackIds ?? []).compactMap { known[$0.id] }
+                .filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
+            merge(privileges: response.privileges)
+            await save(scope: scope, token: token)
+        }
+    }
+
+    private func valid(_ generation: Int, scope: String?) -> Bool {
+        generation == loadGeneration && !Task.isCancelled && scope == accountScope()
+    }
+
+    private func current(_ generation: Int, scope: String?, token: UUID?, background: Bool) async -> Bool {
+        guard valid(generation, scope: scope) else { return false }
+        // Each visible caller finishes its own list. The newest refresh alone
+        // may save the shared snapshot; superseded background work can stop.
+        if background, let snapshots, let scope, let token,
+           !(await snapshots.isCurrent(id: playlistID, scope: scope, token: token)) { return false }
+        return valid(generation, scope: scope)
+    }
+
+    private func save(scope: String?, token: UUID?) async {
+        guard let snapshots, let scope, let token, var detail, scope == accountScope(), !Task.isCancelled else { return }
+        detail.tracks = tracks
+        try? await snapshots.save(.init(detail: detail, privileges: privileges), scope: scope, token: token)
+    }
+
+    private func merge(privileges list: [TrackPrivilege]?) {
+        for privilege in list ?? [] {
+            privileges[privilege.id] = privilege
+        }
+    }
+
+    func remove(_ track: Track) async {
+        removedTrackIDs.insert(track.id)
+        tracks.removeAll { $0.id == track.id }
+        detail?.tracks.removeAll { $0.id == track.id }
+        detail?.trackIds.removeAll { $0.id == track.id }
+        detail?.trackCount = detail?.trackIds.count ?? 0
+        privileges[track.id] = nil
+        if let scope = loadedScope, scope == accountScope() {
+            try? await snapshots?.remove(trackID: track.id, playlistID: playlistID, scope: scope)
+        }
+    }
+
+    private func applyingRecommendations(to snapshot: PlaylistSnapshot) -> PlaylistSnapshot {
+        var snapshot = snapshot
+        for (id, replacement) in recommendationReplacements {
+            snapshot.replaceRecommendation(id, with: replacement)
+        }
+        return snapshot
+    }
+
+    @discardableResult
+    func replaceRecommendation(_ rejected: Track, with replacement: Track) -> Task<Void, Never>? {
+        guard tracks.replaceRecommendation(rejected, with: replacement) else { return nil }
+        // A replacement occupies the same position in membership as in the
+        // visible list, so subsequent pages and offline loads preserve it.
+        for (id, previous) in recommendationReplacements where previous.id == rejected.id {
+            recommendationReplacements[id] = replacement
+        }
+        recommendationReplacements[rejected.id] = replacement
+        reducedRecommendationIDs.insert(rejected.id)
+        if var detail {
+            detail.tracks = tracks
+            let snapshot = applyingRecommendations(to: .init(detail: detail, privileges: privileges))
+            self.detail = snapshot.detail
+            privileges = snapshot.privileges
+        }
+        guard let snapshots, let scope = loadedScope, scope == accountScope() else { return nil }
+        return Task {
+            guard scope == accountScope() else { return }
+            try? await snapshots.replaceRecommendation(trackID: rejected.id, with: replacement,
+                                                       playlistID: playlistID, scope: scope)
+        }
+    }
+}

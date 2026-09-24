@@ -66,6 +66,27 @@ actor EngineAudioCache {
         return url
     }
 
+    /// Any complete cached file of the track, newest first: offline there is
+    /// no network answer to derive a key from.
+    func cachedFileURL(trackID: Int) -> URL? {
+        let prefix = "\(trackID)-"
+        return allFiles()
+            .filter { $0.url.lastPathComponent.hasPrefix(prefix) && !Self.isAuxiliary($0.url) }
+            .max { $0.modified < $1.modified }?.url
+    }
+
+    /// Tracks with a complete cached file, for offline availability.
+    func cachedTrackIDs() -> Set<Int> {
+        Set(allFiles().compactMap { entry in
+            guard !Self.isAuxiliary(entry.url) else { return nil }
+            return Int(entry.url.lastPathComponent.prefix { $0 != "-" })
+        })
+    }
+
+    private static func isAuxiliary(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(partSuffix) || url.pathExtension == lyricsExtension
+    }
+
     /// Stable temporary path for progressive writes of the same key.
     /// Pure path math (directory creation is idempotent), so not isolated.
     nonisolated func partFileURL(for key: Key) -> URL {
@@ -99,7 +120,7 @@ actor EngineAudioCache {
             return try await existing.value
         }
         let task = Task<URL, Error> {
-            let (temp, response) = try await URLSession.shared.download(from: remote)
+            let (temp, response) = try await Self.fetch(remote)
             if let http = response as? HTTPURLResponse,
                !(200..<300).contains(http.statusCode) {
                 try? FileManager.default.removeItem(at: temp)
@@ -117,6 +138,28 @@ actor EngineAudioCache {
         inflight[key] = task
         defer { inflight[key] = nil }
         return try await task.value
+    }
+
+    /// Downloads `remote`, starting on its CDN twin when its host failed
+    /// recently, and retrying once on the twin when the host cannot be
+    /// reached (see `NeteaseCDNHost`).
+    private static func fetch(_ remote: URL) async throws -> (URL, URLResponse) {
+        let first = NeteaseCDNHost.preferred(for: remote)
+        do {
+            let result = try await URLSession.shared.download(from: first)
+            NeteaseCDNHost.markReachable(first)
+            return result
+        } catch {
+            guard let twin = NeteaseCDNHost.failover(from: first, after: error) else { throw error }
+            do {
+                let result = try await URLSession.shared.download(from: twin)
+                NeteaseCDNHost.markReachable(twin)
+                return result
+            } catch {
+                _ = NeteaseCDNHost.failover(from: twin, after: error)
+                throw error
+            }
+        }
     }
 
     /// The in-flight coalesced download for this key, if any — lets callers

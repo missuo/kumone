@@ -1,4 +1,5 @@
 #if os(iOS)
+import Combine
 import AVFoundation
 import Foundation
 
@@ -185,8 +186,38 @@ final class PlayerService: ObservableObject {
     private var consecutiveFailures = 0
     private var attemptedUnblockSources: Set<AudioSourceID> = []
     private var currentUnblockSourceID: AudioSourceID?
+    /// The resolve generation that already spent its one reload after a
+    /// failed item, so a reload that fails too gives up instead of looping.
+    private var itemRetryGeneration: Int?
+    /// Set when a failure skips to the next song, so that skip keeps counting
+    /// toward the stop after five in a row instead of resetting it.
+    private var advancingAfterFailure = false
     private var scrobbled = false
     private var startScrobbled = false
+
+    // MARK: - Offline playback (downloads)
+
+    /// The song that could not play because it is not on this device.
+    @Published var offlineIssue: OfflinePlaybackIssue?
+    /// Held while the player item reads a downloaded file, so the download
+    /// cannot be deleted from under it.
+    private var offlinePlaybackLease: OfflinePlaybackLease?
+    private var offlineScan: Task<Void, Never>?
+    private var offlineScanID = UUID()
+    private var networkState = DownloadNetworkState.unknown
+    private var networkObservation: AnyCancellable?
+    private var offlineActivatedScope: String?
+    /// Set by an automatic advance and consumed by `startPlaying`: a song that
+    /// turns out to be missing offline is skipped rather than reported.
+    private var pendingAutoAdvance = false
+    private var currentWasAdvanced = false
+
+    // MARK: - Queue prefetch (song cache)
+
+    /// Fills the cache with the next few songs while the network is free.
+    private let queuePrefetcher = QueuePrefetcher()
+    private var prefetchObservations: Set<AnyCancellable> = []
+    private var prefetchUpdateScheduled = false
 
     private enum ResolvedURLLoadResult {
         case loaded
@@ -265,6 +296,17 @@ final class PlayerService: ObservableObject {
         }
 
         NowPlayingManager.shared.attach(to: self)
+        offlineActivatedScope = AccountStore.shared.offlineScope
+        networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
+            self?.networkState = network
+        }
+        observePrefetchInputs()
+        // The cache keeps its default limit until something writes to it, and
+        // trims to that on every release; a cache-only session must not lose
+        // songs on the way.
+        if SettingsManager.shared.enableAudioCache {
+            Task { try? await AudioCache.shared.enforce(maximumSizeMB: await SettingsManager.shared.effectiveAudioCacheSizeMB()) }
+        }
         restoreState()
     }
 
@@ -472,6 +514,54 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    /// Queue rows carry their occurrence, so a repeated song selects the row
+    /// the listener clicked rather than its first occurrence.
+    func jumpToUpcoming(at index: Int, matching trackID: Int) {
+        guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
+        var indexUnchanged = false
+        switch selected.origin {
+        case .inserted(let offset):
+            playNextList.removeSubrange(0...offset)
+            indexUnchanged = true
+        case .queue(let offset):
+            if !playNextList.isEmpty { playNextList.removeAll() }
+            currentIndex = offset
+        case .fm: return
+        }
+        startPlaying(selected.track, indexUnchanged: indexUnchanged)
+    }
+
+    /// Removes the row itself: a repeated song leaves the occurrence the
+    /// listener chose, not its first one, so the current index stays put.
+    func removeUpcoming(at index: Int, matching trackID: Int) {
+        guard let selected = upcomingCandidate(at: index, matching: trackID) else { return }
+        switch selected.origin {
+        case .inserted(let offset): playNextList.remove(at: offset)
+        case .queue(let offset): removeQueueRow(at: offset, trackID: selected.track.id)
+        case .fm: return
+        }
+    }
+
+    /// The row sits after the current index in the active order; the other
+    /// order drops one copy of the same song so both stay the same length.
+    private func removeQueueRow(at offset: Int, trackID: Int) {
+        if shuffleEnabled {
+            shuffledQueue.remove(at: offset)
+            if let idx = queue.firstIndex(where: { $0.id == trackID }) { queue.remove(at: idx) }
+        } else {
+            queue.remove(at: offset)
+            if let idx = shuffledQueue.firstIndex(where: { $0.id == trackID }) { shuffledQueue.remove(at: idx) }
+        }
+    }
+
+    /// The row at `index` of `upcomingTracks`, if it still shows `trackID`.
+    private func upcomingCandidate(at index: Int, matching trackID: Int) -> PlaybackQueueCandidate? {
+        let candidates = PlaybackQueuePlan.next(queue: activeQueue, currentIndex: currentIndex, inserted: playNextList,
+                                                fm: [], isFM: false, repeatAll: false, limit: max(0, index + 1))
+        guard candidates.indices.contains(index), candidates[index].track.id == trackID else { return nil }
+        return candidates[index]
+    }
+
     // MARK: - Personal FM
 
     func startFM() {
@@ -502,6 +592,10 @@ final class PlayerService: ObservableObject {
     }
 
     private func fmAdvance() async {
+        if usesOfflineQueue {
+            advanceOffline()
+            return
+        }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
                 if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
@@ -517,6 +611,7 @@ final class PlayerService: ObservableObject {
         }
         guard !fmUpcoming.isEmpty else { return }
         let track = fmUpcoming.removeFirst()
+        pendingAutoAdvance = true
         startPlaying(track, indexUnchanged: true)
         if fmUpcoming.count < 1 {
             if let more = try? await NeteaseAPI.personalFM() {
@@ -528,12 +623,18 @@ final class PlayerService: ObservableObject {
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
+        if usesOfflineQueue, !nextCandidates().isEmpty {
+            pendingAutoAdvance = !userInitiated
+            advanceOffline()
+            return
+        }
         if isFMMode {
             Task { await fmAdvance() }
             return
         }
         if !playNextList.isEmpty {
             let track = playNextList.removeFirst()
+            pendingAutoAdvance = !userInitiated
             startPlaying(track, indexUnchanged: true)
             return
         }
@@ -552,6 +653,7 @@ final class PlayerService: ObservableObject {
             idx = 0
         }
         currentIndex = idx
+        pendingAutoAdvance = !userInitiated
         startPlaying(activeQueue[idx])
     }
 
@@ -581,7 +683,14 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Source resolution
 
-    private func startPlaying(_ track: Track, indexUnchanged: Bool = false) {
+    private func startPlaying(_ track: Track, indexUnchanged: Bool = false,
+                              localLease: OfflinePlaybackLease? = nil) {
+        offlineScan?.cancel()
+        offlineScan = nil
+        offlineScanID = UUID()
+        offlineIssue = nil
+        currentWasAdvanced = pendingAutoAdvance
+        pendingAutoAdvance = false
         pendingAudioResourceLoader?.cancel()
         pendingAudioResourceLoader = nil
         scrobbleIfNeeded(completed: false)
@@ -606,22 +715,40 @@ final class PlayerService: ObservableObject {
         AudioSpectrum.shared.beginPreparing()
         resolveGeneration += 1
         let generation = resolveGeneration
+        if advancingAfterFailure {
+            advancingAfterFailure = false
+        } else {
+            consecutiveFailures = 0
+        }
 
         NowPlayingManager.shared.updateMetadata(for: track, duration: track.duration)
         persistState()
 
         Task {
-            await resolveAndLoad(track, generation: generation)
+            await resolveAndLoad(track, generation: generation, localLease: localLease)
         }
         Task {
             await loadLyrics(for: track, generation: generation)
         }
     }
 
-    private func resolveAndLoad(_ track: Track, generation: Int) async {
+    /// - Parameter skipsLocalCopies: set when the downloaded or cached copy
+    ///   just failed to play, so the reload fetches the song again instead
+    ///   of the same file.
+    private func resolveAndLoad(_ track: Track, generation: Int,
+                                localLease: OfflinePlaybackLease? = nil,
+                                skipsLocalCopies: Bool = false,
+                                resumeAt: TimeInterval = 0) async {
         let quality = SettingsManager.shared.audioQuality.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
-        let cacheEnabled = SettingsManager.shared.enableAudioCache
+        let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
+
+        // A downloaded copy beats the network, and is all there is without one.
+        if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
+            await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
+            return
+        }
+        guard generation == resolveGeneration else { return }
 
         if cacheEnabled {
             do {
@@ -645,7 +772,8 @@ final class PlayerService: ObservableObject {
                         for: track,
                         generation: generation,
                         durationMS: nil,
-                        cacheLease: lease
+                        cacheLease: lease,
+                        resumeAt: resumeAt
                     )
                     return
                 }
@@ -654,9 +782,37 @@ final class PlayerService: ObservableObject {
             }
         }
 
-        var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
-        if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+        // Without a network, the cache is the last place to look.
+        if usesOfflineQueue {
+            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
+            guard generation == resolveGeneration else { return }
+            unavailableOffline(track, generation: generation)
+            return
+        }
+
+        var data: SongURLData?
+        do {
+            data = try await NeteaseAPI.songURL(ids: [track.id], level: quality).first
+            if data?.url == nil, quality != AudioQuality.standard.rawValue {
+                data = try await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+            }
+        } catch {
+            guard generation == resolveGeneration else { return }
+            // A download covers a request that died on the network. Anything
+            // else keeps upstream's path: third-party sources, then the cache.
+            if ConnectivityFailure.matches(error) {
+                if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
+                    await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
+                    return
+                }
+                guard generation == resolveGeneration else { return }
+                if usesOfflineQueue {
+                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
+                    guard generation == resolveGeneration else { return }
+                    unavailableOffline(track, generation: generation)
+                    return
+                }
+            }
         }
         guard generation == resolveGeneration else { return }
 
@@ -667,7 +823,7 @@ final class PlayerService: ObservableObject {
 
         // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
-            if await resolveAndLoadUnblocked(track, generation: generation) { return }
+            if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
         guard generation == resolveGeneration else { return }
 
@@ -675,7 +831,8 @@ final class PlayerService: ObservableObject {
             if cacheEnabled, await loadFallbackCache(
                 for: track,
                 generation: generation,
-                allowsUnblock: allowsUnblock
+                allowsUnblock: allowsUnblock,
+                resumeAt: resumeAt
             ) {
                 return
             }
@@ -688,13 +845,14 @@ final class PlayerService: ObservableObject {
             isTrial = true
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
-        _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation)
+        _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
     }
 
     private func resolveAndLoadUnblocked(
         _ track: Track,
         generation: Int,
-        requiresActivePlayback: Bool = false
+        requiresActivePlayback: Bool = false,
+        resumeAt: TimeInterval = 0
     ) async -> Bool {
         let enabledSources = SettingsManager.shared.enabledAudioSourceIDs
         guard !enabledSources.isEmpty else { return false }
@@ -723,7 +881,8 @@ final class PlayerService: ObservableObject {
             track,
             url: unblocked.url,
             durationMS: nil,
-            generation: generation
+            generation: generation,
+            resumeAt: resumeAt
         )
         guard case .loaded = loadResult else { return false }
 
@@ -743,6 +902,7 @@ final class PlayerService: ObservableObject {
             return
         }
         if consecutiveFailures < 5 {
+            advancingAfterFailure = true
             advanceToNext(userInitiated: false)
         } else {
             isPlaying = false
@@ -753,22 +913,26 @@ final class PlayerService: ObservableObject {
         _ track: Track,
         url: URL,
         durationMS: Int?,
-        generation: Int
+        generation: Int,
+        resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
-        consecutiveFailures = 0
+        // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
+        let remote = NeteaseCDNHost.preferred(for: url)
 
-        var asset = AVURLAsset(url: url)
+        var asset = AVURLAsset(url: remote)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
+            let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
+            guard generation == resolveGeneration else { return .superseded }
             let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .netease
             do {
                 let loader = try CachingAudioResourceLoader(
-                    remoteURL: url,
+                    remoteURL: remote,
                     trackID: track.id,
                     requestedQuality: SettingsManager.shared.audioQuality.rawValue,
                     servedQuality: servedQuality,
                     source: source,
-                    maximumCacheSizeMB: SettingsManager.shared.audioCacheSizeMB
+                    maximumCacheSizeMB: cacheLimitMB
                 )
                 guard generation == resolveGeneration else {
                     loader.cancel()
@@ -789,14 +953,17 @@ final class PlayerService: ObservableObject {
             for: track,
             generation: generation,
             durationMS: durationMS,
-            resourceLoader: resourceLoader
+            remoteURL: remote,
+            resourceLoader: resourceLoader,
+            resumeAt: resumeAt
         )
     }
 
     private func loadFallbackCache(
         for track: Track,
         generation: Int,
-        allowsUnblock: Bool
+        allowsUnblock: Bool,
+        resumeAt: TimeInterval = 0
     ) async -> Bool {
         do {
             guard let cached = try await AudioCache.shared.fallbackEntry(
@@ -818,7 +985,8 @@ final class PlayerService: ObservableObject {
                 for: track,
                 generation: generation,
                 durationMS: nil,
-                cacheLease: lease
+                cacheLease: lease,
+                resumeAt: resumeAt
             )
             return true
         } catch {
@@ -832,8 +1000,11 @@ final class PlayerService: ObservableObject {
         for track: Track,
         generation: Int,
         durationMS: Int?,
+        remoteURL: URL? = nil,
         resourceLoader: CachingAudioResourceLoader? = nil,
-        cacheLease: UUID? = nil
+        cacheLease: UUID? = nil,
+        offlineLease: OfflinePlaybackLease? = nil,
+        resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
         // Resolve the asset's audio track before the item goes live: an audio mix
         // attached after playback starts is silently ignored, so the spectrum tap
@@ -855,6 +1026,7 @@ final class PlayerService: ObservableObject {
             if let cacheLease {
                 releaseAudioCacheLease(cacheLease)
             }
+            if let offlineLease { Task { try? await OfflineStore.shared.release(offlineLease) } }
             return .superseded
         }
 
@@ -867,13 +1039,30 @@ final class PlayerService: ObservableObject {
         }
 
         itemStatusObservation?.invalidate()
-        itemStatusObservation = nil
-        if let sourceID = currentUnblockSourceID {
-            itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-                guard item.status == .failed else { return }
+        let sourceID = currentUnblockSourceID
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            switch item.status {
+            case .readyToPlay:
                 Task { @MainActor in
-                    self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
+                    self?.itemBecameReady(generation: generation)
                 }
+            case .failed:
+                let error = item.error
+                Task { @MainActor in
+                    if let sourceID {
+                        self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
+                    } else {
+                        self?.handleItemFailure(
+                            track: track,
+                            generation: generation,
+                            remoteURL: remoteURL,
+                            durationMS: durationMS,
+                            error: error
+                        )
+                    }
+                }
+            default:
+                break
             }
         }
 
@@ -889,15 +1078,26 @@ final class PlayerService: ObservableObject {
         }
         let previousResourceLoader = audioResourceLoader
         let previousCacheLease = audioCacheLease
+        let previousOfflineLease = offlinePlaybackLease
         if resourceLoader != nil {
             pendingAudioResourceLoader = nil
         }
         audioResourceLoader = resourceLoader
         audioCacheLease = cacheLease
+        offlinePlaybackLease = offlineLease
         engine.replaceCurrentItem(with: item)
         previousResourceLoader?.cancel()
         if let previousCacheLease {
             releaseAudioCacheLease(previousCacheLease)
+        }
+        if let previousOfflineLease { Task { try? await OfflineStore.shared.release(previousOfflineLease) } }
+        if resumeAt > 0 {
+            // The item's own length when known; the published duration may
+            // still belong to the previous song or be unknown.
+            let length = durationMS.map { TimeInterval($0) / 1000 } ?? duration
+            let time = CMTime(seconds: length > 0.1 ? min(resumeAt, length - 0.1) : resumeAt, preferredTimescale: 600)
+            _ = await engine.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+            guard generation == resolveGeneration else { return .superseded }
         }
         if isPlaying {
             engine.play()
@@ -948,6 +1148,73 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    /// The song is playing for real: the failure streak is over.
+    private func itemBecameReady(generation: Int) {
+        guard generation == resolveGeneration else { return }
+        consecutiveFailures = 0
+    }
+
+    /// A NetEase stream or a cached file failed. The song gets one reload,
+    /// resuming where it stopped: on the CDN twin when the host could not be
+    /// reached (the caching loader already swaps hosts itself, so this covers
+    /// streams that bypass it), otherwise from a freshly resolved URL, since a
+    /// signature may have expired, the network changed, or the local file
+    /// was bad. With no network at all, or when the reload fails for lack of
+    /// one, a downloaded copy takes over; any other second failure goes to the
+    /// third-party sources, then skips.
+    private func handleItemFailure(
+        track: Track,
+        generation: Int,
+        remoteURL: URL?,
+        durationMS: Int?,
+        error: Error?
+    ) {
+        guard generation == resolveGeneration,
+              currentTrack?.id == track.id,
+              currentUnblockSourceID == nil
+        else { return }
+
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+        let connectivity = error.map(ConnectivityFailure.matches) ?? false
+
+        guard itemRetryGeneration != generation else {
+            if connectivity {
+                handleConnectivityItemFailure(track: track, generation: generation)
+                return
+            }
+            Task {
+                guard SettingsManager.shared.canResolveUnblockedTracks,
+                      await resolveAndLoadUnblocked(track, generation: generation) else {
+                    guard generation == resolveGeneration else { return }
+                    handleUnplayable(track)
+                    return
+                }
+            }
+            return
+        }
+        itemRetryGeneration = generation
+        let twin = remoteURL.flatMap { url in
+            error.flatMap { NeteaseCDNHost.failover(from: url, after: $0) }
+        }
+        // No network at all: the downloaded copy is the only way on.
+        if twin == nil, connectivity, usesOfflineQueue {
+            handleConnectivityItemFailure(track: track, generation: generation)
+            return
+        }
+        AudioSpectrum.shared.beginPreparing()
+        let resumeAt = progress > 1 ? progress : 0
+        Task {
+            if let twin {
+                _ = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation, resumeAt: resumeAt)
+            } else {
+                await resolveAndLoad(track, generation: generation, skipsLocalCopies: remoteURL == nil, resumeAt: resumeAt)
+            }
+        }
+    }
+
     private func releaseAudioCacheLease(_ leaseID: UUID) {
         Task {
             do {
@@ -967,6 +1234,7 @@ final class PlayerService: ObservableObject {
         if let cacheLease {
             releaseAudioCacheLease(cacheLease)
         }
+        releaseOfflineLease()
     }
 
     /// Resolves the asset's audio track, giving up after `timeout` so a slow or
@@ -987,10 +1255,236 @@ final class PlayerService: ObservableObject {
     }
 
     private func loadLyrics(for track: Track, generation: Int) async {
+        let scope = offlineAccountScope
+        if let scope, let saved = await OfflineMetadataStore.shared.lyrics(trackID: track.id, scope: scope) {
+            guard generation == resolveGeneration else { return }
+            lyrics = LyricsParser.parse(saved)
+            updateLyricsCursor(at: progress)
+        }
+        guard !usesOfflineQueue else { return }
         let response = try? await NeteaseAPI.lyric(id: track.id)
-        guard generation == resolveGeneration else { return }
-        lyrics = response.map(LyricsParser.parse)
+        guard generation == resolveGeneration, let response else { return }
+        lyrics = LyricsParser.parse(response)
         updateLyricsCursor(at: progress)
+        if let scope, SettingsManager.shared.enableAudioCache || DownloadManager.shared.isDownloaded(trackID: track.id) {
+            await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: response, scope: scope)
+        }
+    }
+
+    // MARK: - Offline playback
+
+    /// Downloads belong to one account; see `activateAccount`.
+    private var offlineAccountScope: String? { AccountStore.shared.offlineScope }
+    private var usesOfflineQueue: Bool { networkState.isKnown && !networkState.connected }
+
+    private func nextCandidates() -> [PlaybackQueueCandidate] {
+        PlaybackQueuePlan.next(queue: activeQueue, currentIndex: currentIndex, inserted: playNextList,
+                               fm: fmUpcoming, isFM: isFMMode, repeatAll: repeatMode == .all)
+    }
+
+    /// Everything the prefetch window depends on. `@Published` fires before
+    /// the value lands, so the update itself waits for the next turn.
+    private func observePrefetchInputs() {
+        let player: [AnyPublisher<Void, Never>] = [
+            $queue.map { _ in }.eraseToAnyPublisher(), $shuffledQueue.map { _ in }.eraseToAnyPublisher(),
+            $shuffleEnabled.map { _ in }.eraseToAnyPublisher(), $playNextList.map { _ in }.eraseToAnyPublisher(),
+            $currentIndex.map { _ in }.eraseToAnyPublisher(), $currentTrack.map { _ in }.eraseToAnyPublisher(),
+            $fmUpcoming.map { _ in }.eraseToAnyPublisher(), $isFMMode.map { _ in }.eraseToAnyPublisher(),
+            $repeatMode.map { _ in }.eraseToAnyPublisher(), $isPlaying.map { _ in }.eraseToAnyPublisher(),
+            $isBuffering.map { _ in }.eraseToAnyPublisher(),
+        ]
+        let environment: [AnyPublisher<Void, Never>] = [
+            DownloadManager.shared.$network.map { _ in }.eraseToAnyPublisher(),
+            DownloadManager.shared.$jobs.map { _ in }.eraseToAnyPublisher(),
+            SettingsManager.shared.$enableAudioCache.map { _ in }.eraseToAnyPublisher(),
+            SettingsManager.shared.$audioQuality.map { _ in }.eraseToAnyPublisher(),
+            NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).map { _ in }.eraseToAnyPublisher(),
+        ]
+        Publishers.MergeMany(player + environment)
+            .sink { [weak self] _ in self?.scheduleUpdatePrefetch() }
+            .store(in: &prefetchObservations)
+    }
+
+    private func scheduleUpdatePrefetch() {
+        guard !prefetchUpdateScheduled else { return }
+        prefetchUpdateScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.prefetchUpdateScheduled = false
+            self.updatePrefetch()
+        }
+    }
+
+    private func updatePrefetch() {
+        guard isPlaying, !isBuffering, SettingsManager.shared.enableAudioCache, let current = currentTrack,
+              QueuePrefetcher.permits(network: networkState, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+        else { queuePrefetcher.update(nil); return }
+        let upcoming = PrefetchLimits().window(nextCandidates().map(\.track))
+        guard !upcoming.isEmpty else { queuePrefetcher.update(nil); return }
+        let scope = offlineAccountScope
+        let pending = Set(DownloadManager.shared.pendingJobs.filter { $0.accountScope == scope }.map(\.track.id))
+        queuePrefetcher.update(.init(scope: scope, currentTrackID: current.id, tracks: upcoming,
+                                     quality: SettingsManager.shared.audioQuality.rawValue,
+                                     allowsUnblock: SettingsManager.shared.canResolveUnblockedTracks,
+                                     pendingDownloadTrackIDs: pending))
+    }
+
+    /// A downloaded copy of the track. Online it must match the chosen quality
+    /// or better; offline, any quality will do.
+    private func acquireOfflineLease(for track: Track, generation: Int, reusing lease: OfflinePlaybackLease? = nil,
+                                     anyQuality: Bool = false) async -> OfflinePlaybackLease? {
+        let scope = offlineAccountScope
+        var lease = lease
+        if lease == nil, let scope {
+            lease = try? await OfflineStore.shared.acquire(accountScope: scope, trackID: track.id,
+                preferredQuality: SettingsManager.shared.audioQuality.rawValue,
+                allowLowerQuality: anyQuality || !networkState.connected)
+        }
+        guard let lease else { return nil }
+        guard generation == resolveGeneration, scope == offlineAccountScope,
+              lease.descriptor.identity.accountScope == scope else {
+            try? await OfflineStore.shared.release(lease)
+            return nil
+        }
+        return lease
+    }
+
+    private func playOfflineFile(_ lease: OfflinePlaybackLease, for track: Track, generation: Int,
+                                 resumeAt: TimeInterval = 0) async {
+        servedQuality = lease.descriptor.identity.quality
+        _ = await installResolvedAsset(AVURLAsset(url: lease.url), for: track, generation: generation,
+                                       durationMS: Int(lease.descriptor.duration * 1000),
+                                       offlineLease: lease, resumeAt: resumeAt)
+    }
+
+    /// The stream died for lack of network. A download of the same song picks
+    /// up where it stopped; otherwise the song is reported or skipped.
+    private func handleConnectivityItemFailure(track: Track, generation: Int) {
+        guard generation == resolveGeneration, currentTrack?.id == track.id else { return }
+        let position = max(progress, livePlaybackTime)
+        resolveGeneration += 1
+        let recovery = resolveGeneration
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+        Task {
+            if let lease = await acquireOfflineLease(for: track, generation: recovery, anyQuality: true) {
+                await playOfflineFile(lease, for: track, generation: recovery, resumeAt: position)
+                return
+            }
+            guard recovery == resolveGeneration else { return }
+            unavailableOffline(track, generation: recovery, autoAdvance: currentWasAdvanced && position < 0.5)
+        }
+    }
+
+    private func releaseOfflineLease() {
+        guard let lease = offlinePlaybackLease else { return }
+        offlinePlaybackLease = nil
+        Task { try? await OfflineStore.shared.release(lease) }
+    }
+
+    private func unavailableOffline(_ track: Track, generation: Int, autoAdvance: Bool? = nil) {
+        guard generation == resolveGeneration else { return }
+        if autoAdvance ?? currentWasAdvanced {
+            advanceOffline(initialSkipped: 1, excludingFailedCurrent: true)
+            return
+        }
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+        isPlaying = false
+        isBuffering = false
+        offlineIssue = .init(kind: .missingTrack, trackName: track.name)
+        NowPlayingManager.shared.updateElapsed(progress, rate: 0)
+    }
+
+    func playNextAvailableOffline() {
+        offlineIssue = nil
+        advanceOffline()
+    }
+
+    /// Walks the upcoming list for the first song that is on this device.
+    private func advanceOffline(initialSkipped: Int = 0, excludingFailedCurrent: Bool = false) {
+        offlineScan?.cancel()
+        let requestID = UUID()
+        offlineScanID = requestID
+        resolveGeneration += 1
+        let generation = resolveGeneration
+        let scope = offlineAccountScope
+        var candidates = nextCandidates()
+        if excludingFailedCurrent { candidates.removeAll { $0.origin == .queue(currentIndex) } }
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+        isPlaying = false
+        offlineScan = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.offlineScanID == requestID else { return }
+            let selected = try? await OfflineQueueSelector.firstAvailable(candidates, scope: scope,
+                quality: SettingsManager.shared.audioQuality.rawValue, store: .shared,
+                isCached: { await self.isCachedForOffline($0) })
+            guard !Task.isCancelled, self.offlineScanID == requestID, self.resolveGeneration == generation,
+                  self.offlineAccountScope == scope else {
+                if let lease = selected?.lease { try? await OfflineStore.shared.release(lease) }
+                return
+            }
+            self.offlineScan = nil
+            guard let selected else {
+                self.pendingAutoAdvance = false
+                self.offlineIssue = .init(kind: .emptyQueue, trackName: nil)
+                self.isBuffering = false
+                NowPlayingManager.shared.updateElapsed(self.progress, rate: 0)
+                return
+            }
+            // The queue may have been edited while the scan ran.
+            guard self.stillHolds(selected.candidate) else {
+                if let lease = selected.lease { try? await OfflineStore.shared.release(lease) }
+                self.advanceOffline(initialSkipped: initialSkipped, excludingFailedCurrent: excludingFailedCurrent)
+                return
+            }
+            switch selected.candidate.origin {
+            case .inserted(let index): self.playNextList.removeSubrange(0...index)
+            case .queue(let index):
+                if !self.playNextList.isEmpty { self.playNextList.removeAll() }
+                self.currentIndex = index
+            case .fm(let index): self.fmUpcoming.removeSubrange(0...index)
+            }
+            let skipped = initialSkipped + selected.skipped
+            self.pendingAutoAdvance = true
+            self.startPlaying(selected.candidate.track, localLease: selected.lease)
+            if skipped > 0 { ToastCenter.shared.show(String(localized: "已跳过 \(skipped) 首未下载歌曲")) }
+        }
+    }
+
+    /// Whether the song cache can play the track without the network.
+    private func isCachedForOffline(_ trackID: Int) async -> Bool {
+        guard SettingsManager.shared.enableAudioCache else { return false }
+        let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
+        return (try? await AudioCache.shared.fallbackEntry(for: trackID, allowsUnblock: allowsUnblock)) != nil
+    }
+
+    private func stillHolds(_ candidate: PlaybackQueueCandidate) -> Bool {
+        switch candidate.origin {
+        case .inserted(let index): return playNextList.indices.contains(index) && playNextList[index].id == candidate.track.id
+        case .queue(let index): return activeQueue.indices.contains(index) && activeQueue[index].id == candidate.track.id
+        case .fm(let index): return fmUpcoming.indices.contains(index) && fmUpcoming[index].id == candidate.track.id
+        }
+    }
+
+    /// Downloads belong to one account. Audio leased under the previous
+    /// account stops, and the offline queue scan starts over.
+    func activateAccount(scope: String?) {
+        guard offlineActivatedScope != scope else { return }
+        offlineActivatedScope = scope
+        offlineScan?.cancel()
+        offlineScan = nil
+        offlineScanID = UUID()
+        offlineIssue = nil
+        scheduleUpdatePrefetch()
+        guard offlinePlaybackLease != nil else { return }
+        resolveGeneration += 1
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+        isPlaying = false
+        NowPlayingManager.shared.updateElapsed(progress, rate: 0)
     }
 
     // MARK: - Scrobble
@@ -1050,6 +1544,10 @@ final class PlayerService: ObservableObject {
     }
 
     func resolve(_ context: PlayContext) async throws -> (tracks: [Track], source: PlaySource)? {
+        try await OfflineContextResolver.resolve(context, offline: usesOfflineQueue) { try await resolveOnline(context) }
+    }
+
+    private func resolveOnline(_ context: PlayContext) async throws -> (tracks: [Track], source: PlaySource)? {
         switch context.kind {
         case .fm:
             return nil

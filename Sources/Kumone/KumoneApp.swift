@@ -107,6 +107,11 @@ public struct KumoneApp: App {
 
         Settings {
             SettingsView()
+                .environment(\.openDestination, { destination in
+                    guard destination == .downloaded else { return }
+                    NotificationCenter.default.post(name: .showDownloadedMusic, object: nil)
+                    _ = AppDelegate.shared?.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
+                })
                 .environmentObject(account)
                 .environmentObject(settings)
                 .tint(Theme.accent)

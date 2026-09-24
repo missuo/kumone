@@ -5,7 +5,7 @@
 import Foundation
 
 /// Backs the CarPlay templates with playlist / toplist / track data.
-/// Each fetcher has a built-in ~5-minute TTL so we don't pound the API on every tab switch.
+/// Track lists and discovery data have a short TTL; local playback remains shared with the phone.
 @MainActor
 final class CarPlayContentStore {
 
@@ -34,16 +34,51 @@ final class CarPlayContentStore {
     private var officialFetchedAt: Date = .distantPast
     private var chineseFetchedAt: Date = .distantPast
     private var toplistsFetchedAt: Date = .distantPast
-    private var dailyFetchedAt: Date = .distantPast
-    private var recentsFetchedAt: Date = .distantPast
-    private var cloudFetchedAt: Date = .distantPast
     private var radarFetchedAt: Date = .distantPast
     private var albumsFetchedAt: Date = .distantPast
     private var artistsFetchedAt: Date = .distantPast
+    private var dailyFetchedAt: Date = .distantPast
+    private var recentsFetchedAt: Date = .distantPast
+    private var cloudFetchedAt: Date = .distantPast
+    private let resolveTracks: (PlayContext) async throws -> [Track]
+    private let isOnline: @MainActor () -> Bool
 
     /// Custom TTL constructor (defaults to 5 minutes; tests can pass a shorter value).
-    init(ttl: TimeInterval = 300) {
+    init(ttl: TimeInterval = 300,
+         resolveTracks: @escaping (PlayContext) async throws -> [Track] = { try await PlayerService.shared.resolve($0)?.tracks ?? [] },
+         isOnline: @escaping @MainActor () -> Bool = { DownloadManager.shared.network.connected }) {
         self.ttl = ttl
+        self.resolveTracks = resolveTracks
+        self.isOnline = isOnline
+    }
+
+    /// A reload works on its own snapshot, retaining TTLs across network changes.
+    func copyForReload() -> CarPlayContentStore {
+        let copy = CarPlayContentStore(ttl: ttl, resolveTracks: resolveTracks, isOnline: isOnline)
+        copy.recommendPlaylists = recommendPlaylists
+        copy.highQualityPlaylists = highQualityPlaylists
+        copy.hotPlaylists = hotPlaylists
+        copy.officialPlaylists = officialPlaylists
+        copy.chinesePlaylists = chinesePlaylists
+        copy.toplists = toplists
+        copy.dailyTracks = dailyTracks
+        copy.recentsTracks = recentsTracks
+        copy.cloudTracks = cloudTracks
+        copy.radarPlaylists = radarPlaylists
+        copy.newAlbums = newAlbums
+        copy.topArtists = topArtists
+        copy.recommendFetchedAt = recommendFetchedAt
+        copy.curatedFetchedAt = curatedFetchedAt
+        copy.officialFetchedAt = officialFetchedAt
+        copy.chineseFetchedAt = chineseFetchedAt
+        copy.toplistsFetchedAt = toplistsFetchedAt
+        copy.radarFetchedAt = radarFetchedAt
+        copy.albumsFetchedAt = albumsFetchedAt
+        copy.artistsFetchedAt = artistsFetchedAt
+        copy.dailyFetchedAt = dailyFetchedAt
+        copy.recentsFetchedAt = recentsFetchedAt
+        copy.cloudFetchedAt = cloudFetchedAt
+        return copy
     }
 
     // MARK: - Recommend
@@ -112,10 +147,13 @@ final class CarPlayContentStore {
     /// Loads the daily-recommend tracks. Login-only — logged-out callers get an
     /// empty array right away so we don't waste a request on a guaranteed 401.
     func fetchDailyTracks(loggedIn: Bool, force: Bool = false) async {
-        guard loggedIn else { dailyTracks = []; return }
-        if !force, Date().timeIntervalSince(dailyFetchedAt) < ttl, !dailyTracks.isEmpty { return }
-        dailyTracks = (try? await NeteaseAPI.dailyRecommendSongs()) ?? []
-        dailyFetchedAt = Date()
+        guard loggedIn else { dailyTracks = []; dailyFetchedAt = .distantPast; return }
+        if !force, Date().timeIntervalSince(dailyFetchedAt) < ttl { return }
+        let online = isOnline()
+        if let tracks = try? await resolveTracks(.daily), !Task.isCancelled {
+            dailyTracks = tracks
+            if online && isOnline() { dailyFetchedAt = Date() }
+        }
     }
 
     // MARK: - Recently played
@@ -123,25 +161,26 @@ final class CarPlayContentStore {
     /// Loads the all-time recently-played tracks. We unwrap `.song` on each
     /// `PlayRecordItem` so callers get a plain `[Track]`.
     func fetchRecentsTracks(loggedIn: Bool, force: Bool = false) async {
-        guard loggedIn, let uid = AccountStore.shared.profile?.userId else {
-            recentsTracks = []
-            return
+        guard loggedIn else { recentsTracks = []; recentsFetchedAt = .distantPast; return }
+        if !force, Date().timeIntervalSince(recentsFetchedAt) < ttl { return }
+        let online = isOnline()
+        if let tracks = try? await resolveTracks(.recents), !Task.isCancelled {
+            recentsTracks = tracks
+            if online && isOnline() { recentsFetchedAt = Date() }
         }
-        if !force, Date().timeIntervalSince(recentsFetchedAt) < ttl, !recentsTracks.isEmpty { return }
-        recentsTracks = (try? await NeteaseAPI.playRecords(uid: uid, week: false))?.map(\.song) ?? []
-        recentsFetchedAt = Date()
     }
 
     // MARK: - Cloud disk
 
-    /// Loads cloud-disk tracks, capped at 300 to match the upper bound that
-    /// `trackListTemplate` renders anyway (no point pulling more).
+    /// Uses the same cloud track metadata and local fallback as phone playback.
     func fetchCloudTracks(loggedIn: Bool, force: Bool = false) async {
-        guard loggedIn else { cloudTracks = []; return }
-        if !force, Date().timeIntervalSince(cloudFetchedAt) < ttl, !cloudTracks.isEmpty { return }
-        cloudTracks = (try? await NeteaseAPI.cloudSongs(limit: 300, offset: 0))?
-            .data?.compactMap(\.simpleSong) ?? []
-        cloudFetchedAt = Date()
+        guard loggedIn else { cloudTracks = []; cloudFetchedAt = .distantPast; return }
+        if !force, Date().timeIntervalSince(cloudFetchedAt) < ttl { return }
+        let online = isOnline()
+        if let tracks = try? await resolveTracks(.cloud), !Task.isCancelled {
+            cloudTracks = tracks
+            if online && isOnline() { cloudFetchedAt = Date() }
+        }
     }
 
     // MARK: - Radar playlists

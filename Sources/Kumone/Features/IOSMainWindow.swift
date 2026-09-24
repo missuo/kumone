@@ -10,6 +10,7 @@ public struct IOSMainWindow: View {
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     @Namespace private var nowPlayingTransition
     @Environment(\.colorScheme) private var systemColorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     /// The app's intended scheme, read on this ancestor so the search-active
     /// tab environment can't invert it (#31).
@@ -18,6 +19,12 @@ public struct IOSMainWindow: View {
     }
 
     @State private var selectedTab: IOSTab = .home
+
+    /// Returning from the lock screen every few minutes must not rescan
+
+    /// every download and playlist each time.
+
+    @State private var lastForegroundRefresh: Date?
     @State private var showLogin = false
     @State private var homePath: [Destination] = []
     @State private var explorePath: [Destination] = []
@@ -30,6 +37,8 @@ public struct IOSMainWindow: View {
 
     public var body: some View {
         presentationRoot
+            .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }, enabled: !player.showNowPlaying))
+            .modifier(MeteredDownloadAlert(enabled: !player.showNowPlaying))
             .environmentObject(player)
             .environmentObject(account)
             .environmentObject(settings)
@@ -40,9 +49,19 @@ public struct IOSMainWindow: View {
             .environment(\.openLogin, { showLogin = true })
             .environment(\.openDestination, openDestination)
             .task {
+                await DownloadManager.shared.start()
                 await account.bootstrap()
                 if settings.autoCheckUpdates {
                     IOSUpdater.shared.check(interactive: false)
+                }
+            }
+            .onChange(of: scenePhase) { phase in
+                guard phase == .active else { return }
+                if let last = lastForegroundRefresh, Date().timeIntervalSince(last) < 300 { return }
+                lastForegroundRefresh = Date()
+                Task {
+                    await DownloadManager.shared.refreshLibrary()
+                    if DownloadManager.shared.network.connected { await account.refreshLibrary() }
                 }
             }
             .task(id: settings.showMainWindowAmbientBackground) {
@@ -172,6 +191,7 @@ public struct IOSMainWindow: View {
                 .environmentObject(account)
                 .environmentObject(settings)
         }
+        .modifier(NowPlayingLoginPresenter())
     }
 
     @ViewBuilder
@@ -330,6 +350,23 @@ extension IOSMainWindow {
 
 private enum NowPlayingTransitionID {
     static let surface = "now-playing-surface"
+}
+
+/// Login requested from the player must be presented by the player itself:
+/// the main window is already presenting its full-screen cover on iOS 18+.
+/// Keeping this state here also makes cancellation return to the same player.
+private struct NowPlayingLoginPresenter: ViewModifier {
+    @EnvironmentObject private var account: AccountStore
+    @State private var showLogin = false
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.openLogin, { showLogin = true })
+            .sheet(isPresented: $showLogin) {
+                LoginSheet()
+                    .environmentObject(account)
+            }
+    }
 }
 
 // MARK: - Mini player bar for iOS
@@ -607,6 +644,12 @@ struct IOSLibraryView: View {
                         }
                         .padding(.vertical, 6)
                     }
+                }
+            }
+
+            Section {
+                NavigationLink(value: Destination.downloaded) {
+                    Label("已下载", systemImage: "arrow.down.circle.fill")
                 }
             }
 

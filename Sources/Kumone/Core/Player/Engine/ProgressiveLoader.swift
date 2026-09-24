@@ -87,7 +87,9 @@ final class ProgressiveLoader: NSObject, @unchecked Sendable {
         }
     }
 
-    private let remoteURL: URL
+    /// Confined to workQueue after init: a host that cannot be reached is
+    /// swapped for its CDN twin (see `retryOnTwinHost`).
+    private var remoteURL: URL
     private let partURL: URL
     private let typeHint: AudioFileTypeID
     /// Decoded output format — the engine's fixed graph format; the
@@ -128,6 +130,14 @@ final class ProgressiveLoader: NSObject, @unchecked Sendable {
     private var suspended = false
     private var needsDiscontinuity = false
     private var expectPartialContent = false
+    /// The Range offset of the current request, so a retry on the twin host
+    /// reissues exactly the same request.
+    private var requestRangeOffset: Int64?
+    /// Whether the current request has had a response yet. Only a request
+    /// that failed before one is retried on the twin: nothing has been parsed
+    /// or mirrored from it, so the retry cannot splice two transfers.
+    private var receivedResponse = false
+    private var triedTwinHost = false
 
     // Backpressure state. Suspending never touches the URLSession task:
     // suspending a data task whose transfer is finishing races with the
@@ -168,7 +178,7 @@ final class ProgressiveLoader: NSObject, @unchecked Sendable {
 
     init(remoteURL: URL, formatHint: String?, partURL: URL,
          output: AVAudioFormat, queue: DispatchQueue) {
-        self.remoteURL = remoteURL
+        self.remoteURL = NeteaseCDNHost.preferred(for: remoteURL)
         self.partURL = partURL
         self.outputFormat = output
         self.callbackQueue = queue
@@ -337,6 +347,8 @@ final class ProgressiveLoader: NSObject, @unchecked Sendable {
             delegateQueue.underlyingQueue = workQueue
             session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: delegateQueue)
         }
+        requestRangeOffset = rangeOffset
+        receivedResponse = false
         var request = URLRequest(url: remoteURL)
         if let rangeOffset {
             request.setValue("bytes=\(rangeOffset)-", forHTTPHeaderField: "Range")
@@ -651,6 +663,8 @@ extension ProgressiveLoader: URLSessionDataDelegate {
             completionHandler(.cancel)
             return
         }
+        receivedResponse = true
+        NeteaseCDNHost.markReachable(remoteURL)
         if let http = response as? HTTPURLResponse {
             guard http.statusCode == 200 || http.statusCode == 206 else {
                 completionHandler(.cancel)
@@ -695,6 +709,7 @@ extension ProgressiveLoader: URLSessionDataDelegate {
         guard task === self.task, !cancelled else { return }
         if let error {
             if (error as NSError).code == NSURLErrorCancelled { return }
+            if !receivedResponse, retryOnTwinHost(after: error) { return }
             fail(error)
             return
         }
@@ -712,6 +727,20 @@ extension ProgressiveLoader: URLSessionDataDelegate {
             return
         }
         finishOnQueue()
+    }
+
+    /// The host could not be reached before any response: reissue the same
+    /// request on the CDN twin, once. Nothing from the failed request reached
+    /// the parser or the `.part` mirror, so playback just starts late. The
+    /// failure is reported even when the twin was already tried, so later
+    /// songs do not pay for this host again.
+    private func retryOnTwinHost(after error: Error) -> Bool {
+        guard let twin = NeteaseCDNHost.failover(from: remoteURL, after: error),
+              !triedTwinHost else { return false }
+        triedTwinHost = true
+        remoteURL = twin
+        startRequest(rangeOffset: requestRangeOffset)
+        return true
     }
 
     // MARK: - Deferred parsing (workQueue)

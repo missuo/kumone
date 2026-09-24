@@ -109,7 +109,9 @@ struct ByteRangePlanner {
 final class CachingAudioResourceLoader: NSObject {
     let assetURL: URL
 
-    private let remoteURL: URL
+    /// Moves to the CDN twin when its host cannot be reached (see
+    /// `NeteaseCDNHost`). Read and written on the delegate queue only.
+    private var remoteURL: URL
     private let trackID: Int
     private let requestedQuality: String
     private let servedQuality: String?
@@ -182,6 +184,8 @@ final class CachingAudioResourceLoader: NSObject {
         var responseStart: Int64?
         var receivedByteCount: Int64 = 0
         var task: URLSessionDataTask?
+        var receivedResponse = false
+        var retriedOnTwin = false
 
         init(
             range: Range<Int64>,
@@ -215,7 +219,8 @@ final class CachingAudioResourceLoader: NSObject {
         servedQuality: String?,
         source: AudioCacheSource,
         maximumCacheSizeMB: Int,
-        cache: AudioCache = .shared
+        cache: AudioCache = .shared,
+        sessionConfiguration: URLSessionConfiguration = .default
     ) throws {
         self.remoteURL = remoteURL
         self.trackID = trackID
@@ -240,7 +245,7 @@ final class CachingAudioResourceLoader: NSObject {
 
         super.init()
 
-        let configuration = URLSessionConfiguration.default
+        let configuration = sessionConfiguration
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         configuration.urlCache = nil
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
@@ -456,6 +461,10 @@ final class CachingAudioResourceLoader: NSObject {
         for networkTask: NetworkTask,
         completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
     ) {
+        networkTask.receivedResponse = true
+        if let url = networkTask.task?.originalRequest?.url {
+            NeteaseCDNHost.markReachable(url)
+        }
         if networkTask.initializesResource {
             initializeResource(from: response, for: networkTask, completionHandler: completionHandler)
             return
@@ -820,6 +829,7 @@ final class CachingAudioResourceLoader: NSObject {
     }
 
     private func complete(_ networkTask: NetworkTask, error: Error?) {
+        if let error, retryOnTwinHost(networkTask, after: error) { return }
         if let taskID = networkTask.task?.taskIdentifier {
             pendingTasks.removeValue(forKey: taskID)
         }
@@ -852,6 +862,38 @@ final class CachingAudioResourceLoader: NSObject {
             respondWithCachedDataToPendingRequests()
         }
         finishCacheIfReady()
+    }
+
+    /// A request whose host could not be reached before any response is
+    /// reissued, same Range, on the CDN twin, once. Nothing from it was
+    /// delivered or written, so AVPlayer only sees the bytes arrive late and
+    /// what is already cached stays. Once one request has moved `remoteURL`
+    /// to the twin, every later one goes there, and any still in flight to
+    /// the old host follows when it fails.
+    private func retryOnTwinHost(_ networkTask: NetworkTask, after error: Error) -> Bool {
+        guard !cancelled, !redirectsToRemoteAsset,
+              !networkTask.receivedResponse, !networkTask.retriedOnTwin,
+              let failedTask = networkTask.task,
+              let request = failedTask.originalRequest,
+              let failedURL = request.url else { return false }
+        if failedURL == remoteURL {
+            guard let twin = NeteaseCDNHost.failover(from: failedURL, after: error) else { return false }
+            remoteURL = twin
+        } else if !NeteaseCDNHost.isHostUnreachable(error) {
+            return false
+        }
+        networkTask.retriedOnTwin = true
+        var retry = request
+        retry.url = remoteURL
+        let task = session.dataTask(with: retry)
+        pendingTasks.removeValue(forKey: failedTask.taskIdentifier)
+        networkTask.task = task
+        pendingTasks[task.taskIdentifier] = networkTask
+        for pending in pendingRequests.values where pending.directTaskIdentifier == failedTask.taskIdentifier {
+            pending.directTaskIdentifier = task.taskIdentifier
+        }
+        task.resume()
+        return true
     }
 
     private func finish(_ pending: PendingRequest) {
@@ -1028,7 +1070,7 @@ final class CachingAudioResourceLoader: NSObject {
         return (lowerBound, inclusiveUpperBound + 1, totalLength)
     }
 
-    private static func fileExtension(for url: URL, contentType: String?) -> String? {
+    static func fileExtension(for url: URL, contentType: String?) -> String? {
         let pathExtension = url.pathExtension.lowercased()
         if !pathExtension.isEmpty,
            pathExtension.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }),

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - User
 
-struct UserProfile: Decodable, Hashable {
+struct UserProfile: Codable, Hashable {
     let userId: Int
     let nickname: String
     let avatarUrl: String?
@@ -27,7 +27,7 @@ struct UserProfile: Decodable, Hashable {
 
 // MARK: - Playlist
 
-struct PlaylistCreator: Decodable, Hashable {
+struct PlaylistCreator: Codable, Hashable {
     let userId: Int
     let nickname: String
     let avatarUrl: String?
@@ -46,12 +46,13 @@ struct PlaylistCreator: Decodable, Hashable {
 
 /// A playlist as it appears in grids and sidebars. Tolerates the several cover
 /// field names and numeric types NetEase uses across endpoints.
-struct PlaylistSummary: Decodable, Hashable, Identifiable {
+struct PlaylistSummary: Codable, Hashable, Identifiable {
     let id: Int
     let name: String
     let coverURL: String?
     let playCount: Int
     let trackCount: Int
+    let updateTime: Int?
     let copywriter: String?
     let creator: PlaylistCreator?
     let specialType: Int
@@ -60,7 +61,7 @@ struct PlaylistSummary: Decodable, Hashable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, picUrl, coverImgUrl, playCount, playcount, trackCount
-        case copywriter, creator, specialType, privacy, subscribed
+        case copywriter, creator, specialType, privacy, subscribed, updateTime
     }
 
     init(from decoder: Decoder) throws {
@@ -73,6 +74,7 @@ struct PlaylistSummary: Decodable, Hashable, Identifiable {
             ?? (try? c.decode(Double.self, forKey: .playcount)) ?? 0
         playCount = Int(count)
         trackCount = (try? c.decode(Int.self, forKey: .trackCount)) ?? 0
+        updateTime = try? c.decode(Int.self, forKey: .updateTime)
         copywriter = try? c.decode(String.self, forKey: .copywriter)
         creator = try? c.decode(PlaylistCreator.self, forKey: .creator)
         specialType = (try? c.decode(Int.self, forKey: .specialType)) ?? 0
@@ -82,24 +84,39 @@ struct PlaylistSummary: Decodable, Hashable, Identifiable {
 
     /// The auto-created "我喜欢的音乐" playlist.
     var isLikedSongsList: Bool { specialType == 5 }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(coverURL, forKey: .coverImgUrl)
+        try c.encode(playCount, forKey: .playCount)
+        try c.encode(trackCount, forKey: .trackCount)
+        try c.encodeIfPresent(updateTime, forKey: .updateTime)
+        try c.encodeIfPresent(copywriter, forKey: .copywriter)
+        try c.encodeIfPresent(creator, forKey: .creator)
+        try c.encode(specialType, forKey: .specialType)
+        try c.encode(privacy, forKey: .privacy)
+        try c.encode(subscribed, forKey: .subscribed)
+    }
 }
 
 struct TrackIDRef: Codable, Hashable {
     let id: Int
 }
 
-struct PlaylistDetail: Decodable, Hashable {
+struct PlaylistDetail: Codable, Hashable {
     let id: Int
     let name: String
     let coverImgUrl: String?
     let creator: PlaylistCreator?
     let description: String?
-    let trackCount: Int
+    var trackCount: Int
     let playCount: Int
     let subscribedCount: Int
     var subscribed: Bool
-    let trackIds: [TrackIDRef]
-    let tracks: [Track]
+    var trackIds: [TrackIDRef]
+    var tracks: [Track]
     let specialType: Int
     let updateTime: Int
 
@@ -123,6 +140,22 @@ struct PlaylistDetail: Decodable, Hashable {
         tracks = (try? c.decode([Track].self, forKey: .tracks)) ?? []
         specialType = (try? c.decode(Int.self, forKey: .specialType)) ?? 0
         updateTime = (try? c.decode(Int.self, forKey: .updateTime)) ?? 0
+    }
+
+    init(summary: PlaylistSummary) {
+        id = summary.id
+        name = summary.name
+        coverImgUrl = summary.coverURL
+        creator = summary.creator
+        description = summary.copywriter
+        trackCount = summary.trackCount
+        playCount = summary.playCount
+        subscribedCount = 0
+        subscribed = summary.subscribed
+        trackIds = []
+        tracks = []
+        specialType = summary.specialType
+        updateTime = 0
     }
 }
 
@@ -269,8 +302,8 @@ struct ToplistTrackPreview: Codable, Hashable {
 
 // MARK: - Lyrics
 
-struct LyricResponse: Decodable {
-    struct LyricBody: Decodable {
+struct LyricResponse: Codable {
+    struct LyricBody: Codable {
         let lyric: String?
     }
 
@@ -288,7 +321,7 @@ struct LyricResponse: Decodable {
     let uncollected: Bool?
 }
 
-struct LyricContributor: Decodable {
+struct LyricContributor: Codable {
     let nickname: String?
 }
 
@@ -304,9 +337,11 @@ struct SongURLData: Decodable, Hashable {
     let fee: Int
     let freeTrialInfo: FreeTrialInfo?
     let time: Int
+    let code: Int?
+    let md5: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, br, size, type, level, fee, freeTrialInfo, time
+        case id, url, br, size, type, level, fee, freeTrialInfo, time, code, md5
     }
 
     init(from decoder: Decoder) throws {
@@ -320,6 +355,8 @@ struct SongURLData: Decodable, Hashable {
         fee = (try? c.decode(Int.self, forKey: .fee)) ?? 0
         freeTrialInfo = try? c.decode(FreeTrialInfo.self, forKey: .freeTrialInfo)
         time = (try? c.decode(Int.self, forKey: .time)) ?? 0
+        code = try? c.decode(Int.self, forKey: .code)
+        md5 = try? c.decode(String.self, forKey: .md5)
     }
 }
 

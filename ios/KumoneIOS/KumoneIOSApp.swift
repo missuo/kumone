@@ -3,10 +3,18 @@ import KumoneIOSFeature
 
 @main
 struct KumoneIOSApp: App {
+    @UIApplicationDelegateAdaptor(DownloadAppDelegate.self) private var downloadDelegate
     var body: some Scene {
         WindowGroup {
             IOSMainWindow()
         }
+    }
+}
+
+final class DownloadAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        OfflineDownloadEvents.handleBackgroundSession(identifier: identifier, completion: completionHandler)
     }
 }
 
