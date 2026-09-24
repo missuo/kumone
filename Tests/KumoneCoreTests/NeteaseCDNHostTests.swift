@@ -1,5 +1,6 @@
 import Testing
 @testable import KumoneCore
+import AVFoundation
 import Foundation
 
 @Suite("NeteaseCDNHost")
@@ -33,6 +34,13 @@ struct NeteaseCDNHostTests {
         // What the URLSession delegate actually hands over: a bridged NSError.
         #expect(NeteaseCDNHost.isHostUnreachable(
             NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost)))
+        // What AVPlayerItem.error looks like: AVFoundation -11800 over the
+        // CFNetwork failure.
+        let cfNetwork = NSError(domain: kCFErrorDomainCFNetwork as String, code: -1003)
+        let wrapped = NSError(domain: AVFoundationErrorDomain, code: -11800,
+                              userInfo: [NSUnderlyingErrorKey: cfNetwork])
+        #expect(NeteaseCDNHost.isHostUnreachable(wrapped))
+        #expect(!NeteaseCDNHost.isHostUnreachable(NSError(domain: AVFoundationErrorDomain, code: -11800)))
         #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.cancelled)))
         #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.badServerResponse)))
         #expect(!NeteaseCDNHost.isHostUnreachable(CocoaError(.fileNoSuchFile)))

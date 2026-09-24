@@ -43,16 +43,26 @@ enum NeteaseCDNHost {
     /// True for failures that mean the host itself could not be reached, the
     /// only ones the twin can fix. Anything after a response (an HTTP status,
     /// a parse error) is about the file, not the host.
+    ///
+    /// Walks `NSUnderlyingErrorKey`: AVPlayer wraps the network failure
+    /// (AVFoundation -11800 over NSURLError or CFNetwork -1003), while
+    /// URLSession hands it over directly.
     static func isHostUnreachable(_ error: Error) -> Bool {
-        guard let error = error as? URLError else { return false }
-        switch error.code {
-        case .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost,
-             .timedOut, .secureConnectionFailed:
-            return true
-        default:
-            return false
+        var current: NSError? = error as NSError
+        while let error = current {
+            if (error.domain == NSURLErrorDomain || error.domain == kCFErrorDomainCFNetwork as String),
+               unreachableCodes.contains(error.code) {
+                return true
+            }
+            current = error.userInfo[NSUnderlyingErrorKey] as? NSError
         }
+        return false
     }
+
+    private static let unreachableCodes: Set<Int> = [
+        NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed, NSURLErrorCannotConnectToHost,
+        NSURLErrorTimedOut, NSURLErrorSecureConnectionFailed,
+    ]
 
     /// Remember that `url`'s host could not be reached, so later requests go
     /// straight to the twin instead of paying the same stall again.

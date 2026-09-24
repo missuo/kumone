@@ -186,6 +186,9 @@ final class PlayerService: ObservableObject {
     private var consecutiveFailures = 0
     private var attemptedUnblockSources: Set<AudioSourceID> = []
     private var currentUnblockSourceID: AudioSourceID?
+    /// The resolve generation that already spent its retry on the CDN twin
+    /// host, so a twin that fails too is not bounced back to the original.
+    private var cdnTwinRetryGeneration: Int?
     private var scrobbled = false
     private var startScrobbled = false
 
@@ -895,8 +898,10 @@ final class PlayerService: ObservableObject {
         generation: Int
     ) async -> ResolvedURLLoadResult {
         consecutiveFailures = 0
+        // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
+        let remote = NeteaseCDNHost.preferred(for: url)
 
-        var asset = AVURLAsset(url: url)
+        var asset = AVURLAsset(url: remote)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
             let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
@@ -904,7 +909,7 @@ final class PlayerService: ObservableObject {
             let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .netease
             do {
                 let loader = try CachingAudioResourceLoader(
-                    remoteURL: url,
+                    remoteURL: remote,
                     trackID: track.id,
                     requestedQuality: SettingsManager.shared.audioQuality.rawValue,
                     servedQuality: servedQuality,
@@ -930,6 +935,7 @@ final class PlayerService: ObservableObject {
             for: track,
             generation: generation,
             durationMS: durationMS,
+            remoteURL: remote,
             resourceLoader: resourceLoader
         )
     }
@@ -973,6 +979,7 @@ final class PlayerService: ObservableObject {
         for track: Track,
         generation: Int,
         durationMS: Int?,
+        remoteURL: URL? = nil,
         resourceLoader: CachingAudioResourceLoader? = nil,
         cacheLease: UUID? = nil,
         offlineLease: OfflinePlaybackLease? = nil,
@@ -1015,10 +1022,19 @@ final class PlayerService: ObservableObject {
         let sourceID = currentUnblockSourceID
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
-            let connectivity = item.error.map(ConnectivityFailure.matches) ?? false
+            let error = item.error
+            let connectivity = error.map(ConnectivityFailure.matches) ?? false
             Task { @MainActor in
                 if let sourceID {
                     self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
+                } else if let remoteURL {
+                    self?.handleRemoteItemFailure(
+                        track: track,
+                        generation: generation,
+                        remoteURL: remoteURL,
+                        durationMS: durationMS,
+                        error: error
+                    )
                 } else if connectivity {
                     self?.handleConnectivityItemFailure(track: track, generation: generation)
                 }
@@ -1105,6 +1121,49 @@ final class PlayerService: ObservableObject {
                 return
             }
         }
+    }
+
+    /// A NetEase stream failed. A host that could not be reached gets one
+    /// retry on its CDN twin, resuming where playback stopped. A network that
+    /// is down goes to the downloaded copy; anything else skips the track
+    /// instead of leaving the player spinning on a dead item.
+    private func handleRemoteItemFailure(
+        track: Track,
+        generation: Int,
+        remoteURL: URL,
+        durationMS: Int?,
+        error: Error?
+    ) {
+        guard generation == resolveGeneration,
+              currentTrack?.id == track.id,
+              currentUnblockSourceID == nil
+        else { return }
+
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        engine.replaceCurrentItem(with: nil)
+        releaseCurrentPlaybackResources()
+
+        if let error, NeteaseCDNHost.isHostUnreachable(error),
+           cdnTwinRetryGeneration != generation,
+           let twin = NeteaseCDNHost.alternate(for: remoteURL) {
+            cdnTwinRetryGeneration = generation
+            NeteaseCDNHost.markUnreachable(remoteURL)
+            AudioSpectrum.shared.beginPreparing()
+            let resumeAt = progress
+            Task {
+                let result = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation)
+                if case .loaded = result, resumeAt > 1 {
+                    seek(to: resumeAt)
+                }
+            }
+            return
+        }
+        if let error, ConnectivityFailure.matches(error) {
+            handleConnectivityItemFailure(track: track, generation: generation)
+            return
+        }
+        handleUnplayable(track)
     }
 
     private func releaseAudioCacheLease(_ leaseID: UUID) {
