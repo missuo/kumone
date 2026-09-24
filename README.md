@@ -83,7 +83,9 @@ install it with a sideloading tool that signs the IPA with your own Apple ID —
 Updating: iOS apps can't replace themselves. Settings → About → **Check for
 Updates** tells you when a newer release exists and links to it; download the
 new IPA and reinstall with the same tool — sign-in state and settings are kept.
-AltStore / SideStore can also track the release automatically via a source.
+AltStore / SideStore can also track the release automatically: add the source
+<https://github.com/missuo/kumone/releases/latest/download/altstore.json> and
+new versions show up in their update list on their own.
 
 #### In-app auto-update (TrollStore only)
 

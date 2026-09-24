@@ -122,6 +122,13 @@ jobs:
           (cd "$RUNNER_TEMP/payload" && zip -qry "$GITHUB_WORKSPACE/dist/$APP_NAME-iOS-$VERSION.ipa" Payload)
           ls -la dist/
 
+      - name: Generate AltStore source
+        run: |
+          bash Scripts/altstore-source.sh "$VERSION" \
+            "dist/$APP_NAME-iOS-$VERSION.ipa" "$RUNNER_TEMP/notes.md" \
+            > dist/altstore.json
+          cat dist/altstore.json
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +138,8 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.md" \
             "dist/$APP_NAME-$VERSION.zip" \
             "dist/$APP_NAME-iOS-$VERSION.ipa" \
-            dist/appcast.xml
+            dist/appcast.xml \
+            dist/altstore.json
 
       - name: Bump Homebrew cask
         # Best-effort: a missing GH_HOMEBREW_TOKEN (or a brew failure) must not
