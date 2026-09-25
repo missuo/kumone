@@ -854,7 +854,9 @@ private final class SegmentEventLog: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     init(_ engine: PlaybackEngine) {
-        task = Task {
+        // .high for the same reason as the smoke suite's `EventLog`: ahead
+        // of the medium-priority tests queued for the pool.
+        task = Task(priority: .high) {
             for await event in engine.events { self.append(event) }
         }
     }

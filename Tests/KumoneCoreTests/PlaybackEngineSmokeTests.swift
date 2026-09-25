@@ -345,7 +345,11 @@ private final class EventLog: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     init(_ engine: PlaybackEngine) {
-        task = Task {
+        // Tests run at medium priority, and at the start of a run hundreds of
+        // them queue for the cooperative pool (about 30 s of backlog on CI).
+        // At .high the consumer goes to the front of that queue, so an event
+        // is not late just because other suites are busy.
+        task = Task(priority: .high) {
             for await event in engine.events {
                 self.append(event)
             }

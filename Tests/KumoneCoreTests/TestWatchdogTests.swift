@@ -6,14 +6,15 @@ struct TestWatchdogTests {
     @Test func blockingWorkersAllowAsyncEventsToArrive() async {
         // Also run with LIBDISPATCH_COOPERATIVE_POOL_STRICT=1: even a single
         // executor thread must remain available to consume playback events.
-        // Other suites can keep the pool busy for half a minute on CI, so the
-        // event gets twice that; a blocking watchdog fails at any length.
+        // The event is delivered the way `EventLog` receives one, at .high.
+        // At the default priority it queues behind every test waiting for
+        // the pool, which kept it out for 32 s at the start of a CI run.
         await withTaskGroup(of: Bool.self) { group in
             for _ in 0..<8 {
                 group.addTask {
                     let result = await runWithWatchdog("async-event", timeout: 75) {
                         let event = DispatchSemaphore(value: 0)
-                        Task { event.signal() }
+                        Task(priority: .high) { event.signal() }
                         return event.wait(timeout: .now() + 60) == .success
                     }
                     return result == true
