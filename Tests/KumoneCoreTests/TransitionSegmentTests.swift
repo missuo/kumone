@@ -93,27 +93,23 @@ private func request(_ planned: PlannedTransition,
 }
 
 /// Runs `body` on its own thread, failing the test rather than hanging the run.
-private final class Box<T>: @unchecked Sendable { var value: T? }
-
+/// The test awaits instead of blocking, so `SegmentEventLog` can still be fed.
 private func withWatchdog<T>(_ label: String, timeout: TimeInterval,
-                             _ body: @escaping () -> T) -> T? {
-    let box = Box<T>()
-    let done = DispatchSemaphore(value: 0)
-    let thread = Thread {
-        box.value = body()
-        done.signal()
-    }
-    thread.name = "segment-\(label)"
-    thread.stackSize = 1 << 21
-    thread.start()
-    if done.wait(timeout: .now() + timeout) == .timedOut {
+                             _ body: @escaping () -> T) async -> T? {
+    let result = await runWithWatchdog("segment-\(label)", timeout: timeout, body)
+    if result == nil {
         Issue.record("Watchdog: '\(label)' did not finish within \(timeout)s")
-        return nil
     }
-    return box.value
+    return result
 }
 
-private let audioOutputAvailable: Bool = {
+private let audioOutputAvailable = Task {
+    await withWatchdog("audioOutputProbe", timeout: 45) {
+        probeAudioOutput()
+    } ?? false
+}
+
+private func probeAudioOutput() -> Bool {
     let engine = AVAudioEngine()
     engine.mainMixerNode.outputVolume = 0
     engine.prepare()
@@ -125,7 +121,7 @@ private let audioOutputAvailable: Bool = {
         print("TransitionSegment: no usable audio output; playback assertions skipped")
         return false
     }
-}()
+}
 
 // MARK: - Geometry
 
@@ -306,15 +302,15 @@ struct TransitionSegmentTests {
 
     // MARK: - Arming rules
 
-    @Test func theEngineOnlyTakesASegmentForTheSeamItIsWaitingOn() throws {
-        guard audioOutputAvailable else { return }
+    @Test func theEngineOnlyTakesASegmentForTheSeamItIsWaitingOn() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = plan(overlap: 2, outPoint: 6)
         let segment = try TransitionSegmentRenderer.render(request(planned),
                                                            provider: silentVocals)
         let other = try TransitionSegmentRenderer.render(
             request(plan(overlap: 2, outPoint: 7)), provider: silentVocals)
 
-        let result = withWatchdog("armingRules", timeout: 30) { () -> (Bool, Bool, Bool) in
+        let result = await withWatchdog("armingRules", timeout: 30) { () -> (Bool, Bool, Bool) in
             let engine = PlaybackEngine()
             defer { engine.stopAll() }
             guard (try? engine.loadFile(at: SegmentFixtures.outgoing, on: .a)) != nil,
@@ -344,12 +340,12 @@ struct TransitionSegmentTests {
         #expect(droppedOnSeek, "a seek past the splice must drop the segment")
     }
 
-    @Test func cancellingTheTransitionDropsTheSegment() throws {
-        guard audioOutputAvailable else { return }
+    @Test func cancellingTheTransitionDropsTheSegment() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = plan(overlap: 2, outPoint: 6)
         let segment = try TransitionSegmentRenderer.render(request(planned),
                                                            provider: silentVocals)
-        let result = withWatchdog("cancelDropsSegment", timeout: 30) { () -> (Bool, Bool) in
+        let result = await withWatchdog("cancelDropsSegment", timeout: 30) { () -> (Bool, Bool) in
             let engine = PlaybackEngine()
             defer { engine.stopAll() }
             guard (try? engine.loadFile(at: SegmentFixtures.outgoing, on: .a)) != nil,
@@ -377,8 +373,8 @@ struct TransitionSegmentTests {
     // throughout is that *something* is sounding — a hole would be a dropout —
     // and that no two sources are ever at full level at once, which is what a
     // splice that failed to silence one side would look like.
-    @Test func aSplicedHandOverIsContinuousAndNeverDoubled() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aSplicedHandOverIsContinuousAndNeverDoubled() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = plan(overlap: 2, outPoint: 4)
         let segment = try TransitionSegmentRenderer.render(request(planned),
                                                            provider: silentVocals)
@@ -398,7 +394,7 @@ struct TransitionSegmentTests {
             }
         }
 
-        let result = withWatchdog("splice", timeout: 45) {
+        let result = await withWatchdog("splice", timeout: 45) {
             () -> ([(TimeInterval, Int, Float)], Bool, TimeInterval) in
             let engine = PlaybackEngine()
             let events = SegmentEventLog(engine)
@@ -486,8 +482,8 @@ struct TransitionSegmentTests {
     /// replaced and the deck that took over the same questions the live path is
     /// held to — by polling, because a stale glide target is re-applied by a
     /// later tick and never by the first one.
-    @Test func theSegmentSplicePathKeepsBothDecksClean() throws {
-        guard audioOutputAvailable else { return }
+    @Test func theSegmentSplicePathKeepsBothDecksClean() async throws {
+        guard await audioOutputAvailable.value else { return }
         enum Ending: String, CaseIterable {
             /// The splice runs to its own end and hands back normally.
             case completes
@@ -539,8 +535,8 @@ struct TransitionSegmentTests {
         let segment = try TransitionSegmentRenderer.render(req, provider: silentVocals)
 
         for ending in Ending.allCases {
-            let result = withWatchdog("spliceHygiene-\(ending.rawValue)",
-                                      timeout: 70) { () -> [(String, Deck, Worst)]? in
+            let result = await withWatchdog("spliceHygiene-\(ending.rawValue)",
+                                            timeout: 70) { () -> [(String, Deck, Worst)]? in
                 var observations: [(String, Deck, Worst)] = []
                 let engine = PlaybackEngine()
                 let events = SegmentEventLog(engine)
@@ -684,8 +680,8 @@ struct TransitionSegmentTests {
     /// host clock. So this asks the two questions that separates a working
     /// splice from a plausible one — did it complete with both decks clean, and
     /// did the incoming deck come back at the position the segment handed it.
-    @Test func aHiResIncomingDeckIsSplicedAndResumesWhereTheSegmentLeftIt() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aHiResIncomingDeckIsSplicedAndResumesWhereTheSegmentLeftIt() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = plan(overlap: 2, outPoint: 4)
         let segment = try TransitionSegmentRenderer.render(
             request(planned, incoming: SegmentFixtures.incomingHiRes),
@@ -700,7 +696,7 @@ struct TransitionSegmentTests {
             var deckB: PlaybackEngine.DeckEffectSnapshot?
         }
 
-        let result = withWatchdog("hiResSplice", timeout: 45) { () -> Outcome? in
+        let result = await withWatchdog("hiResSplice", timeout: 45) { () -> Outcome? in
             var outcome = Outcome()
             let engine = PlaybackEngine()
             let events = SegmentEventLog(engine)
@@ -771,8 +767,8 @@ struct TransitionSegmentTests {
     /// guess — one sentence covering four different rules — and the field
     /// journal duly recorded renders that had finished half a minute early as
     /// seams that had moved. Each case below trips exactly one guard.
-    @Test func aDeclinedSegmentSaysWhichRuleDeclinedIt() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aDeclinedSegmentSaysWhichRuleDeclinedIt() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = plan(overlap: 2, outPoint: 4)
         let segment = try TransitionSegmentRenderer.render(request(planned),
                                                            provider: silentVocals)
@@ -788,7 +784,7 @@ struct TransitionSegmentTests {
             var offeredTwice: Decline?
             var tooLate: Decline?
         }
-        let result = withWatchdog("declineReasons", timeout: 40) { () -> Seen? in
+        let result = await withWatchdog("declineReasons", timeout: 40) { () -> Seen? in
             var seen = Seen()
             let engine = PlaybackEngine()
             defer { engine.stopAll() }
