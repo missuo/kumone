@@ -317,6 +317,9 @@ private func dumpProcessSample(label: String) {
     // Inherit output rather than blocking on an unbounded pipe read.
     let exited = DispatchSemaphore(value: 0)
     p.terminationHandler = { _ in exited.signal() }
+    // `sample` writes straight to fd 1, while `print` is block-buffered when
+    // stdout is a pipe; flush so the dump lands between its two markers.
+    fflush(stdout)
     do {
         try p.run()
         // A 2 s sample takes about 3 s on an idle Mac; symbolicating on a
@@ -329,6 +332,7 @@ private func dumpProcessSample(label: String) {
         print("sample failed: \(error)")
     }
     print("=== END SAMPLE (\(label)) ===")
+    fflush(stdout)
 }
 
 // MARK: - Event collection
@@ -1070,8 +1074,10 @@ struct PlaybackEngineSmokeTests {
     @Test func theRideReleaseIsJournalledAtBothEndsAndOnlyWhenItRuns() async throws {
         guard await audioOutputAvailable.value else { return }
         func runSeam(ride: Double, waitAfterComplete: TimeInterval) async -> [String] {
-            let captured = await withWatchdog("rideJournal", timeout: 45) {
-                PlaybackJournal.tap.capture { () -> Bool in
+            // Capture around the watchdog, not inside it: a timed-out body
+            // keeps running, and must not hold the tap open for later captures.
+            let captured = await PlaybackJournal.tap.capture {
+                await withWatchdog("rideJournal", timeout: 45) { () -> Bool in
                     let engine = PlaybackEngine()
                     let log = EventLog(engine)
                     defer { engine.stopAll() }
@@ -1097,7 +1103,7 @@ struct PlaybackEngineSmokeTests {
                     return true
                 }
             }
-            return captured?.lines ?? []
+            return captured.lines
         }
 
         // A −4 dB cut: one start line naming the slope and the duration, one

@@ -6,15 +6,15 @@ struct TestWatchdogTests {
     @Test func blockingWorkersAllowAsyncEventsToArrive() async {
         // Also run with LIBDISPATCH_COOPERATIVE_POOL_STRICT=1: even a single
         // executor thread must remain available to consume playback events.
-        // The window is generous because other suites can keep the pool busy
-        // for half a minute on CI; a blocking watchdog fails at any length.
+        // Other suites can keep the pool busy for half a minute on CI, so the
+        // event gets twice that; a blocking watchdog fails at any length.
         await withTaskGroup(of: Bool.self) { group in
             for _ in 0..<8 {
                 group.addTask {
-                    let result = await runWithWatchdog("async-event", timeout: 30) {
+                    let result = await runWithWatchdog("async-event", timeout: 75) {
                         let event = DispatchSemaphore(value: 0)
                         Task { event.signal() }
-                        return event.wait(timeout: .now() + 20) == .success
+                        return event.wait(timeout: .now() + 60) == .success
                     }
                     return result == true
                 }
@@ -28,7 +28,6 @@ struct TestWatchdogTests {
     @Test func timeoutReturnsBeforeWorkerAndAcceptsLateCompletion() async {
         let release = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
-        defer { release.signal() }
         let result = await runWithWatchdog("blocked-worker", timeout: 0.05) {
             release.wait()
             finished.signal()
@@ -36,8 +35,9 @@ struct TestWatchdogTests {
         }
         #expect(result == nil)
         release.signal()
-        let completed = await runWithWatchdog("late-completion", timeout: 2) {
-            finished.wait(timeout: .now() + 1) == .success
+        // The released worker is an ordinary thread on a loaded runner.
+        let completed = await runWithWatchdog("late-completion", timeout: 15) {
+            finished.wait(timeout: .now() + 10) == .success
         }
         #expect(completed == true)
     }
