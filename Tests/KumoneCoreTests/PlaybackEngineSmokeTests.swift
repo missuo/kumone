@@ -296,25 +296,17 @@ final class TestHTTPServer: @unchecked Sendable {
 /// samples this process (thread stacks land in the test log), records a
 /// failure, and returns nil — leaking the stuck thread rather than hanging
 /// the test run.
-private final class ResultBox<T>: @unchecked Sendable { var value: T? }
-
 private func withWatchdog<T>(_ label: String, timeout: TimeInterval,
-                             _ body: @escaping () -> T) -> T? {
-    let box = ResultBox<T>()
-    let done = DispatchSemaphore(value: 0)
-    let thread = Thread {
-        box.value = body()
-        done.signal()
-    }
-    thread.name = "watchdog-body-\(label)"
-    thread.stackSize = 1 << 21
-    thread.start()
-    if done.wait(timeout: .now() + timeout) == .timedOut {
-        dumpProcessSample(label: label)
+                             _ body: @escaping () -> T) async -> T? {
+    let result = await runWithWatchdog(label, timeout: timeout, body)
+    if result == nil {
+        // Diagnostics must not turn a bounded test timeout into another hang.
+        _ = await runWithWatchdog("sample-\(label)", timeout: 20) {
+            dumpProcessSample(label: label)
+        }
         Issue.record("Watchdog: '\(label)' did not finish within \(timeout)s — likely deadlock/blocked queue; see sample above")
-        return nil
     }
-    return box.value
+    return result
 }
 
 private func dumpProcessSample(label: String) {
@@ -322,18 +314,25 @@ private func dumpProcessSample(label: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
     p.arguments = ["\(getpid())", "2"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = pipe
+    // Inherit output rather than blocking on an unbounded pipe read.
+    let exited = DispatchSemaphore(value: 0)
+    p.terminationHandler = { _ in exited.signal() }
+    // `sample` writes straight to fd 1, while `print` is block-buffered when
+    // stdout is a pipe; flush so the dump lands between its two markers.
+    fflush(stdout)
     do {
         try p.run()
-        let out = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        print(String(decoding: out, as: UTF8.self))
+        // A 2 s sample takes about 3 s on an idle Mac; symbolicating on a
+        // loaded runner takes longer, and a killed sample prints nothing.
+        if exited.wait(timeout: .now() + 15) == .timedOut {
+            kill(p.processIdentifier, SIGKILL)
+            print("sample exceeded its 15s deadline")
+        }
     } catch {
         print("sample failed: \(error)")
     }
     print("=== END SAMPLE (\(label)) ===")
+    fflush(stdout)
 }
 
 // MARK: - Event collection
@@ -346,7 +345,11 @@ private final class EventLog: @unchecked Sendable {
     private var task: Task<Void, Never>?
 
     init(_ engine: PlaybackEngine) {
-        task = Task {
+        // Tests run at medium priority, and at the start of a run hundreds of
+        // them queue for the cooperative pool (about 30 s of backlog on CI).
+        // At .high the consumer goes to the front of that queue, so an event
+        // is not late just because other suites are busy.
+        task = Task(priority: .high) {
             for await event in engine.events {
                 self.append(event)
             }
@@ -388,7 +391,15 @@ private final class EventLog: @unchecked Sendable {
 /// never advances, so every playback test would sit out its watchdog. Require
 /// the output's sample time to cover at least half of a one-second wait;
 /// environments that fail skip the playback assertions.
-private let audioOutputAvailable: Bool = {
+private let audioOutputAvailable = Task {
+    // CoreAudio's first initialization can be slow on a loaded runner. Bound
+    // the formerly unguarded probe without tightening the playback budgets.
+    await withWatchdog("audioOutputProbe", timeout: 45) {
+        probeAudioOutput()
+    } ?? false
+}
+
+private func probeAudioOutput() -> Bool {
     let engine = AVAudioEngine()
     engine.mainMixerNode.outputVolume = 0
     engine.prepare()
@@ -423,7 +434,7 @@ private let audioOutputAvailable: Bool = {
         return false
     }
     return true
-}()
+}
 
 /// Poll `engine.position(of:)` until it exceeds `target` or `timeout` passes.
 private func pollPosition(_ engine: PlaybackEngine, deck: Deck, past target: TimeInterval,
@@ -444,9 +455,9 @@ private func pollPosition(_ engine: PlaybackEngine, deck: Deck, past target: Tim
 struct PlaybackEngineSmokeTests {
 
     // (a) Local file deck: position advances, deckFinished on natural end.
-    @Test func filePlaybackAdvancesAndFinishes() throws {
-        guard audioOutputAvailable else { return } // skipped: no audio device
-        let result = withWatchdog("filePlayback", timeout: 35) { () -> (TimeInterval, Bool) in
+    @Test func filePlaybackAdvancesAndFinishes() async throws {
+        guard await audioOutputAvailable.value else { return } // skipped: no audio device
+        let result = await withWatchdog("filePlayback", timeout: 35) { () -> (TimeInterval, Bool) in
             let engine = PlaybackEngine()
             let log = EventLog(engine)
             defer { engine.stopAll() }
@@ -472,11 +483,11 @@ struct PlaybackEngineSmokeTests {
     }
 
     // (b) seek / pause / resume semantics on a file deck.
-    @Test func seekPauseResume() throws {
-        guard audioOutputAvailable else { return }
+    @Test func seekPauseResume() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome { var seekPos = TimeInterval(-1); var pausedA = TimeInterval(-1)
                          var pausedB = TimeInterval(-1); var resumed = TimeInterval(-1) }
-        let result = withWatchdog("seekPauseResume", timeout: 25) { () -> Outcome in
+        let result = await withWatchdog("seekPauseResume", timeout: 25) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             _ = EventLog(engine)
@@ -511,8 +522,8 @@ struct PlaybackEngineSmokeTests {
 
     // (c) Progressive streaming from a local HTTP server: position advances,
     // download completes, and the .part mirror matches the fixture bytes.
-    @Test func streamingPlaybackAndPartFile() throws {
-        guard audioOutputAvailable else { return }
+    @Test func streamingPlaybackAndPartFile() async throws {
+        guard await audioOutputAvailable.value else { return }
         let fixtureData = try Data(contentsOf: Fixtures.streamShortADTS)
         let server = try TestHTTPServer(serving: fixtureData)
         defer { server.stop() }
@@ -524,7 +535,7 @@ struct PlaybackEngineSmokeTests {
         let serverURL = server.url
         // 18s fixture: below the high-water mark, the local download is never
         // suspended, so streamDownloadCompleted arrives within seconds.
-        let result = withWatchdog("streaming", timeout: 30) { () -> Outcome in
+        let result = await withWatchdog("streaming", timeout: 30) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -556,8 +567,8 @@ struct PlaybackEngineSmokeTests {
     // does — must never block for long. This is the "app not responding"
     // reproduction: if decode work floods the engine queue, single calls here
     // stall for hundreds of ms.
-    @Test func positionCallLatencyDuringStreaming() throws {
-        guard audioOutputAvailable else { return }
+    @Test func positionCallLatencyDuringStreaming() async throws {
+        guard await audioOutputAvailable.value else { return }
         let fixtureData = try Data(contentsOf: Fixtures.streamADTS)
         let server = try TestHTTPServer(serving: fixtureData)
         defer { server.stop() }
@@ -566,7 +577,7 @@ struct PlaybackEngineSmokeTests {
 
         struct Outcome { var maxMs = -1.0; var meanMs = -1.0; var calls = 0; var over100 = 0 }
         let serverURL = server.url
-        let result = withWatchdog("positionLatency", timeout: 30) { () -> Outcome in
+        let result = await withWatchdog("positionLatency", timeout: 30) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             _ = EventLog(engine)
@@ -609,8 +620,8 @@ struct PlaybackEngineSmokeTests {
     // keep arriving into a backlog and the .part mirror), never the
     // URLSession task, so the transfer's completion callback can't be lost
     // no matter how fast the download outruns playback.
-    @Test func streamBackpressureSwallowsCompletion() throws {
-        guard audioOutputAvailable else { return }
+    @Test func streamBackpressureSwallowsCompletion() async throws {
+        guard await audioOutputAvailable.value else { return }
         let fixtureData = try Data(contentsOf: Fixtures.streamADTS) // 21s > high water
         let server = try TestHTTPServer(serving: fixtureData)
         defer { server.stop() }
@@ -618,7 +629,7 @@ struct PlaybackEngineSmokeTests {
         try? FileManager.default.removeItem(at: partURL)
         let serverURL = server.url
 
-        let result = withWatchdog("backpressure", timeout: 40) { () -> Bool in
+        let result = await withWatchdog("backpressure", timeout: 40) { () -> Bool in
             let engine = PlaybackEngine()
             let log = EventLog(engine)
             defer { engine.stopAll() }
@@ -638,11 +649,11 @@ struct PlaybackEngineSmokeTests {
 
     // (e) Gapless transition A → B: midpoint + completed events, then B's
     // position advances.
-    @Test func gaplessTransition() throws {
-        guard audioOutputAvailable else { return }
+    @Test func gaplessTransition() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome { var midpoint = false; var completed = false
                          var bPosEarly = TimeInterval(-1); var bPosLate = TimeInterval(-1) }
-        let result = withWatchdog("gapless", timeout: 30) { () -> Outcome in
+        let result = await withWatchdog("gapless", timeout: 30) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -678,8 +689,8 @@ struct PlaybackEngineSmokeTests {
     // must (1) show its effect engaged while the overlap is live and (2) leave
     // BOTH decks fully neutral once everything has settled — decks are reused,
     // so a stuck high-pass or a wet delay would poison the next track.
-    @Test func styledTransitionsRunAndResetDecks() throws {
-        guard audioOutputAvailable else { return }
+    @Test func styledTransitionsRunAndResetDecks() async throws {
+        guard await audioOutputAvailable.value else { return }
 
         struct Case {
             let name: String
@@ -727,7 +738,7 @@ struct PlaybackEngineSmokeTests {
                 var deckB: PlaybackEngine.DeckEffectSnapshot?
             }
 
-            let result = withWatchdog("style-\(testCase.name)", timeout: 45) { () -> Outcome in
+            let result = await withWatchdog("style-\(testCase.name)", timeout: 45) { () -> Outcome in
                 var o = Outcome()
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -779,8 +790,8 @@ struct PlaybackEngineSmokeTests {
     // (g) Regression floor: `.plain` must behave exactly as the engine did
     // before styles existed — a beat-matched overlap with the single low-shelf
     // bass swap, no delay, no high-pass, and neutral decks afterwards.
-    @Test func plainStyleIsUnchanged() throws {
-        guard audioOutputAvailable else { return }
+    @Test func plainStyleIsUnchanged() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome {
             var completed = false
             var sawBassSwap = false
@@ -793,7 +804,7 @@ struct PlaybackEngineSmokeTests {
             outgoingRate: 0.99, incomingRate: 1.02,
             bassSwapOffset: 1.2, overlapDuration: 2.4))
 
-        let result = withWatchdog("plainStyle", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("plainStyle", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -841,14 +852,14 @@ struct PlaybackEngineSmokeTests {
     // bit-identical to what it was before the trim existed, and at a real trim
     // every fader path (play, the overlap ramp, the parked pose) is scaled by
     // exactly that factor with nothing else moving.
-    @Test func loudnessTrimScalesTheFaderAndZeroDBChangesNothing() throws {
-        guard audioOutputAvailable else { return }
+    @Test func loudnessTrimScalesTheFaderAndZeroDBChangesNothing() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome {
             var untrimmed: PlaybackEngine.DeckEffectSnapshot?
             var trimmed: PlaybackEngine.DeckEffectSnapshot?
             var trimmedAfterStop: PlaybackEngine.DeckEffectSnapshot?
         }
-        let result = withWatchdog("loudnessTrim", timeout: 40) { () -> Outcome in
+        let result = await withWatchdog("loudnessTrim", timeout: 40) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             _ = EventLog(engine)
@@ -897,13 +908,13 @@ struct PlaybackEngineSmokeTests {
     /// A styled overlap under a trim: the automation's 0–1 curves are scaled,
     /// never replaced, so the incoming deck still lands exactly on its trim and
     /// the outgoing deck still ends parked silent.
-    @Test func aTrimmedDeckStillEndsTheTransitionNeutral() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aTrimmedDeckStillEndsTheTransitionNeutral() async throws {
+        guard await audioOutputAvailable.value else { return }
         let plan = TransitionPlan.beatMatched(BeatMatchedPlan(
             outPoint: 5.2, inPoint: 0, overlapBars: 2,
             outgoingRate: 0.99, incomingRate: 1.02,
             bassSwapOffset: 1.2, overlapDuration: 2.4))
-        let result = withWatchdog("trimmedTransition", timeout: 45) {
+        let result = await withWatchdog("trimmedTransition", timeout: 45) {
             () -> [PlaybackEngine.DeckEffectSnapshot] in
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -941,8 +952,8 @@ struct PlaybackEngineSmokeTests {
     /// The transition gain ride, end to end on the live graph: full value for
     /// the whole overlap, then a slow glide back to unity that outlives the
     /// transition itself.
-    @Test func theRideIsHeldAcrossTheOverlapAndThenGlidesBack() throws {
-        guard audioOutputAvailable else { return }
+    @Test func theRideIsHeldAcrossTheOverlapAndThenGlidesBack() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = PlannedTransition(
             plan: .crossfade(duration: 2.0, outPoint: 5.2, inPoint: 0),
             style: .plain, rideDB: -4)
@@ -952,7 +963,7 @@ struct PlaybackEngineSmokeTests {
             var laterStillGliding: PlaybackEngine.DeckEffectSnapshot?
             var transitionCleared = false
         }
-        let result = withWatchdog("rideGlide", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("rideGlide", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -1018,12 +1029,12 @@ struct PlaybackEngineSmokeTests {
 
     /// A ride of 0 — every `.plain` hand-over, every AutoMix-off and iOS path —
     /// must leave the gain path exactly where it was before the ride existed.
-    @Test func aZeroRideChangesNothing() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aZeroRideChangesNothing() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = PlannedTransition(
             plan: .crossfade(duration: 2.0, outPoint: 5.2, inPoint: 0), style: .plain)
         #expect(planned.rideDB == 0, "the memberwise default must be no ride")
-        let result = withWatchdog("zeroRide", timeout: 45) {
+        let result = await withWatchdog("zeroRide", timeout: 45) {
             () -> [PlaybackEngine.DeckEffectSnapshot] in
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -1064,11 +1075,13 @@ struct PlaybackEngineSmokeTests {
     /// under test here. The silence matters just as much: most hand-overs carry
     /// no ride, and a line per seam saying nothing happened would bury the ones
     /// that mean something.
-    @Test func theRideReleaseIsJournalledAtBothEndsAndOnlyWhenItRuns() throws {
-        guard audioOutputAvailable else { return }
-        func runSeam(ride: Double, waitAfterComplete: TimeInterval) -> [String] {
-            let captured = PlaybackJournal.tap.capture {
-                _ = withWatchdog("rideJournal", timeout: 45) { () -> Bool in
+    @Test func theRideReleaseIsJournalledAtBothEndsAndOnlyWhenItRuns() async throws {
+        guard await audioOutputAvailable.value else { return }
+        func runSeam(ride: Double, waitAfterComplete: TimeInterval) async -> [String] {
+            // Capture around the watchdog, not inside it: a timed-out body
+            // keeps running, and must not hold the tap open for later captures.
+            let captured = await PlaybackJournal.tap.capture {
+                await withWatchdog("rideJournal", timeout: 45) { () -> Bool in
                     let engine = PlaybackEngine()
                     let log = EventLog(engine)
                     defer { engine.stopAll() }
@@ -1099,7 +1112,7 @@ struct PlaybackEngineSmokeTests {
 
         // A −4 dB cut: one start line naming the slope and the duration, one
         // DONE line, and the arithmetic between them agrees with the constant.
-        let ridden = runSeam(ride: -4, waitAfterComplete: 4.5)
+        let ridden = await runSeam(ride: -4, waitAfterComplete: 4.5)
         let starts = ridden.filter { $0.hasPrefix("ride release start") }
         let dones = ridden.filter { $0.hasPrefix("ride release DONE") }
         #expect(starts.count == 1, "exactly one start line (\(starts))")
@@ -1113,7 +1126,7 @@ struct PlaybackEngineSmokeTests {
         #expect(ridden.contains { $0.hasPrefix("transition complete") && $0.contains("ride=") })
 
         // …and a seam with no ride writes neither line.
-        let flat = runSeam(ride: 0, waitAfterComplete: 1.0)
+        let flat = await runSeam(ride: 0, waitAfterComplete: 1.0)
         #expect(!flat.contains { $0.contains("ride release") },
                 "a rideless seam must not journal a release (\(flat))")
         #expect(flat.contains { $0.hasPrefix("transition complete") },
@@ -1124,11 +1137,11 @@ struct PlaybackEngineSmokeTests {
     /// target instead of leaving it drifting under a track the listener has
     /// just re-aimed. Every one of those moments is silent or muted, so the
     /// jump is inaudible — see `PlaybackEngine.settleRideLocked`.
-    @Test func pauseAndSeekSettleTheRideImmediately() throws {
-        guard audioOutputAvailable else { return }
+    @Test func pauseAndSeekSettleTheRideImmediately() async throws {
+        guard await audioOutputAvailable.value else { return }
         func runRide(interrupt: @escaping (PlaybackEngine) -> Void)
-            -> PlaybackEngine.DeckEffectSnapshot? {
-            withWatchdog("rideSettle", timeout: 45) {
+            async -> PlaybackEngine.DeckEffectSnapshot? {
+            await withWatchdog("rideSettle", timeout: 45) {
                 () -> PlaybackEngine.DeckEffectSnapshot? in
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -1163,7 +1176,7 @@ struct PlaybackEngineSmokeTests {
             ("seek", { (e: PlaybackEngine) in e.seek(deck: .b, to: 1.0) }),
             ("play", { (e: PlaybackEngine) in e.play(deck: .b, from: 1.0) }),
         ] {
-            guard let s = runRide(interrupt: interrupt) else { continue }
+            guard let s = await runRide(interrupt: interrupt) else { continue }
             #expect(s.rideDB == 0,
                     "\(label) must settle the release to its target at once (\(s))")
             #expect(s.rideTargetDB == 0)
@@ -1172,13 +1185,13 @@ struct PlaybackEngineSmokeTests {
 
     // (h) Cancelling mid-overlap (seek / skip / disarm) must also leave both
     // decks neutral — the reset invariant, on the interrupted path.
-    @Test func cancelDuringStyledOverlapResetsDecks() throws {
-        guard audioOutputAvailable else { return }
+    @Test func cancelDuringStyledOverlapResetsDecks() async throws {
+        guard await audioOutputAvailable.value else { return }
         let planned = PlannedTransition(
             plan: .crossfade(duration: 3.0, outPoint: 5.2, inPoint: 0),
             style: TransitionStyle(outroEffect: .echoOut, stagedEQ: true))
 
-        let result = withWatchdog("cancelStyled", timeout: 40) { () -> [PlaybackEngine.DeckEffectSnapshot] in
+        let result = await withWatchdog("cancelStyled", timeout: 40) { () -> [PlaybackEngine.DeckEffectSnapshot] in
             let engine = PlaybackEngine()
             _ = EventLog(engine)
             defer { engine.stopAll() }
@@ -1217,8 +1230,8 @@ struct PlaybackEngineSmokeTests {
     // mixer), not on parameters, because the audible symptom lives entirely
     // in the signal: "the fade reached silence, then the volume jumped back
     // and the old track played on for a moment".
-    @Test func outgoingDeckStaysSilentAfterTransition() throws {
-        guard audioOutputAvailable else { return }
+    @Test func outgoingDeckStaysSilentAfterTransition() async throws {
+        guard await audioOutputAvailable.value else { return }
 
         struct Sample { var t: TimeInterval; var peak: Float }
         final class Recorder: @unchecked Sendable {
@@ -1260,7 +1273,7 @@ struct PlaybackEngineSmokeTests {
         ]
 
         for (name, deckAFixture, planned) in cases {
-            let result = withWatchdog("outgoingSilence-\(name)", timeout: 45) { () -> ([Sample], TimeInterval) in
+            let result = await withWatchdog("outgoingSilence-\(name)", timeout: 45) { () -> ([Sample], TimeInterval) in
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
                 defer { engine.setOutputMonitor(on: .a, nil); engine.stopAll() }
@@ -1340,8 +1353,8 @@ struct PlaybackEngineSmokeTests {
     // end of the track — a short tail crossfade when there is runway left,
     // `.gapless` when there is not — so the rest of the song still plays and
     // the queue still moves.
-    @Test func seekIntoTransitionWindowFallsBackInsteadOfFiring() throws {
-        guard audioOutputAvailable else { return }
+    @Test func seekIntoTransitionWindowFallsBackInsteadOfFiring() async throws {
+        guard await audioOutputAvailable.value else { return }
 
         struct Case {
             let name: String
@@ -1385,7 +1398,7 @@ struct PlaybackEngineSmokeTests {
                 var bPosAfterQuiet = TimeInterval(-1)
                 var completed = false
             }
-            let result = withWatchdog("seekFallback-\(testCase.name)", timeout: 40) { () -> Outcome in
+            let result = await withWatchdog("seekFallback-\(testCase.name)", timeout: 40) { () -> Outcome in
                 var o = Outcome()
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -1446,8 +1459,8 @@ struct PlaybackEngineSmokeTests {
     // The fixture is loud for 4 s then digitally silent, and the seek goes
     // from the loud half into the silent half — so ANY level after the seek is
     // audio from the old position.
-    @Test func seekDoesNotLeakTheOldPosition() throws {
-        guard audioOutputAvailable else { return }
+    @Test func seekDoesNotLeakTheOldPosition() async throws {
+        guard await audioOutputAvailable.value else { return }
 
         struct Sample { var t: TimeInterval; var peak: Float }
         final class Recorder: @unchecked Sendable {
@@ -1468,7 +1481,7 @@ struct PlaybackEngineSmokeTests {
         // biggest; stereo → the sample-accurate scheduleSegment path.
         for (name, fixture) in [("converted", Fixtures.loudThenSilentCAF),
                                 ("stereo-file", Fixtures.loudThenSilentStereoCAF)] {
-            let result = withWatchdog("seekResidue-\(name)", timeout: 40) {
+            let result = await withWatchdog("seekResidue-\(name)", timeout: 40) {
                 () -> ([Sample], TimeInterval, TimeInterval, Float) in
                 let engine = PlaybackEngine()
                 _ = EventLog(engine)
@@ -1531,11 +1544,11 @@ struct PlaybackEngineSmokeTests {
     // audio from before the change on top of the resume.
     //
     // Both source paths are run, because the same rebuild covers both.
-    @Test func aConfigurationChangeResumesEveryDeckInsteadOfEndingIt() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aConfigurationChangeResumesEveryDeckInsteadOfEndingIt() async throws {
+        guard await audioOutputAvailable.value else { return }
         for (name, fixture) in [("converted", Fixtures.eightSecondCAF),
                                 ("stereo-file", Fixtures.eightSecondStereoCAF)] {
-            let result = withWatchdog("configChange-\(name)", timeout: 30) {
+            let result = await withWatchdog("configChange-\(name)", timeout: 30) {
                 () -> (TimeInterval, TimeInterval, Float, Bool) in
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -1580,8 +1593,8 @@ struct PlaybackEngineSmokeTests {
     // sounds muffled / like it is under water" (a -24 dB high shelf is exactly
     // that). The incoming deck is the risky one, because `beginOverlapLocked`
     // primes it with the full three-band cut and only the ramps release it.
-    @Test func liveDeckIsNeutralAfterEveryTransitionExit() throws {
-        guard audioOutputAvailable else { return }
+    @Test func liveDeckIsNeutralAfterEveryTransitionExit() async throws {
+        guard await audioOutputAvailable.value else { return }
 
         let stagedCrossfade = PlannedTransition(
             plan: .crossfade(duration: 2.5, outPoint: 5.2, inPoint: 0),
@@ -1625,7 +1638,7 @@ struct PlaybackEngineSmokeTests {
         ]
 
         for testCase in cases {
-            let result = withWatchdog("liveDeckNeutral-\(testCase.name)", timeout: 45) {
+            let result = await withWatchdog("liveDeckNeutral-\(testCase.name)", timeout: 45) {
                 () -> PlaybackEngine.DeckEffectSnapshot? in
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -1703,8 +1716,8 @@ struct PlaybackEngineSmokeTests {
     /// The bend here (−10 %) is far past anything the planner would ask for —
     /// the point is a signal the sampler cannot mistake for jitter, not a
     /// realistic seam.
-    @Test func aTempoRampedTransitionGlidesInAndCompletes() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aTempoRampedTransitionGlidesInAndCompletes() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome {
             var beforeRamp: Float?
             var midRamp: Float?
@@ -1721,7 +1734,7 @@ struct PlaybackEngineSmokeTests {
             bassSwapOffset: 1.0, overlapDuration: 2.0,
             rampLeadSeconds: 2, rampReleaseSeconds: 2))
 
-        let result = withWatchdog("tempoRamp", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("tempoRamp", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -1780,8 +1793,8 @@ struct PlaybackEngineSmokeTests {
     /// cancel, both mid-glide, both leaving the deck at unity: anything less
     /// and the user's own playback is left detuned by a hand-over that never
     /// happened.
-    @Test func seekingOrCancellingDuringTheTempoRampPutsTheRateBack() throws {
-        guard audioOutputAvailable else { return }
+    @Test func seekingOrCancellingDuringTheTempoRampPutsTheRateBack() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome {
             var midRamp: Float?
             var afterSeek: Float?
@@ -1794,7 +1807,7 @@ struct PlaybackEngineSmokeTests {
             bassSwapOffset: 1.0, overlapDuration: 2.0,
             rampLeadSeconds: 2, rampReleaseSeconds: 2))
 
-        let result = withWatchdog("tempoRampRevert", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("tempoRampRevert", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             defer { engine.stopAll() }
@@ -1845,8 +1858,8 @@ struct PlaybackEngineSmokeTests {
     ///
     /// Each case interrupts the hand-over somewhere different and then asks the
     /// same question of whichever deck is left carrying the music.
-    @Test func everyTeardownOrderHandsTheRateBack() throws {
-        guard audioOutputAvailable else { return }
+    @Test func everyTeardownOrderHandsTheRateBack() async throws {
+        guard await audioOutputAvailable.value else { return }
         enum Interruption: String {
             /// The undisturbed path: just wait the release out.
             case none
@@ -1873,7 +1886,7 @@ struct PlaybackEngineSmokeTests {
 
         for interruption in [Interruption.none, .armNextImmediately, .loadOntoSpentDeck,
                              .seekAfterSeam, .pauseThenResume, .cancelMidRelease] {
-            let result = withWatchdog("rateHandBack-\(interruption.rawValue)", timeout: 60) {
+            let result = await withWatchdog("rateHandBack-\(interruption.rawValue)", timeout: 60) {
                 () -> PlaybackEngine.DeckEffectSnapshot? in
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
@@ -1954,8 +1967,8 @@ struct PlaybackEngineSmokeTests {
     /// push a signal several dB above its own input peak, which on a 0 dBFS
     /// master clips; the tempo ramp made that much worse by holding the
     /// outgoing deck bent at full fader for the whole glide.
-    @Test func theHeadroomPadRidesInAheadOfTheBendAndLeavesWithIt() throws {
-        guard audioOutputAvailable else { return }
+    @Test func theHeadroomPadRidesInAheadOfTheBendAndLeavesWithIt() async throws {
+        guard await audioOutputAvailable.value else { return }
         struct Outcome {
             var beforePad: Double?
             var padded: Double?
@@ -1972,7 +1985,7 @@ struct PlaybackEngineSmokeTests {
             bassSwapOffset: 1.0, overlapDuration: 2.0,
             rampLeadSeconds: 2, rampReleaseSeconds: 2))
 
-        let result = withWatchdog("headroomPad", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("headroomPad", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -2042,8 +2055,8 @@ struct PlaybackEngineSmokeTests {
     /// the ramps that never ran would have released it. The tempo glide put the
     /// *outgoing* deck in exactly the same position, and this pins it: the deck
     /// still playing the song must come back to unity.
-    @Test func aDroppedPlanUnbendsTheDeckItWasAlreadyGliding() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aDroppedPlanUnbendsTheDeckItWasAlreadyGliding() async throws {
+        guard await audioOutputAvailable.value else { return }
         let plan = TransitionPlan.beatMatched(BeatMatchedPlan(
             outPoint: 5.2, inPoint: 0, overlapBars: 2,
             outgoingRate: 0.90, incomingRate: 1.05,
@@ -2053,7 +2066,7 @@ struct PlaybackEngineSmokeTests {
             var midRamp: Float?
             var afterOutPoint: Float?
         }
-        let result = withWatchdog("droppedPlanUnbends", timeout: 45) { () -> Outcome in
+        let result = await withWatchdog("droppedPlanUnbends", timeout: 45) { () -> Outcome in
             var o = Outcome()
             let engine = PlaybackEngine()
             defer { engine.stopAll() }
@@ -2098,8 +2111,8 @@ struct PlaybackEngineSmokeTests {
     /// picked up again by the 20 Hz glide timer the moment the deck has a
     /// source to write a fader for. That is a re-application, not a survival,
     /// and only a poll across the following seconds can see it.
-    @Test func aChainOfSeamsLeavesEveryReusedDeckClean() throws {
-        guard audioOutputAvailable else { return }
+    @Test func aChainOfSeamsLeavesEveryReusedDeckClean() async throws {
+        guard await audioOutputAvailable.value else { return }
         /// The worst thing seen on one deck across one mid-track poll.
         ///
         /// The pad is judged by how much *deeper* it got, not by its absolute
@@ -2147,7 +2160,7 @@ struct PlaybackEngineSmokeTests {
 
         var everything: [Observation] = []
         for reuse in Reuse.allCases {
-        let result = withWatchdog("seamChain-\(reuse.rawValue)", timeout: 120) { () -> [Observation] in
+        let result = await withWatchdog("seamChain-\(reuse.rawValue)", timeout: 120) { () -> [Observation] in
             var observations: [Observation] = []
             let engine = PlaybackEngine()
             let log = EventLog(engine)
@@ -2266,8 +2279,8 @@ struct PlaybackEngineSmokeTests {
     /// exactly. So this asks the same question of every way a release can be
     /// interrupted, and asks it by *polling*: a rate that reads 1.0 the instant
     /// after the interruption proves nothing if the next 50 ms tick re-bends it.
-    @Test func theSettlingReleaseSurvivesEveryTeardown() throws {
-        guard audioOutputAvailable else { return }
+    @Test func theSettlingReleaseSurvivesEveryTeardown() async throws {
+        guard await audioOutputAvailable.value else { return }
         enum Interruption: String, CaseIterable {
             /// The spent deck is restarted and runs out *inside* the release —
             /// the drained-early path, whose `else` branch is a bare
@@ -2298,8 +2311,8 @@ struct PlaybackEngineSmokeTests {
             rampLeadSeconds: 2, rampReleaseSeconds: 6))
 
         for interruption in Interruption.allCases {
-            let result = withWatchdog("settlingTeardown-\(interruption.rawValue)",
-                                      timeout: 60) { () -> Outcome? in
+            let result = await withWatchdog("settlingTeardown-\(interruption.rawValue)",
+                                            timeout: 60) { () -> Outcome? in
                 var o = Outcome()
                 let engine = PlaybackEngine()
                 let log = EventLog(engine)
