@@ -260,7 +260,7 @@ struct IOSUpdaterSheet: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity)
-        .presentationDetents([.height(360)])
+        .compatSheetHeight(360)
     }
 
     private func primaryButton(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {

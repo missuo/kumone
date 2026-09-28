@@ -40,7 +40,7 @@ struct CollectionsView: View {
                         } else {
                             CardGrid {
                                 ForEach(account.likedAlbums) { album in
-                                    NavigationLink(value: Destination.album(album.id)) {
+                                    AppDestinationLink(value: Destination.album(album.id)) {
                                         CoverCardBody(
                                             coverURL: album.picUrl?.resizedImageURL(384),
                                             title: album.name,
@@ -59,7 +59,7 @@ struct CollectionsView: View {
                         } else {
                             CardGrid(minWidth: 140) {
                                 ForEach(account.likedArtists) { artist in
-                                    NavigationLink(value: Destination.artist(artist.id)) {
+                                    AppDestinationLink(value: Destination.artist(artist.id)) {
                                         VStack(spacing: 10) {
                                             CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
                                                 .frame(width: 128, height: 128)

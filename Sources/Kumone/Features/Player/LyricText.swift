@@ -19,7 +19,7 @@ struct LyricText: View {
     @EnvironmentObject private var settings: SettingsManager
 
     var body: some View {
-        if settings.lyricsAnnotation == .furigana, let furigana = line.furigana {
+        if #available(iOS 16.0, *), settings.lyricsAnnotation == .furigana, let furigana = line.furigana {
             RubyText(
                 segments: furigana,
                 size: size,

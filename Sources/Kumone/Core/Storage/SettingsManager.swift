@@ -60,6 +60,11 @@ enum LyricsAnnotation: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    static var supportedCases: [Self] {
+        if #available(iOS 16.0, *) { return allCases }
+        return [.off, .romaji]
+    }
+
     var displayName: String {
         switch self {
         case .off: return String(localized: "关闭")
@@ -325,8 +330,13 @@ final class SettingsManager: ObservableObject {
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         // Carry over the old on/off romaji toggle for anyone who had it on.
-        lyricsAnnotation = defaults.string(forKey: Keys.annotation).flatMap(LyricsAnnotation.init)
+        let storedAnnotation = defaults.string(forKey: Keys.annotation).flatMap(LyricsAnnotation.init)
             ?? (defaults.bool(forKey: Keys.showRomaji) ? .romaji : .off)
+        if #available(iOS 16.0, *) {
+            lyricsAnnotation = storedAnnotation
+        } else {
+            lyricsAnnotation = storedAnnotation == .furigana ? .romaji : storedAnnotation
+        }
         verbatimLyrics = defaults.object(forKey: Keys.verbatimLyrics) as? Bool ?? true
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? true
         if let rawSourceIDs = defaults.stringArray(forKey: Keys.unblockSources) {
@@ -335,6 +345,12 @@ final class SettingsManager: ObservableObject {
             enabledAudioSourceIDs = Set(AudioSourceID.allCases)
         }
         autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--test-disable-updates") {
+            autoCheckUpdates = false
+        }
+        #endif
+
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         #if os(macOS)
         automixEnabled = defaults.object(forKey: Keys.automix) as? Bool ?? false

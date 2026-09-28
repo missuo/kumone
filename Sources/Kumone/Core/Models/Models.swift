@@ -389,7 +389,7 @@ struct PlayRecordItem: Decodable, Hashable {
 
 enum Formatters {
     private static var usesChineseUnits: Bool {
-        Locale.current.language.languageCode?.identifier == "zh"
+        Locale.current.languageCode == "zh"
     }
 
     static func playCount(_ count: Int) -> String {

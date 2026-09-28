@@ -69,7 +69,7 @@ public struct IOSMainWindow: View {
     @ViewBuilder
     private var presentationRoot: some View {
         if UIDevice.current.userInterfaceIdiom == .phone {
-            if #available(iOS 18.0, *) {
+            if #available(iOS 18.0, *), !NavigationCompatibility.usesLegacyNavigation {
                 zoomNowPlayingRoot
             } else {
                 legacyPresentationRoot
@@ -176,7 +176,7 @@ public struct IOSMainWindow: View {
 
     @ViewBuilder
     private var tabInterface: some View {
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), !NavigationCompatibility.usesLegacyNavigation {
             iOS26TabInterface
         } else {
             customTabInterface
@@ -287,7 +287,7 @@ public struct IOSMainWindow: View {
         _ tab: IOSTab,
         @ViewBuilder _ content: () -> Content
     ) -> some View {
-        NavigationStack(path: binding(for: tab)) {
+        AppNavigationStack(path: binding(for: tab)) {
             content().appDestinations()
         }
     }
@@ -300,6 +300,7 @@ public struct IOSMainWindow: View {
         content()
             .opacity(selectedTab == tab ? 1 : 0)
             .allowsHitTesting(selectedTab == tab)
+            .accessibilityHidden(selectedTab != tab)
             .zIndex(selectedTab == tab ? 1 : 0)
     }
 
@@ -613,21 +614,21 @@ struct IOSLibraryView: View {
             if account.hasAuthCookie {
                 Section("我的音乐") {
                     if let liked = account.likedSongsPlaylist {
-                        NavigationLink(value: Destination.playlist(liked.id)) {
+                        AppDestinationLink(value: Destination.playlist(liked.id)) {
                             Label("我喜欢的音乐", systemImage: "heart.fill")
                                 .foregroundStyle(Theme.accent)
                         }
                     }
-                    NavigationLink(value: Destination.daily) {
+                    AppDestinationLink(value: Destination.daily) {
                         Label("每日推荐", systemImage: "calendar")
                     }
-                    NavigationLink(value: Destination.recents) {
+                    AppDestinationLink(value: Destination.recents) {
                         Label("最近播放", systemImage: "clock.fill")
                     }
-                    NavigationLink(value: Destination.collections) {
+                    AppDestinationLink(value: Destination.collections) {
                         Label("我的收藏", systemImage: "star.fill")
                     }
-                    NavigationLink(value: Destination.cloud) {
+                    AppDestinationLink(value: Destination.cloud) {
                         Label("音乐云盘", systemImage: "icloud.fill")
                     }
                 }
@@ -635,7 +636,7 @@ struct IOSLibraryView: View {
                 if !account.createdPlaylists.isEmpty {
                     Section {
                         ForEach(account.createdPlaylists) { playlist in
-                            NavigationLink(value: Destination.playlist(playlist.id)) {
+                            AppDestinationLink(value: Destination.playlist(playlist.id)) {
                                 HStack(spacing: 10) {
                                     CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(80), animated: false)
                                         .frame(width: 32, height: 32)
@@ -668,7 +669,7 @@ struct IOSLibraryView: View {
                 if !account.subscribedPlaylists.isEmpty {
                     Section("收藏的歌单") {
                         ForEach(account.subscribedPlaylists) { playlist in
-                            NavigationLink(value: Destination.playlist(playlist.id)) {
+                            AppDestinationLink(value: Destination.playlist(playlist.id)) {
                                 HStack(spacing: 10) {
                                     CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(80), animated: false)
                                         .frame(width: 32, height: 32)
@@ -701,10 +702,11 @@ struct IOSLibraryView: View {
                 } label: {
                     Image(systemName: "gearshape")
                 }
+                .accessibilityLabel("设置")
             }
         }
         .sheet(isPresented: $showSettings) {
-            NavigationStack {
+            AppNavigationStack {
                 SettingsView()
                     .navigationTitle("设置")
                     .toolbar {

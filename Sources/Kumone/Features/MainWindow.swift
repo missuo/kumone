@@ -21,7 +21,6 @@ struct MainWindow: View {
     @State private var showLogin = false
     @State private var detailWidth: CGFloat = 0
     @State private var mainColumnLeadingInset: CGFloat = 0
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var nowPlayingChromeHidden = false
     @State private var nowPlayingChromeFadedOut = false
     @State private var nowPlayingChromeTask: Task<Void, Never>?
@@ -46,19 +45,15 @@ struct MainWindow: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        AppWindowColumns {
             SidebarView(selection: $selection, showLogin: $showLogin)
-                .navigationSplitViewColumnWidth(min: 200, ideal: Theme.Layout.sidebarWidth, max: 280)
         } detail: {
             detailStack
-                .onGeometryChange(for: CGRect.self) { proxy in
-                    proxy.frame(in: .named("mainWindow"))
-                } action: { frame in
+                .observeMainColumnFrame { frame in
                     detailWidth = frame.width
                     mainColumnLeadingInset = frame.minX
                 }
         }
-        .navigationSplitViewStyle(.balanced)
         .coordinateSpace(name: "mainWindow")
         .overlay(alignment: .trailing) {
             if settings.showMainWindowAmbientBackground, detailWidth > 0 {
@@ -192,7 +187,7 @@ struct MainWindow: View {
     }
 
     private var detailStack: some View {
-        NavigationStack(path: pathBinding) {
+        AppNavigationStack(path: pathBinding) {
             rootView
                 .playerContentInset()
                 .appDestinations()
