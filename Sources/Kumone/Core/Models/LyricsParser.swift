@@ -48,9 +48,82 @@ struct ParsedLyrics: Hashable {
 }
 
 enum LyricsParser {
+    // Fixed, valid patterns: cache their compilation and use UTF-16 ranges throughout.
+    private static let timeTag = try! NSRegularExpression(pattern: #"\[(\d+):(\d+)(?:[.:](\d+))?\]"#)
+    private static let lineTag = try! NSRegularExpression(pattern: #"^\[(\d+),(\d+)\]"#)
+    private static let wordTag = try! NSRegularExpression(pattern: #"\((\d+),(\d+),\d+\)([^(]*)"#)
+
     /// Parses an LRC body into (time, text) pairs. Handles multiple timestamps
     /// per line and both `.` / `:` millisecond separators.
+    static func parseLRCBackport(_ lrc: String) -> [(time: TimeInterval, text: String)] {
+        var result: [(TimeInterval, String)] = []
+
+        for rawLine in lrc.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            let source = line as NSString
+            let matches = timeTag.matches(in: line, range: NSRange(location: 0, length: source.length))
+            guard !matches.isEmpty else { continue }
+            guard let lastMatch = matches.last else { continue }
+            let content = source.substring(from: NSMaxRange(lastMatch.range))
+                .trimmingCharacters(in: .whitespaces)
+            for match in matches {
+                let min = Double(source.substring(with: match.range(at: 1))) ?? 0
+                let sec = Double(source.substring(with: match.range(at: 2))) ?? 0
+                var frac = 0.0
+                if match.range(at: 3).location != NSNotFound {
+                    let msStr = source.substring(with: match.range(at: 3))
+                    frac = (Double(msStr) ?? 0) / pow(10, Double(msStr.count))
+                }
+                result.append((min * 60 + sec + frac, content))
+            }
+        }
+        return result.sorted { $0.0 < $1.0 }
+    }
+
+    /// Parses NetEase verbatim `yrc` lyrics: each content line is
+    /// `[lineStartMs,lineDurMs](wStartMs,wDurMs,0)word(...)word…`. JSON metadata
+    /// (credits) lines at the top don't match the `[num,num]` head and are
+    /// skipped.
+    static func parseYRCBackport(_ yrc: String) -> [LyricLine] {
+        var lines: [LyricLine] = []
+        var idx = 0
+        for raw in yrc.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            let source = line as NSString
+            let range = NSRange(location: 0, length: source.length)
+            guard let head = lineTag.firstMatch(in: line, range: range) else { continue }
+            let lineStart = (Double(source.substring(with: head.range(at: 1))) ?? 0) / 1000
+            var words: [LyricWord] = []
+            var text = ""
+            for w in wordTag.matches(in: line, range: range) {
+                let start = (Double(source.substring(with: w.range(at: 1))) ?? 0) / 1000
+                let duration = (Double(source.substring(with: w.range(at: 2))) ?? 0) / 1000
+                let piece = source.substring(with: w.range(at: 3))
+                words.append(LyricWord(text: piece, start: start, duration: duration))
+                text += piece
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !words.isEmpty else { continue }
+            lines.append(LyricLine(id: idx, time: lineStart, text: trimmed, words: words))
+            idx += 1
+        }
+        return lines
+    }
+
+    // Keep the existing parser on supported systems; only iOS 15 uses ICU.
     static func parseLRC(_ lrc: String) -> [(time: TimeInterval, text: String)] {
+        if #available(iOS 16.0, *) { return parseLRCNative(lrc) }
+        return parseLRCBackport(lrc)
+    }
+
+    static func parseYRC(_ yrc: String) -> [LyricLine] {
+        if #available(iOS 16.0, *) { return parseYRCNative(yrc) }
+        return parseYRCBackport(yrc)
+    }
+
+    @available(iOS 16.0, *)
+    private static func parseLRCNative(_ lrc: String) -> [(time: TimeInterval, text: String)] {
         var result: [(TimeInterval, String)] = []
         let timeTag = #/\[(\d+):(\d+)(?:[.:](\d+))?\]/#
 
@@ -79,7 +152,8 @@ enum LyricsParser {
     /// `[lineStartMs,lineDurMs](wStartMs,wDurMs,0)word(...)word…`. JSON metadata
     /// (credits) lines at the top don't match the `[num,num]` head and are
     /// skipped.
-    static func parseYRC(_ yrc: String) -> [LyricLine] {
+    @available(iOS 16.0, *)
+    private static func parseYRCNative(_ yrc: String) -> [LyricLine] {
         let lineTag = #/^\[(\d+),(\d+)\]/#
         let wordTag = #/\((\d+),(\d+),\d+\)([^(]*)/#
         var lines: [LyricLine] = []

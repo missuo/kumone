@@ -89,7 +89,7 @@ struct LyricsPanel: View {
                         isUserScrolling = true
                         resumeTask?.cancel()
                         resumeTask = Task {
-                            try? await Task.sleep(for: .seconds(3))
+                            try? await Task.sleep(nanoseconds: UInt64(3 * 1_000_000_000))
                             guard !Task.isCancelled else { return }
                             isUserScrolling = false
                         }

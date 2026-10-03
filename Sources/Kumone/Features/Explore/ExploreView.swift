@@ -89,7 +89,7 @@ struct ExploreView: View {
                 } else {
                     CardGrid {
                         ForEach(Array(model.playlists.enumerated()), id: \.element.id) { index, playlist in
-                            NavigationLink(value: Destination.playlist(playlist.id)) {
+                            AppDestinationLink(value: Destination.playlist(playlist.id)) {
                                 CoverCardBody(
                                     coverURL: playlist.coverURL?.resizedImageURL(384),
                                     title: playlist.name,
@@ -174,7 +174,7 @@ struct ToplistGrid: View {
             alignment: .leading, spacing: 20
         ) {
             ForEach(toplists) { toplist in
-                NavigationLink(value: Destination.playlist(toplist.id)) {
+                AppDestinationLink(value: Destination.playlist(toplist.id)) {
                     HStack(spacing: 14) {
                         CachedAsyncImage(url: toplist.coverImgUrl?.resizedImageURL(256))
                             .frame(width: 110, height: 110)

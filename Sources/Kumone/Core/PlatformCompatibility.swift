@@ -127,3 +127,55 @@ extension View {
         }
     }
 }
+
+extension View {
+    @ViewBuilder
+    func compatOpacityTransition() -> some View {
+        if #available(iOS 16.0, *) { contentTransition(.opacity) } else { self }
+    }
+
+    @ViewBuilder
+    func compatHiddenScrollBackground() -> some View {
+        if #available(iOS 16.0, *) { scrollContentBackground(.hidden) } else { self }
+    }
+
+    @ViewBuilder
+    func compatSheetHeight(_ height: CGFloat) -> some View {
+        #if os(iOS)
+        if #available(iOS 16.0, *) { presentationDetents([.height(height)]) } else { self }
+        #else
+        self
+        #endif
+    }
+}
+
+struct AppLabeledContent: View {
+    let title: LocalizedStringKey
+    let value: String
+
+    init(_ title: LocalizedStringKey, value: String) {
+        self.title = title
+        self.value = value
+    }
+
+    var body: some View {
+        if #available(iOS 16.0, *) {
+            LabeledContent(title, value: value)
+        } else {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(value).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
+
+extension View {
+    @ViewBuilder
+    func compatGroupedForm() -> some View {
+        if #available(iOS 16.0, *) { formStyle(.grouped) } else { self }
+    }
+}

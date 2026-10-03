@@ -206,7 +206,7 @@ struct LoginSheet: View {
 
                 var consecutiveErrors = 0
                 while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(1.2))
+                    try await Task.sleep(nanoseconds: UInt64(1.2 * 1_000_000_000))
                     let check: NeteaseAPI.QRCheckResponse
                     do {
                         check = try await NeteaseAPI.qrCheck(unikey: key)
@@ -347,7 +347,7 @@ struct LoginSheet: View {
                 cooldownTask?.cancel()
                 cooldownTask = Task {
                     while smsCooldown > 0, !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(1))
+                        try? await Task.sleep(nanoseconds: UInt64(1 * 1_000_000_000))
                         smsCooldown -= 1
                     }
                 }

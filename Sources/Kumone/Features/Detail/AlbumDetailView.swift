@@ -53,7 +53,7 @@ struct AlbumDetailView: View {
                             HStack(spacing: 16) {
                                 Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
                                 ForEach(otherAlbums) { item in
-                                    NavigationLink(value: Destination.album(item.id)) {
+                                    AppDestinationLink(value: Destination.album(item.id)) {
                                         CoverCardBody(
                                             coverURL: item.picUrl?.resizedImageURL(384),
                                             title: item.name,
@@ -125,7 +125,7 @@ struct AlbumDetailView: View {
                         .lineLimit(3)
 
                     if let artist = album.artist {
-                        NavigationLink(value: Destination.artist(artist.id)) {
+                        AppDestinationLink(value: Destination.artist(artist.id)) {
                             Text(artist.name)
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(Theme.accent)
@@ -156,7 +156,7 @@ struct AlbumDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showFullDescription) {
-                    NavigationStack {
+                    AppNavigationStack {
                         ScrollView {
                             Text(description)
                                 .font(.system(size: 14))
@@ -229,7 +229,7 @@ struct AlbumDetailView: View {
                     .lineLimit(2)
 
                 if let artist = album.artist {
-                    NavigationLink(value: Destination.artist(artist.id)) {
+                    AppDestinationLink(value: Destination.artist(artist.id)) {
                         Text(artist.name)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(Theme.accent)

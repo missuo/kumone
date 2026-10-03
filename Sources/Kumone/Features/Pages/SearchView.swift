@@ -209,9 +209,7 @@ struct SearchView: View {
 
     private func artistCards(_ items: some Collection<ArtistSummary>) -> some View {
         ForEach(Array(items)) { artist in
-            NavigationLink {
-                ArtistDetailView(artistID: artist.id)
-            } label: {
+            AppDestinationLink(value: .artist(artist.id)) {
                 VStack(spacing: 10) {
                     CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
                         .frame(width: 128, height: 128)
@@ -229,9 +227,7 @@ struct SearchView: View {
 
     private func albumCards(_ items: some Collection<AlbumSummary>) -> some View {
         ForEach(Array(items)) { album in
-            NavigationLink {
-                AlbumDetailView(albumID: album.id)
-            } label: {
+            AppDestinationLink(value: .album(album.id)) {
                 CoverCardBody(
                     coverURL: album.picUrl?.resizedImageURL(384),
                     title: album.name,
@@ -244,9 +240,7 @@ struct SearchView: View {
 
     private func playlistCards(_ items: some Collection<PlaylistSummary>) -> some View {
         ForEach(Array(items)) { playlist in
-            NavigationLink {
-                PlaylistDetailView(playlistID: playlist.id)
-            } label: {
+            AppDestinationLink(value: .playlist(playlist.id)) {
                 CoverCardBody(
                     coverURL: playlist.coverURL?.resizedImageURL(384),
                     title: playlist.name,

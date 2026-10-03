@@ -3,7 +3,7 @@
 name: KumoneIOS
 options:
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "15.0"
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Debug.xcconfig

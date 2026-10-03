@@ -89,7 +89,7 @@ struct ArtistDetailView: View {
                             HStack(spacing: 16) {
                                 Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
                                 ForEach(similar) { sim in
-                                    NavigationLink(value: Destination.artist(sim.id)) {
+                                    AppDestinationLink(value: Destination.artist(sim.id)) {
                                         VStack(spacing: 8) {
                                             CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
                                                 .frame(width: isCompact ? 80 : 100, height: isCompact ? 80 : 100)
@@ -274,7 +274,7 @@ struct ArtistDetailView: View {
     }
 
     private func albumCard(_ album: AlbumSummary) -> some View {
-        NavigationLink(value: Destination.album(album.id)) {
+        AppDestinationLink(value: Destination.album(album.id)) {
             CoverCardBody(
                 coverURL: album.picUrl?.resizedImageURL(384),
                 title: album.name,

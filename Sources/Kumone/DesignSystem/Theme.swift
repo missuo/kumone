@@ -113,8 +113,10 @@ extension View {
         #else
         if #available(iOS 18.0, *) {
             toolbarBackgroundVisibility(.hidden, for: .automatic)
-        } else {
+        } else if #available(iOS 16.0, *) {
             toolbarBackground(.hidden, for: .navigationBar)
+        } else {
+            self
         }
         #endif
     }

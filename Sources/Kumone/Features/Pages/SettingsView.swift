@@ -133,13 +133,19 @@ struct SettingsView: View {
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
                 Toggle("逐字歌词（卡拉OK）", isOn: $settings.verbatimLyrics)
                 Picker("日文歌词读音", selection: $settings.lyricsAnnotation) {
-                    ForEach(LyricsAnnotation.allCases) { annotation in
+                    ForEach(LyricsAnnotation.supportedCases) { annotation in
                         Text(annotation.displayName).tag(annotation)
                     }
                 }
-                Text("罗马音在歌词上方另起一行，汉字读音把假名标在汉字正上方；缺少官方罗马音时自动生成读音")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Group {
+                    if #available(iOS 16.0, *) {
+                        Text("罗马音在歌词上方另起一行，汉字读音把假名标在汉字正上方；缺少官方罗马音时自动生成读音")
+                    } else {
+                        Text("罗马音在歌词上方另起一行；缺少官方罗马音时自动生成读音")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Toggle("主界面环境色", isOn: $settings.showMainWindowAmbientBackground)
                 if settings.showMainWindowAmbientBackground {
                     VStack(alignment: .leading, spacing: 6) {
@@ -244,7 +250,7 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
                 #if os(macOS)
-                LabeledContent("歌曲缓存", value: audioCacheSize)
+                AppLabeledContent("歌曲缓存", value: audioCacheSize)
                 Picker("歌曲缓存上限", selection: $settings.audioCacheLimit) {
                     Text("512 MB").tag(Int64(512) << 20)
                     Text("2 GB").tag(Int64(2) << 30)
@@ -266,7 +272,7 @@ struct SettingsView: View {
 
             Section("账号") {
                 if let profile = account.profile {
-                    LabeledContent("当前账号", value: profile.nickname)
+                    AppLabeledContent("当前账号", value: profile.nickname)
                     Button("退出登录", role: .destructive) {
                         Task { await AccountStore.shared.logout() }
                     }
@@ -284,7 +290,7 @@ struct SettingsView: View {
             }
 
             Section("关于") {
-                LabeledContent("Kumone", value: appVersion)
+                AppLabeledContent("Kumone", value: appVersion)
                 #if os(iOS)
                 Button {
                     IOSUpdater.shared.check(interactive: true)
@@ -300,7 +306,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .compatGroupedForm()
         #if os(macOS)
         .frame(width: 440, height: 600)
         #endif

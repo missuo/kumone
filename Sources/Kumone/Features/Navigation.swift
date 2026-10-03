@@ -91,33 +91,45 @@ extension Array where Element == Destination {
 /// Registers all shared navigation destinations on a stack.
 struct DestinationsModifier: ViewModifier {
     func body(content: Content) -> some View {
-        content.navigationDestination(for: Destination.self) { destination in
-            Group {
-                switch destination {
-                case .playlist(let id):
-                    PlaylistDetailView(playlistID: id)
-                case .radarPlaylist(let id):
-                    PlaylistDetailView(playlistID: id, recommendationContext: .radar)
-                case .album(let id):
-                    AlbumDetailView(albumID: id)
-                case .artist(let id):
-                    ArtistDetailView(artistID: id)
-                case .daily:
-                    DailySongsView()
-                case .toplists:
-                    ToplistsView()
-                case .recents:
-                    RecentsView()
-                case .collections:
-                    CollectionsView()
-                case .cloud:
-                    CloudView()
-                case .search(let query):
-                    SearchView(query: query)
-                }
+        if #available(iOS 16.0, *), !NavigationCompatibility.usesLegacyNavigation {
+            content.navigationDestination(for: Destination.self) { destination in
+                DestinationPage(destination: destination)
             }
-            .playerContentInset()
+        } else {
+            content
         }
+    }
+}
+
+struct DestinationPage: View {
+    let destination: Destination
+
+    var body: some View {
+        Group {
+            switch destination {
+            case .playlist(let id):
+                PlaylistDetailView(playlistID: id)
+            case .radarPlaylist(let id):
+                PlaylistDetailView(playlistID: id, recommendationContext: .radar)
+            case .album(let id):
+                AlbumDetailView(albumID: id)
+            case .artist(let id):
+                ArtistDetailView(artistID: id)
+            case .daily:
+                DailySongsView()
+            case .toplists:
+                ToplistsView()
+            case .recents:
+                RecentsView()
+            case .collections:
+                CollectionsView()
+            case .cloud:
+                CloudView()
+            case .search(let query):
+                SearchView(query: query)
+            }
+        }
+        .playerContentInset()
     }
 }
 

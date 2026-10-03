@@ -164,7 +164,7 @@ struct HomeView: View {
             if !model.radarPlaylists.isEmpty {
                 Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.radarPlaylists) { radar in
-                        NavigationLink(value: Destination.radarPlaylist(radar.id)) {
+                        AppDestinationLink(value: Destination.radarPlaylist(radar.id)) {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,
@@ -181,7 +181,7 @@ struct HomeView: View {
             if !model.toplists.isEmpty {
                 Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.toplists) { toplist in
-                        NavigationLink(value: Destination.playlist(toplist.id)) {
+                        AppDestinationLink(value: Destination.playlist(toplist.id)) {
                             toplistCard(toplist)
                         }
                         .buttonStyle(.plain)
@@ -218,7 +218,7 @@ struct HomeView: View {
             HStack(spacing: 16) {
                 Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
                 if account.isLoggedIn {
-                    NavigationLink(value: Destination.daily) {
+                    AppDestinationLink(value: Destination.daily) {
                         FeatureCard(
                             title: "每日推荐",
                             subtitle: "根据你的口味生成",
@@ -287,7 +287,7 @@ struct HomeView: View {
     // MARK: - Cards
 
     private func playlistCard(_ playlist: PlaylistSummary) -> some View {
-        NavigationLink(value: Destination.playlist(playlist.id)) {
+        AppDestinationLink(value: Destination.playlist(playlist.id)) {
             CoverCardBody(
                 coverURL: playlist.coverURL?.resizedImageURL(384),
                 title: playlist.name,
@@ -301,7 +301,7 @@ struct HomeView: View {
     }
 
     private func albumCard(_ album: AlbumSummary) -> some View {
-        NavigationLink(value: Destination.album(album.id)) {
+        AppDestinationLink(value: Destination.album(album.id)) {
             CoverCardBody(
                 coverURL: album.picUrl?.resizedImageURL(384),
                 title: album.name,
@@ -319,7 +319,7 @@ struct HomeView: View {
     }
 
     private func artistCard(_ artist: ArtistSummary) -> some View {
-        NavigationLink(value: Destination.artist(artist.id)) {
+        AppDestinationLink(value: Destination.artist(artist.id)) {
             VStack(spacing: 10) {
                 CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
                     .frame(width: 128, height: 128)

@@ -147,6 +147,7 @@ enum RubyAttributedString {
 /// so the line is drawn with Core Text inside a `Canvas`. A `Layout` wrapper
 /// asks the framesetter how tall the line will be at the proposed width, which
 /// keeps the view participating in normal SwiftUI sizing and wrapping.
+@available(iOS 16.0, *)
 struct RubyText: View, Animatable {
     private var segments: [RubySegment]
     private var size: CGFloat
@@ -232,6 +233,7 @@ private final class AttributedBox: @unchecked Sendable {
     init(_ string: NSAttributedString) { self.string = string }
 }
 
+@available(iOS 16.0, *)
 private struct RubyTextLayout: Layout {
     private let box: AttributedBox
 

@@ -512,7 +512,7 @@ final class PlayerService: ObservableObject {
                     ToastCenter.shared.show(String(localized: "获取私人漫游数据失败"))
                     return
                 }
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(nanoseconds: UInt64(1 * 1_000_000_000))
             }
         }
         guard !fmUpcoming.isEmpty else { return }

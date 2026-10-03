@@ -187,7 +187,7 @@ struct PlayerBar: View {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(.white)
-                        .contentTransition(.opacity)
+                        .compatOpacityTransition()
                 }
             }
         }
