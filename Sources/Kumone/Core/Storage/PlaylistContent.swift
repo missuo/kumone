@@ -5,7 +5,13 @@ import Foundation
 final class PlaylistContent: ObservableObject {
     let playlistID: Int
     @Published var detail: PlaylistDetail?
-    @Published var tracks: [Track] = []
+    @Published var tracks: [Track] = [] {
+        didSet { orderedTracks = sortOrder.sorted(tracks) }
+    }
+    @Published var sortOrder: PlaylistTrackSort = .addedNewestFirst {
+        didSet { orderedTracks = sortOrder.sorted(tracks) }
+    }
+    private(set) var orderedTracks: [Track] = []
     @Published var privileges: [Int: TrackPrivilege] = [:]
     @Published var isLoading = true
     @Published var isLoadingMore = false
@@ -39,12 +45,12 @@ final class PlaylistContent: ObservableObject {
     }
 
     var filteredTracks: [Track] {
-        let query = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty else { return tracks }
-        return tracks.filter {
-            $0.name.lowercased().contains(query)
-                || $0.artistNames.lowercased().contains(query)
-                || $0.album.name.lowercased().contains(query)
+        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return orderedTracks }
+        return orderedTracks.filter {
+            $0.name.localizedStandardContains(query)
+                || $0.artistNames.localizedStandardContains(query)
+                || $0.album.name.localizedStandardContains(query)
         }
     }
 

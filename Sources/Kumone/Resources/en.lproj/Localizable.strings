@@ -465,3 +465,20 @@
 "无法加载歌单，请重试" = "Unable to load the playlist. Please try again.";
 "无法读取下载记录，请重试" = "Unable to read download records. Please try again.";
 "其他歌单中的相同歌曲也会移除下载。" = "Downloads of the same songs in other playlists will also be removed.";
+
+/* Liked playlist search and sorting (iOS) */
+"更多" = "More";
+"在歌单内查找" = "Search in Playlist";
+"排序方式" = "Sort By";
+"添加时间（由新到旧）" = "Date Added (Newest First)";
+"添加时间（由旧到新）" = "Date Added (Oldest First)";
+"歌曲名" = "Song Name";
+"专辑名" = "Album Name";
+"歌手名" = "Artist Name";
+"按歌名、歌手或专辑搜索" = "Search by song, artist, or album";
+"找到 %lld 首匹配歌曲" = "%lld matching songs";
+"清空搜索" = "Clear Search";
+"没有匹配的歌曲" = "No Matching Songs";
+"试试其他歌名、歌手或专辑" = "Try another song, artist, or album";
+"正在加载歌单，搜索结果会继续更新…" = "Loading playlist — search results will keep updating…";
+"歌单未完整加载，搜索结果可能不完整" = "Playlist loading is incomplete; search results may be incomplete";

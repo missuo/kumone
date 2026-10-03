@@ -60,20 +60,39 @@ enum PlaybackJournal {
         /// wrote. Not re-entrant, and deliberately not: two overlapping
         /// captures would each see the other's lines.
         func capture<T>(_ body: () throws -> T) rethrows -> (result: T, lines: [String]) {
+            begin()
+            defer { end() }
+            let result = try body()
+            return (result, captured())
+        }
+
+        /// The same for a body that awaits. The capture ends when the await
+        /// returns, so a test that gives up on stuck work stops capturing too,
+        /// rather than leaving the tap to be closed whenever that work ends.
+        func capture<T>(_ body: () async throws -> T) async rethrows -> (result: T, lines: [String]) {
+            begin()
+            defer { end() }
+            let result = try await body()
+            return (result, captured())
+        }
+
+        private func begin() {
             lock.lock()
             lines = []
             sink = { _ in }
             lock.unlock()
-            defer {
-                lock.lock()
-                sink = nil
-                lock.unlock()
-            }
-            let result = try body()
+        }
+
+        private func end() {
             lock.lock()
-            let captured = lines
+            sink = nil
             lock.unlock()
-            return (result, captured)
+        }
+
+        private func captured() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return lines
         }
     }
 
