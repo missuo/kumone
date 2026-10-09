@@ -5,42 +5,41 @@ struct DailySongsView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
 
     var body: some View {
-        ScrollView {
+        let displayed = isLoading || errorMessage != nil ? [] : tracks
+        TrackListScrollView(trackIDs: displayed.map(\.id)) {
             VStack(alignment: .leading, spacing: 20) {
                 header
                     .padding(.horizontal, Theme.Layout.contentInset)
                     .padding(.top, 16)
-
                 if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 300)
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 300)
                 } else if let errorMessage {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await load() }
-                    }
-                    .frame(minHeight: 300)
+                    ErrorStateView(message: errorMessage) { Task { await load() } }
+                        .frame(minHeight: 300)
                 } else if tracks.isEmpty {
                     EmptyStateView(icon: "calendar.badge.clock", title: "暂无每日推荐",
                                    subtitle: "多听几首歌培养口味，每天 6:00 更新")
                         .frame(minHeight: 300)
-                } else {
-                    TrackListView(
-                        tracks: tracks,
-                        source: .daily,
-                        context: .daily,
-                        recommendationContext: .daily,
-                        onRecommendationReduced: { rejected, replacement in
-                            tracks.replaceRecommendation(rejected, with: replacement)
-                        }
-                    )
-                        .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
-                PlayerClearanceSpacer()
             }
+        } rows: { layout in
+            TrackListView(
+                tracks: displayed,
+                source: .daily,
+                context: .daily,
+                recommendationContext: .daily,
+                onRecommendationReduced: { rejected, replacement in
+                    tracks.replaceRecommendation(rejected, with: replacement)
+                },
+                layout: layout
+            )
+            .padding(.horizontal, Theme.Layout.contentInset - 10)
+        } footer: {
+            PlayerClearanceSpacer()
         }
         .navigationTitle("每日推荐")
         .task {

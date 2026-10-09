@@ -5,7 +5,7 @@ import SwiftUI
 struct DownloadedMusicView: View {
     var collectionID: String?
     @ObservedObject private var downloads = DownloadManager.shared
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @Environment(\.openDestination) private var openDestination
     @State private var isSelecting = false
     @State private var selectedIDs: Set<Int> = []
@@ -20,7 +20,8 @@ struct DownloadedMusicView: View {
 
     var body: some View {
         let displayed = tracks
-        ScrollView {
+        let visible = !downloads.isReady && downloads.errorMessage == nil ? [] : displayed
+        TrackListScrollView(trackIDs: visible.map(\.id), spacing: 16) {
             VStack(alignment: .leading, spacing: 16) {
                 if isSelecting { selectionHeader(tracks: displayed) } else { header(tracks: displayed) }
 
@@ -33,13 +34,15 @@ struct DownloadedMusicView: View {
                     EmptyStateView(icon: "arrow.down.circle", title: "还没有下载歌曲",
                                    subtitle: "在歌曲菜单或歌单页面选择下载，即可离线收听")
                         .frame(minHeight: 300)
-                } else {
-                    TrackListView(tracks: displayed, source: .none, selection: isSelecting ? $selectedIDs : nil)
-                        .disabled(isRemoving)
-                        .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
-                PlayerClearanceSpacer()
             }
+        } rows: { layout in
+            TrackListView(tracks: visible, source: .none, selection: isSelecting ? $selectedIDs : nil,
+                          layout: layout)
+                .disabled(isRemoving)
+                .padding(.horizontal, Theme.Layout.contentInset - 10)
+        } footer: {
+            PlayerClearanceSpacer()
         }
         // NavigationStack keeps its previous page behind this destination.
         // Give the music page a surface so transparent scroll content cannot

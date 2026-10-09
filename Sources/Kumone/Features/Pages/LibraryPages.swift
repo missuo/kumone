@@ -8,10 +8,10 @@ struct RecentsView: View {
     @State private var isLoading = true
 
     @EnvironmentObject private var account: AccountStore
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
 
     var body: some View {
-        ScrollView {
+        TrackListScrollView(trackIDs: records.map { $0.song.id }, style: .compact, spacing: 16) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Picker("", selection: $week) {
@@ -46,12 +46,13 @@ struct RecentsView: View {
                 } else if records.isEmpty {
                     EmptyStateView(icon: "clock", title: "暂无播放记录")
                         .frame(minHeight: 300)
-                } else {
-                    recordList
-                        .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
-                PlayerClearanceSpacer()
             }
+        } rows: { layout in
+            recordList(layout: layout)
+                .padding(.horizontal, Theme.Layout.contentInset - 10)
+        } footer: {
+            PlayerClearanceSpacer()
         }
         .navigationTitle("最近播放")
         .task(id: week) {
@@ -59,19 +60,30 @@ struct RecentsView: View {
         }
     }
 
-    private var recordList: some View {
-        LazyVStack(spacing: 1) {
-            ForEach(Array(records.enumerated()), id: \.element.song.id) { index, record in
-                TrackRow(
-                    track: record.song,
-                    index: index + 1,
-                    style: .compact,
-                    trailingText: String(localized: "\(record.playCount) 次")
-                ) {
-                    player.play(tracks: records.map(\.song), source: .none, startAt: record.song,
-                                   context: .recents)
-                }
+    @ViewBuilder
+    private func recordList(layout: TrackListView.Layout) -> some View {
+        switch layout {
+        case .stack:
+            LazyVStack(spacing: 1) {
+                ForEach(Array(records.enumerated()), id: \.element.song.id) { index, _ in recordRow(at: index) }
             }
+        #if os(macOS)
+        case .singleRow(let index):
+            recordRow(at: index)
+        #endif
+        }
+    }
+
+    private func recordRow(at index: Int) -> some View {
+        let record = records[index]
+        return TrackRow(
+            track: record.song,
+            index: index + 1,
+            style: .compact,
+            trailingText: String(localized: "\(record.playCount) 次")
+        ) {
+            player.play(tracks: records.map(\.song), source: .none, startAt: record.song,
+                        context: .recents)
         }
     }
 
@@ -93,10 +105,11 @@ struct CloudView: View {
     @State private var sizeInfo: String?
     @State private var isLoading = true
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
 
     var body: some View {
-        ScrollView {
+        let displayed = tracks
+        TrackListScrollView(trackIDs: displayed.map(\.id), style: .compact, spacing: 16) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     if let sizeInfo {
@@ -128,12 +141,13 @@ struct CloudView: View {
                     EmptyStateView(icon: "icloud", title: "云盘还没有歌曲",
                                    subtitle: "在网易云音乐客户端上传的歌曲会出现在这里")
                         .frame(minHeight: 300)
-                } else {
-                    TrackListView(tracks: tracks, style: .compact, source: .cloud, context: .cloud)
-                        .padding(.horizontal, Theme.Layout.contentInset - 10)
                 }
-                PlayerClearanceSpacer()
             }
+        } rows: { layout in
+            TrackListView(tracks: displayed, style: .compact, source: .cloud, context: .cloud, layout: layout)
+                .padding(.horizontal, Theme.Layout.contentInset - 10)
+        } footer: {
+            PlayerClearanceSpacer()
         }
         .navigationTitle("音乐云盘")
         .task {

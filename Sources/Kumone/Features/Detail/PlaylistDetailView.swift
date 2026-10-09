@@ -111,7 +111,7 @@ struct PlaylistDetailView: View {
         Group {
             if model.loadedScope == account.offlineScope, let detail = model.detail {
                 let tracks = model.filteredTracks
-                PlaylistTable(
+                TrackTable(
                     trackIDs: tracks.map(\.id),
                     header: AnyView(regularHeader(detail)
                         .padding(.horizontal, Theme.Layout.contentInset)
@@ -121,6 +121,7 @@ struct PlaylistDetailView: View {
                         playlistStatus(detail)
                         PlayerClearanceSpacer()
                     }.padding(.top, 20)),
+                    headerHeight: 246,
                     footerHeight: desktopFooterHeight(detail)
                 ) { index in
                     AnyView(trackList(tracks, layout: .singleRow(index))

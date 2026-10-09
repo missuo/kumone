@@ -12,7 +12,7 @@ struct ArtistDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -25,96 +25,86 @@ struct ArtistDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
+        TrackListScrollView(trackIDs: hotSongs.map(\.id), style: .compact, spacing: isCompact ? 16 : 26) {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 26) {
                 if let artist {
                     if isCompact {
-                        compactHeader(artist)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
+                        compactHeader(artist).padding(.horizontal, 16).padding(.top, 12)
                     } else {
-                        regularHeader(artist)
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                            .padding(.top, 16)
+                        regularHeader(artist).padding(.horizontal, Theme.Layout.contentInset).padding(.top, 16)
                     }
-
                     if !hotSongs.isEmpty {
                         SectionHeader(title: "热门单曲")
                             .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        TrackListView(
-                            tracks: hotSongs,
-                            style: .compact,
-                            source: .artist(artistID),
-                            context: .artist(id: artistID, name: artist.name)
-                        )
-                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-                    }
-
-                    if !albums.isEmpty {
-                        SectionHeader(title: "专辑")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(albums) { album in
-                                    albumCard(album)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
-                    }
-
-                    if !epsAndSingles.isEmpty {
-                        SectionHeader(title: "EP 与单曲")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(epsAndSingles) { album in
-                                    albumCard(album)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
-                    }
-
-                    if !similar.isEmpty {
-                        SectionHeader(title: "相似歌手")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(similar) { sim in
-                                    NavigationLink(value: Destination.artist(sim.id)) {
-                                        VStack(spacing: 8) {
-                                            CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
-                                                .frame(width: isCompact ? 80 : 100, height: isCompact ? 80 : 100)
-                                                .clipShape(Circle())
-                                            Text(sim.name)
-                                                .font(.system(size: 12, weight: .medium))
-                                                .lineLimit(1)
-                                        }
-                                        .frame(width: isCompact ? 80 : 100)
-                                    }
-                                    .buttonStyle(.interactiveCard)
-                                }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            }
-                        }
                     }
                 } else if isLoading {
                     loadingHeader
                 } else if let errorMessage {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await load() }
+                    ErrorStateView(message: errorMessage) { Task { await load() } }
+                        .frame(minHeight: 400)
+                }
+            }
+        } rows: { layout in
+            TrackListView(tracks: hotSongs, style: .compact, source: .artist(artistID),
+                          context: artist.map { .artist(id: artistID, name: $0.name) }, layout: layout)
+                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+        } footer: {
+            VStack(alignment: .leading, spacing: isCompact ? 16 : 26) {
+                if !albums.isEmpty {
+                    SectionHeader(title: "专辑")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(albums) { album in
+                                albumCard(album)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
                     }
-                    .frame(minHeight: 400)
                 }
 
+                if !epsAndSingles.isEmpty {
+                    SectionHeader(title: "EP 与单曲")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(epsAndSingles) { album in
+                                albumCard(album)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
+                    }
+                }
+
+                if !similar.isEmpty {
+                    SectionHeader(title: "相似歌手")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(similar) { sim in
+                                NavigationLink(value: Destination.artist(sim.id)) {
+                                    VStack(spacing: 8) {
+                                        CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
+                                            .frame(width: isCompact ? 80 : 100, height: isCompact ? 80 : 100)
+                                            .clipShape(Circle())
+                                        Text(sim.name)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .lineLimit(1)
+                                    }
+                                    .frame(width: isCompact ? 80 : 100)
+                                }
+                                .buttonStyle(.interactiveCard)
+                            }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        }
+                    }
+                }
                 PlayerClearanceSpacer()
             }
         }
