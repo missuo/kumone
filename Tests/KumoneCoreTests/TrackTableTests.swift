@@ -87,6 +87,39 @@ struct TrackTableTests {
         #expect(coordinator.table.rect(ofRow: 1).height == 53)
     }
 
+    @Test func reusingACellUpdatesContentWithoutRecreatingItsViewGraph() {
+        let cell = TrackTable.Cell()
+        cell.frame = NSRect(x: 0, y: 0, width: 900, height: 53)
+        let lifetime = RowLifetime()
+        for songID in [1, 400, 1_200, 2] {
+            cell.update(AnyView(RowProbe(songID: songID, lifetime: lifetime)),
+                        environment: EnvironmentValues())
+            cell.layoutSubtreeIfNeeded()
+            cell.host.layout()
+            #expect(lifetime.songID == songID)
+            #expect(lifetime.creations == 1)
+        }
+    }
+
+    private final class RowLifetime {
+        var creations = 0
+        var songID = 0
+    }
+
+    private struct RowProbe: NSViewRepresentable {
+        let songID: Int
+        let lifetime: RowLifetime
+
+        func makeNSView(context: Context) -> NSView {
+            lifetime.creations += 1
+            return NSView()
+        }
+
+        func updateNSView(_ view: NSView, context: Context) {
+            lifetime.songID = songID
+        }
+    }
+
     private func fixture(count: Int) -> TrackTable {
         TrackTable(trackIDs: Array(0..<count), header: AnyView(Text("Playlist").frame(height: 246)),
                       footer: AnyView(Color.clear), headerHeight: 246, footerHeight: 100) { index in

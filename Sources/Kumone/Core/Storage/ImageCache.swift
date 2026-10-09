@@ -251,7 +251,9 @@ struct CachedAsyncImage<Placeholder: View>: View {
     var body: some View {
         ZStack {
             placeholder()
-            if let image = imageState.image(for: url) {
+            // A reused row keeps its State. Resolve an already decoded cover
+            // synchronously when the URL changes, before the new task runs.
+            if let image = imageState.image(for: url) ?? url.flatMap({ ImageCache.shared.cachedImage(for: $0) }) {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)

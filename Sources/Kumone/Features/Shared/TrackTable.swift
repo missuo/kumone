@@ -108,10 +108,10 @@ struct TrackTable: NSViewRepresentable {
             guard let content else { return }
             guard index > 0, index <= content.trackIDs.count else { return }
             let trackIndex = index - 1
-            let view = content.row(trackIndex).id(content.trackIDs[trackIndex])
-            cell.host.rootView = AnyView(view
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .environment(\.self, environment))
+            // A reused host must retain its view graph. Keying the entire root
+            // by song ID destroys and rebuilds every label, button and layout.
+            // TrackRow scopes its transient interaction state to the song.
+            cell.update(content.row(trackIndex), environment: environment)
         }
 
         /// Measure only the two chrome views on content/width changes. Keep
@@ -194,9 +194,15 @@ struct TrackTable: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+        func update(_ view: AnyView, environment: EnvironmentValues) {
+            host.rootView = AnyView(view
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .environment(\.self, environment))
+        }
+
         override func layout() {
             super.layout()
-            host.frame = bounds
+            if host.frame != bounds { host.frame = bounds }
         }
     }
 }

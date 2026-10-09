@@ -38,9 +38,11 @@ struct TrackRow: View {
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
-    @State private var isHovering = false
-    @State private var showAddToPlaylist = false
-    @State private var isReducingRecommendation = false
+    // Native cells retain this view graph when rebound to another song. Scope
+    // transient state and asynchronous completions to the song they belong to.
+    @State private var hoveredTrackID: Int?
+    @State private var addToPlaylistTrack: Track?
+    @State private var reducingRecommendationIDs: Set<Int> = []
     /// Only this track's download state, so another row's transfer cannot
     /// re-evaluate this body four times a second.
     @ObservedObject private var downloadState: TrackDownloadState
@@ -61,6 +63,8 @@ struct TrackRow: View {
     }
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
+    private var isHovering: Bool { hoveredTrackID == track.id }
+    private var isReducingRecommendation: Bool { reducingRecommendationIDs.contains(track.id) }
     private var isOffline: Bool { downloadState.isOffline }
     private var isPlayable: Bool { playability == .playable || isOffline }
     private var needsNetwork: Bool { downloadState.needsNetwork }
@@ -165,7 +169,7 @@ struct TrackRow: View {
         .onHover { hovering in
             // Scrolling moves many rows beneath the pointer. Avoid starting a
             // new implicit animation for every row crossed during a scroll.
-            isHovering = hovering
+            hoveredTrackID = hovering ? track.id : nil
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
@@ -177,8 +181,12 @@ struct TrackRow: View {
         }
         #endif
         .contextMenu { contextMenuItems }
-        .sheet(isPresented: $showAddToPlaylist) {
-            AddToPlaylistSheet(track: track)
+        .sheet(item: $addToPlaylistTrack) { selectedTrack in
+            AddToPlaylistSheet(track: selectedTrack)
+        }
+        .onChange(of: track.id) { _ in
+            hoveredTrackID = nil
+            addToPlaylistTrack = nil
         }
     }
 
@@ -305,6 +313,9 @@ struct TrackRow: View {
             #if os(macOS)
             // A saved track already keeps the button visible through its own state.
             TrackDownloadButton(track: track, isVisible: isHovering)
+                // Keep download confirmation and in-flight button state bound
+                // to their original song without replacing the whole row.
+                .id(track.id)
             #else
             TrackDownloadButton(track: track, isVisible: false)
             #endif
@@ -339,7 +350,7 @@ struct TrackRow: View {
             Task { await account.toggleLike(trackID: track.id) }
         }
         Button("收藏到歌单…") {
-            showAddToPlaylist = true
+            addToPlaylistTrack = track
         }
         if let pid = removableFromPlaylistID {
             Button("从歌单中删除", role: .destructive) {
@@ -358,9 +369,10 @@ struct TrackRow: View {
         if !account.isLiked(track.id), let onRecommendationReduced {
             Button(String(localized: "减少推荐"), role: .destructive) {
                 guard !isReducingRecommendation else { return }
-                isReducingRecommendation = true
+                let trackID = track.id
+                reducingRecommendationIDs.insert(trackID)
                 Task {
-                    defer { isReducingRecommendation = false }
+                    defer { reducingRecommendationIDs.remove(trackID) }
                     do {
                         let replacement = try await NeteaseAPI.dislikeRecommendedSong(id: track.id)
                         onRecommendationReduced(replacement)
@@ -613,51 +625,58 @@ struct TrackListView: View {
             LazyVStack(spacing: rowSpacing) { rows(in: tracks.indices) }
         #if os(macOS)
         case .singleRow(let index):
-            rows(in: index..<index + 1)
+            // The native table already provides one reusable cell. A keyed
+            // ForEach here would discard the entire row graph on every reuse.
+            row(at: index)
         #endif
         }
     }
 
     private func rows(in range: Range<Int>) -> some View {
-        ForEach(range.map { (index: $0, track: tracks[$0]) }, id: \.track.id) { index, track in
-            let recommendationHandler = onRecommendationReduced
-            let row = TrackRow(
-                track: track,
-                index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
-                style: style,
-                playability: playability(of: track),
-                removableFromPlaylistID: removableFromPlaylistID,
-                onRemoved: { onRemoved?(track) },
-                onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
-                    ? nil
-                    : { replacement in recommendationHandler?(track, replacement) }
-            ) {
-                player.play(tracks: playableTracks, source: source, startAt: track,
-                            context: context)
-            }
-            VStack(spacing: 0) {
-                if let selection {
-                    let selected = selection.wrappedValue.contains(track.id)
-                    Button {
-                        if selected { selection.wrappedValue.remove(track.id) }
-                        else { selection.wrappedValue.insert(track.id) }
-                    } label: {
-                        HStack(spacing: 0) {
-                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
-                                .frame(width: 32)
-                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
-                        }
-                        .contentShape(Rectangle())
-                        .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+        ForEach(range.map { (index: $0, track: tracks[$0]) }, id: \.track.id) { index, _ in
+            row(at: index)
+        }
+    }
+
+    private func row(at index: Int) -> some View {
+        let track = tracks[index]
+        let recommendationHandler = onRecommendationReduced
+        let row = TrackRow(
+            track: track,
+            index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
+            style: style,
+            playability: playability(of: track),
+            removableFromPlaylistID: removableFromPlaylistID,
+            onRemoved: { onRemoved?(track) },
+            onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+                ? nil
+                : { replacement in recommendationHandler?(track, replacement) }
+        ) {
+            player.play(tracks: playableTracks, source: source, startAt: track,
+                        context: context)
+        }
+        return VStack(spacing: 0) {
+            if let selection {
+                let selected = selection.wrappedValue.contains(track.id)
+                Button {
+                    if selected { selection.wrappedValue.remove(track.id) }
+                    else { selection.wrappedValue.insert(track.id) }
+                } label: {
+                    HStack(spacing: 0) {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                            .frame(width: 32)
+                        row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
-                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
-                    .accessibilityIdentifier("select-download-\(track.id)")
-                } else { row }
-            }
+                    .contentShape(Rectangle())
+                    .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                .accessibilityIdentifier("select-download-\(track.id)")
+            } else { row }
         }
     }
 
