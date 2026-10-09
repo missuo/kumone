@@ -68,7 +68,6 @@ final class SearchViewModel: ObservableObject {
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @State private var searchText: String = ""
-    @EnvironmentObject private var player: PlayerService
 
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
@@ -76,31 +75,7 @@ struct SearchView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Picker("", selection: $model.tab) {
-                        ForEach(SearchViewModel.Tab.allCases) { tab in
-                            Text(LocalizedStringKey(tab.rawValue)).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .padding(.horizontal, Theme.Layout.contentInset)
-                    .padding(.top, 12)
-
-                    if model.isLoading && currentEmpty {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 300)
-                    } else {
-                        tabContent
-                    }
-                } else {
-                    emptySearchPrompt
-                }
-                PlayerClearanceSpacer()
-            }
-        }
+        searchContent
         #if os(iOS)
         // iPad enters SearchView from the sidebar, where the desktop window
         // toolbar search field is unavailable. On macOS, MainWindow owns the
@@ -124,6 +99,63 @@ struct SearchView: View {
         .task(id: model.tab) {
             await model.load(tab: model.tab)
         }
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        #if os(macOS)
+        if model.tab == .songs, !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+            TrackListScrollView(trackIDs: model.songs.map(\.id)) {
+                VStack(spacing: 20) {
+                    tabPicker
+                    if model.isLoading && currentEmpty {
+                        ProgressView().frame(maxWidth: .infinity, minHeight: 300)
+                    }
+                }
+            } rows: { layout in
+                TrackListView(tracks: model.songs, layout: layout)
+                    .padding(.horizontal, Theme.Layout.contentInset - 10)
+            } footer: {
+                PlayerClearanceSpacer()
+            }
+        } else {
+            mixedResults.clipped()
+        }
+        #else
+        mixedResults
+        #endif
+    }
+
+    private var mixedResults: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    tabPicker
+
+                    if model.isLoading && currentEmpty {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                    } else {
+                        tabContent
+                    }
+                } else {
+                    emptySearchPrompt
+                }
+                PlayerClearanceSpacer()
+            }
+        }
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $model.tab) {
+            ForEach(SearchViewModel.Tab.allCases) { tab in
+                Text(LocalizedStringKey(tab.rawValue)).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, Theme.Layout.contentInset)
+        .padding(.top, 12)
     }
 
     private var emptySearchPrompt: some View {

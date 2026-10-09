@@ -13,7 +13,7 @@ struct AlbumDetailView: View {
     @State private var loadGeneration = 0
     @ObservedObject private var downloads = DownloadManager.shared
 
-    @EnvironmentObject private var player: PlayerService
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -53,57 +53,47 @@ struct AlbumDetailView: View {
     }
 
     private var onlineContent: some View {
-        ScrollView {
+        TrackListScrollView(trackIDs: tracks.map(\.id), spacing: isCompact ? 16 : 20) {
+            if let album {
+                if isCompact {
+                    compactHeader(album).padding(.horizontal, 16).padding(.top, 12)
+                } else {
+                    regularHeader(album).padding(.horizontal, Theme.Layout.contentInset).padding(.top, 16)
+                }
+            } else if isLoading {
+                loadingHeader
+            } else if let errorMessage {
+                ErrorStateView(message: errorMessage) { Task { await load() } }
+                    .frame(minHeight: 400)
+            }
+        } rows: { layout in
+            TrackListView(tracks: tracks, source: .album(albumID),
+                          context: album.map { .album(id: albumID, name: $0.name) }, layout: layout)
+                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+        } footer: {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                if let album {
-                    if isCompact {
-                        compactHeader(album)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                    } else {
-                        regularHeader(album)
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                            .padding(.top, 16)
-                    }
+                if !otherAlbums.isEmpty {
+                    SectionHeader(title: "该歌手的其他专辑")
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                        .padding(.top, 12)
 
-                    TrackListView(
-                        tracks: tracks,
-                        source: .album(albumID),
-                        context: .album(id: albumID, name: album.name)
-                    )
-                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-
-                    if !otherAlbums.isEmpty {
-                        SectionHeader(title: "该歌手的其他专辑")
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                            .padding(.top, 12)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 16) {
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                                ForEach(otherAlbums) { item in
-                                    NavigationLink(value: Destination.album(item.id)) {
-                                        CoverCardBody(
-                                            coverURL: item.picUrl?.resizedImageURL(384),
-                                            title: item.name,
-                                            subtitle: Formatters.date(fromMS: item.publishTime)
-                                        )
-                                    }
-                                    .buttonStyle(.interactiveCard)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            ForEach(otherAlbums) { item in
+                                NavigationLink(value: Destination.album(item.id)) {
+                                    CoverCardBody(
+                                        coverURL: item.picUrl?.resizedImageURL(384),
+                                        title: item.name,
+                                        subtitle: Formatters.date(fromMS: item.publishTime)
+                                    )
                                 }
-                                Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                                .buttonStyle(.interactiveCard)
                             }
+                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
                         }
                     }
-                } else if isLoading {
-                    loadingHeader
-                } else if let errorMessage {
-                    ErrorStateView(message: errorMessage) {
-                        Task { await load() }
-                    }
-                    .frame(minHeight: 400)
                 }
-
                 PlayerClearanceSpacer()
             }
         }

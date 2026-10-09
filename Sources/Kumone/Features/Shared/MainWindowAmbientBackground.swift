@@ -55,6 +55,20 @@ struct MainWindowAmbientBackground: View {
     }
 }
 
+/// Geometry changes resize this overlay without invalidating MainWindow.
+struct MainColumnAmbientOverlay: View {
+    @ObservedObject var geometry: MainColumnGeometry
+    let colors: ArtworkColors
+    let intensity: Double
+
+    var body: some View {
+        if geometry.layout.width > 0 {
+            MainWindowAmbientBackground(colors: colors, intensity: intensity)
+                .frame(width: geometry.layout.width)
+        }
+    }
+}
+
 enum MainWindowAmbientOpacity {
     static func gradient(isDark: Bool, intensity: Double) -> Double {
         (isDark ? 0.14 : 0.08) * intensity
@@ -71,7 +85,7 @@ struct MainWindowAmbientConfiguration {
     let showsTitlebarAmbientBackground: Bool
     let showsNowPlaying: Bool
     let colors: ArtworkColors
-    let mainColumnLeadingInset: CGFloat
+    var mainColumnLeadingInset: CGFloat = 0
     let intensity: Double
     let isDark: Bool
 }

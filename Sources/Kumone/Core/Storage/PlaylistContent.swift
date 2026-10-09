@@ -120,8 +120,7 @@ final class PlaylistContent: ObservableObject {
             detail = loaded
             tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
             let ids = Set(loaded.trackIds.map(\.id))
-            privileges = privileges.filter { ids.contains($0.key) }
-            merge(privileges: response.privileges)
+            merge(privileges: response.privileges, retaining: ids)
             isLoading = false
             await save(scope: scope, token: token)
             try await loadRemainingTracks(generation: generation, scope: scope, token: token, background: background)
@@ -169,10 +168,15 @@ final class PlaylistContent: ObservableObject {
         try? await snapshots.save(.init(detail: detail, privileges: privileges), scope: scope, token: token)
     }
 
-    private func merge(privileges list: [TrackPrivilege]?) {
+    private func merge(privileges list: [TrackPrivilege]?, retaining ids: Set<Int>? = nil) {
+        // Publish a complete response once. Mutating the @Published dictionary
+        // per song notifies every observer and can copy a retained dictionary
+        // for each of the 500 entries in a page.
+        var merged = ids.map { ids in privileges.filter { ids.contains($0.key) } } ?? privileges
         for privilege in list ?? [] {
-            privileges[privilege.id] = privilege
+            merged[privilege.id] = privilege
         }
+        if merged != privileges { privileges = merged }
     }
 
     func remove(_ track: Track) async {

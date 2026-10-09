@@ -478,8 +478,13 @@ extension String {
     /// NetEase image CDN resize convention: `<picUrl>?param=<W>y<H>`.
     /// Also upgrades `http:` to `https:`.
     func resizedImageURL(_ size: Int) -> URL? {
-        var s = replacingOccurrences(of: "http://", with: "https://")
-        s += s.contains("?") ? "&param=\(size)y\(size)" : "?param=\(size)y\(size)"
-        return URL(string: s)
+        guard var components = URLComponents(string: self) else { return nil }
+        if components.scheme == "http" { components.scheme = "https" }
+        // Replacing a previous size keeps the CDN and local decoder in sync;
+        // appending a second `param` can leave the original large size active.
+        var items = components.queryItems?.filter { $0.name != "param" } ?? []
+        items.append(URLQueryItem(name: "param", value: "\(size)y\(size)"))
+        components.queryItems = items
+        return components.url
     }
 }
