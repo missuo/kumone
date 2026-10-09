@@ -54,6 +54,8 @@ struct TrackTable: NSViewRepresentable {
             table.delegate = self
             scrollView.documentView = table
             scrollView.hasVerticalScroller = true
+            scrollView.scrollerStyle = .overlay
+            scrollView.verticalScroller?.controlSize = .small
             scrollView.drawsBackground = false
             scrollView.borderType = .noBorder
             scrollView.automaticallyAdjustsContentInsets = false
