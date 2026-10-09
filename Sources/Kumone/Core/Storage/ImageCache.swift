@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import SwiftUI
 
 /// Two-tier (memory + disk) image cache with in-flight request coalescing.
@@ -42,7 +43,7 @@ actor ImageCache {
         }
         let requestGeneration = generation
         // The exact file, decoded once: it is both the preview and the answer.
-        let exact = onCachedImage == nil ? nil : diskImage(for: key)
+        let exact = onCachedImage == nil ? nil : diskImage(for: key, requestedURL: url)
         if let onCachedImage, let preview = exact ?? cachedVariant(for: url) {
             await onCachedImage(preview)
         }
@@ -56,14 +57,14 @@ actor ImageCache {
         }
         let task = Task<PlatformImage?, Never> { [self] in
             let fileURL = directory.appendingPathComponent(key)
-            if let image = exact ?? diskImage(for: key) {
+            if let image = exact ?? diskImage(for: key, requestedURL: url) {
                 return image
             }
             if let data = await offlineArtwork(url),
-               let image = PlatformImage(data: data) { return image }
+               let image = Self.decode(data, for: url) { return image }
             guard let (data, response) = try? await session.data(from: url),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-                  let image = PlatformImage(data: data) else { return nil }
+                  let image = Self.decode(data, for: url) else { return nil }
             if generation == requestGeneration { try? data.write(to: fileURL, options: .atomic) }
             return image
         }
@@ -81,9 +82,66 @@ actor ImageCache {
         return result ?? cachedVariant(for: url)
     }
 
-    private func diskImage(for key: String) -> PlatformImage? {
+    private func diskImage(for key: String, requestedURL: URL) -> PlatformImage? {
         guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)) else { return nil }
-        return PlatformImage(data: data)
+        return Self.decode(data, for: requestedURL)
+    }
+
+    private static func thumbnailLimit(for url: URL) -> Int? {
+        guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "param" })?.value else { return nil }
+        let dimensions = value.split(separator: "y", omittingEmptySubsequences: false)
+        guard dimensions.count == 2, let width = Int(dimensions[0]), let height = Int(dimensions[1]),
+              width > 0, height > 0 else { return nil }
+        return max(width, height)
+    }
+
+    /// A CDN size hint is not a decode limit: offline artwork and older cache
+    /// variants can contain the original cover. Decode thumbnails on this
+    /// actor before SwiftUI displays them, with a bounded pixel allocation.
+    private static func decode(_ data: Data, for url: URL) -> PlatformImage? {
+        guard let limit = thumbnailLimit(for: url) else { return PlatformImage(data: data) }
+        guard let source = CGImageSourceCreateWithData(data as CFData, [
+            kCGImageSourceShouldCache: false,
+        ] as CFDictionary), let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: limit,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ] as CFDictionary) else { return nil }
+        return platformImage(image)
+    }
+
+    private static func platformImage(_ image: CGImage) -> PlatformImage {
+        #if os(macOS)
+        return PlatformImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        #else
+        return PlatformImage(cgImage: image)
+        #endif
+    }
+
+    private static func preview(_ image: PlatformImage, for url: URL) -> PlatformImage? {
+        guard let limit = thumbnailLimit(for: url) else { return image }
+        #if os(macOS)
+        guard let pixels = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        #else
+        guard let pixels = image.cgImage else { return nil }
+        #endif
+        guard max(pixels.width, pixels.height) > limit else { return image }
+        let scale = Double(limit) / Double(max(pixels.width, pixels.height))
+        let width = max(1, Int(Double(pixels.width) * scale))
+        let height = max(1, Int(Double(pixels.height) * scale))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(pixels, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let thumbnail = context.makeImage() else { return nil }
+        #if os(macOS)
+        return platformImage(thumbnail)
+        #else
+        return PlatformImage(cgImage: thumbnail, scale: 1, orientation: image.imageOrientation)
+        #endif
     }
 
     private func cachedVariant(for url: URL) -> PlatformImage? {
@@ -98,8 +156,9 @@ actor ImageCache {
             if components.queryItems?.isEmpty == true { components.queryItems = nil }
             guard let candidate = components.url, candidate != url else { continue }
             let key = Self.cacheKey(for: candidate)
-            if let image = memory.object(forKey: key as NSString) { return image }
-            if let image = diskImage(for: key) { return image }
+            if let image = memory.object(forKey: key as NSString),
+               let preview = Self.preview(image, for: url) { return preview }
+            if let image = diskImage(for: key, requestedURL: url) { return image }
         }
         return nil
     }

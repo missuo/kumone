@@ -576,6 +576,12 @@ final class SpectrumBarsView: PlatformView {
 // MARK: - Track list
 
 struct TrackListView: View {
+    enum Layout {
+        case stack
+        /// Expose rows directly to an enclosing List so it can recycle them.
+        case listRows
+    }
+
     let tracks: [Track]
     var style: TrackRowStyle = .full
     var privileges: [Int: TrackPrivilege] = [:]
@@ -587,50 +593,58 @@ struct TrackListView: View {
     var recommendationContext: RecommendationContext?
     var onRecommendationReduced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
+    var layout: Layout = .stack
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
 
+    @ViewBuilder
     var body: some View {
-        LazyVStack(spacing: 1) {
-            ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
-                let recommendationHandler = onRecommendationReduced
-                let row = TrackRow(
-                    track: track,
-                    index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
-                    style: style,
-                    playability: playability(of: track),
-                    removableFromPlaylistID: removableFromPlaylistID,
-                    onRemoved: { onRemoved?(track) },
-                    onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
-                        ? nil
-                        : { replacement in recommendationHandler?(track, replacement) }
-                ) {
-                    player.play(tracks: playableTracks, source: source, startAt: track,
-                                context: context)
-                }
-                if let selection {
-                    let selected = selection.wrappedValue.contains(track.id)
-                    Button {
-                        if selected { selection.wrappedValue.remove(track.id) }
-                        else { selection.wrappedValue.insert(track.id) }
-                    } label: {
-                        HStack(spacing: 0) {
-                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 20))
-                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
-                                .frame(width: 32)
-                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
-                        }
-                        .contentShape(Rectangle())
-                        .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
-                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
-                    .accessibilityIdentifier("select-download-\(track.id)")
-                } else { row }
+        if layout == .listRows {
+            rows
+        } else {
+            LazyVStack(spacing: 1) { rows }
+        }
+    }
+
+    private var rows: some View {
+        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            let recommendationHandler = onRecommendationReduced
+            let row = TrackRow(
+                track: track,
+                index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
+                style: style,
+                playability: playability(of: track),
+                removableFromPlaylistID: removableFromPlaylistID,
+                onRemoved: { onRemoved?(track) },
+                onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+                    ? nil
+                    : { replacement in recommendationHandler?(track, replacement) }
+            ) {
+                player.play(tracks: playableTracks, source: source, startAt: track,
+                            context: context)
             }
+            if let selection {
+                let selected = selection.wrappedValue.contains(track.id)
+                Button {
+                    if selected { selection.wrappedValue.remove(track.id) }
+                    else { selection.wrappedValue.insert(track.id) }
+                } label: {
+                    HStack(spacing: 0) {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                            .frame(width: 32)
+                        row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                    .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                .accessibilityIdentifier("select-download-\(track.id)")
+            } else { row }
         }
     }
 

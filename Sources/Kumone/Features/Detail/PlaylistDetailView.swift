@@ -105,126 +105,21 @@ struct PlaylistDetailView: View {
     }
 
     private var onlineContent: some View {
+        #if os(macOS)
+        List {
+            playlistContents
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, 0)
+        .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
+        #else
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                if model.loadedScope == account.offlineScope, let detail = model.detail {
-                    let filteredTracks = model.filteredTracks
-                    if !isSearchActive {
-                        if isCompact {
-                            compactHeader(detail)
-                                .padding(.horizontal, 16)
-                                .padding(.top, 12)
-                        } else {
-                            regularHeader(detail)
-                                .padding(.horizontal, Theme.Layout.contentInset)
-                                .padding(.top, 16)
-                        }
-                    }
-
-                    #if os(iOS)
-                    if isSearchActive {
-                        HStack(spacing: 4) {
-                            PlaylistSearchField(text: $model.filter, isFocused: $searchFocused)
-                            Button("取消") {
-                                model.filter = ""
-                                searchFocused = false
-                                withAnimation(AppAnimation.standard) { showSearch = false }
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.trailing, 8)
-                        }
-                        .frame(height: 52)
-                        .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
-                        .padding(.top, 8)
-                        .transition(.opacity)
-                    }
-
-                    if supportsPlaylistSearch && !model.filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        HStack {
-                            Text("找到 \(filteredTracks.count) 首匹配歌曲")
-                            if !isSearchActive {
-                                Spacer()
-                                Button("清空搜索") { model.filter = "" }
-                            }
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                        if filteredTracks.isEmpty && !model.isLoadingMore && model.errorMessage == nil {
-                            EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲",
-                                           subtitle: "试试其他歌名、歌手或专辑")
-                                .frame(minHeight: 180)
-                        }
-                    }
-                    #endif
-
-                    TrackListView(
-                        tracks: filteredTracks,
-                        privileges: model.privileges,
-                        source: .playlist(playlistID),
-                        context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
-                        removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                        onRemoved: { track in Task { await model.remove(track) } },
-                        recommendationContext: recommendationContext,
-                        onRecommendationReduced: { model.replaceRecommendation($0, with: $1) }
-                    )
-                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-
-                    if model.isLoading || model.isLoadingMore {
-                        HStack {
-                            Spacer()
-                            ProgressView().controlSize(.small)
-                            #if os(iOS)
-                            if supportsPlaylistSearch {
-                                Text("正在加载歌单，搜索结果会继续更新…")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            #endif
-                            Spacer()
-                        }
-                        .padding(.vertical, 12)
-                    } else if model.tracks.isEmpty {
-                        Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 32)
-                    } else if model.tracks.count < detail.trackCount {
-                        Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                    }
-
-                    #if os(iOS)
-                    if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
-                        VStack(spacing: 8) {
-                            Text("歌单未完整加载，搜索结果可能不完整")
-                                .font(.subheadline)
-                            Text(message)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button("重试") { Task { await loadPlaylist() } }
-                                .buttonStyle(.bordered)
-                        }
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                    }
-                    #endif
-                } else if model.isLoading {
-                    loadingHeader
-                } else if let message = model.errorMessage {
-                    ErrorStateView(message: message) {
-                        Task { await loadPlaylist() }
-                    }
-                    .frame(minHeight: 400)
-                } else {
-                    EmptyStateView(icon: "music.note.list", title: "联网后载入歌曲")
-                        .frame(minHeight: 400)
-                }
-                PlayerClearanceSpacer()
+                playlistContents
             }
             .id("playlistTop")
             #if os(iOS)
@@ -241,13 +136,144 @@ struct PlaylistDetailView: View {
             }
             #endif
         }
-        #if os(macOS)
-        .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
-        #else
         .navigationTitle(isSearchActive ? String(localized: "搜索歌单内歌曲") : "")
         .navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
         #endif
+    }
+
+    private var trackListLayout: TrackListView.Layout {
+        #if os(macOS)
+        return .listRows
+        #else
+        return .stack
+        #endif
+    }
+
+    @ViewBuilder
+    private var playlistContents: some View {
+        if model.loadedScope == account.offlineScope, let detail = model.detail {
+            let filteredTracks = model.filteredTracks
+            if !isSearchActive {
+                if isCompact {
+                    compactHeader(detail)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                } else {
+                    regularHeader(detail)
+                        .padding(.horizontal, Theme.Layout.contentInset)
+                        .padding(.top, 16)
+                        #if os(macOS)
+                        .padding(.bottom, 20)
+                        #endif
+                }
+            }
+
+            #if os(iOS)
+            if isSearchActive {
+                HStack(spacing: 4) {
+                    PlaylistSearchField(text: $model.filter, isFocused: $searchFocused)
+                    Button("取消") {
+                        model.filter = ""
+                        searchFocused = false
+                        withAnimation(AppAnimation.standard) { showSearch = false }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
+                }
+                .frame(height: 52)
+                .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
+                .padding(.top, 8)
+                .transition(.opacity)
+            }
+
+            if supportsPlaylistSearch && !model.filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack {
+                    Text("找到 \(filteredTracks.count) 首匹配歌曲")
+                    if !isSearchActive {
+                        Spacer()
+                        Button("清空搜索") { model.filter = "" }
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+
+                if filteredTracks.isEmpty && !model.isLoadingMore && model.errorMessage == nil {
+                    EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲",
+                                   subtitle: "试试其他歌名、歌手或专辑")
+                        .frame(minHeight: 180)
+                }
+            }
+            #endif
+
+            TrackListView(
+                tracks: filteredTracks,
+                privileges: model.privileges,
+                source: .playlist(playlistID),
+                context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
+                removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
+                onRemoved: { track in Task { await model.remove(track) } },
+                recommendationContext: recommendationContext,
+                onRecommendationReduced: { model.replaceRecommendation($0, with: $1) },
+                layout: trackListLayout
+            )
+            .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+
+            if model.isLoading || model.isLoadingMore {
+                HStack {
+                    Spacer()
+                    ProgressView().controlSize(.small)
+                    #if os(iOS)
+                    if supportsPlaylistSearch {
+                        Text("正在加载歌单，搜索结果会继续更新…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    #endif
+                    Spacer()
+                }
+                .padding(.vertical, 12)
+            } else if model.tracks.isEmpty {
+                Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+            } else if model.tracks.count < detail.trackCount {
+                Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+            }
+
+            #if os(iOS)
+            if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
+                VStack(spacing: 8) {
+                    Text("歌单未完整加载，搜索结果可能不完整")
+                        .font(.subheadline)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("重试") { Task { await loadPlaylist() } }
+                        .buttonStyle(.bordered)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+            }
+            #endif
+        } else if model.isLoading {
+            loadingHeader
+        } else if let message = model.errorMessage {
+            ErrorStateView(message: message) {
+                Task { await loadPlaylist() }
+            }
+            .frame(minHeight: 400)
+        } else {
+            EmptyStateView(icon: "music.note.list", title: "联网后载入歌曲")
+                .frame(minHeight: 400)
+        }
+        PlayerClearanceSpacer()
     }
 
     // MARK: - Compact (Mobile) Header
