@@ -8,10 +8,14 @@ struct PlaylistDetailView: View {
 
     @StateObject private var model: PlaylistContent
     @ObservedObject private var downloads = DownloadManager.shared
-    @EnvironmentObject private var player: PlayerService
+    // This page only sends playback commands; individual rows observe playback.
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showFullDescription = false
+    #if os(macOS)
+    @State private var trackViewport = CGRect.zero
+    #endif
     #if os(iOS)
     @State private var showSearch = false
     @State private var searchFocused = false
@@ -106,15 +110,18 @@ struct PlaylistDetailView: View {
 
     private var onlineContent: some View {
         #if os(macOS)
-        List {
-            playlistContents
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                playlistContents
+            }
+            .coordinateSpace(name: TrackListView.scrollContentCoordinateSpace)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 0)
+        .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, rect in
+            trackViewport = rect
+        }
+        // The window extends behind a transparent titlebar. Keep song content
+        // inside the safe area instead of painting over the window title.
+        .clipped()
         .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
         #else
         ScrollView {
@@ -144,7 +151,7 @@ struct PlaylistDetailView: View {
 
     private var trackListLayout: TrackListView.Layout {
         #if os(macOS)
-        return .listRows
+        return .viewport(trackViewport)
         #else
         return .stack
         #endif
@@ -163,9 +170,6 @@ struct PlaylistDetailView: View {
                     regularHeader(detail)
                         .padding(.horizontal, Theme.Layout.contentInset)
                         .padding(.top, 16)
-                        #if os(macOS)
-                        .padding(.bottom, 20)
-                        #endif
                 }
             }
 

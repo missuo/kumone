@@ -7,6 +7,8 @@ enum TrackRowStyle {
     case albumTrack
     /// Compact with artwork, no album column (artist hot songs, panels).
     case compact
+
+    var desktopRowHeight: CGFloat { self == .albumTrack ? 46 : 52 }
 }
 
 enum RecommendationContext {
@@ -152,8 +154,7 @@ struct TrackRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, isCompact ? 6 : 5)
-        // Fixed row height keeps lazy-stack height estimation exact,
-        // preventing scroll-offset jumps in long lists (#3).
+        // Keep the row and its virtual scroll extent in agreement (#3).
         .frame(height: rowHeight)
         .opacity(isPlayable && !needsNetwork ? 1 : 0.45)
         .background(
@@ -271,9 +272,9 @@ struct TrackRow: View {
 
     private var rowHeight: CGFloat {
         if style == .albumTrack {
-            return isCompact ? compactAlbumRowHeight : 46
+            return isCompact ? compactAlbumRowHeight : style.desktopRowHeight
         }
-        return isCompact ? compactRowHeight : 52
+        return isCompact ? compactRowHeight : style.desktopRowHeight
     }
 
     @ViewBuilder
@@ -578,9 +579,12 @@ final class SpectrumBarsView: PlatformView {
 struct TrackListView: View {
     enum Layout {
         case stack
-        /// Expose rows directly to an enclosing List so it can recycle them.
-        case listRows
+        /// Visible rectangle in the enclosing scroll content's coordinates.
+        case viewport(CGRect)
     }
+
+    static let scrollContentCoordinateSpace = "trackListScrollContent"
+    private let rowSpacing: CGFloat = 1
 
     let tracks: [Track]
     var style: TrackRowStyle = .full
@@ -595,20 +599,37 @@ struct TrackListView: View {
     var selection: Binding<Set<Int>>?
     var layout: Layout = .stack
 
-    @EnvironmentObject private var player: PlayerService
+    // Playback state belongs to TrackRow; the list only starts playback.
+    private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
 
     @ViewBuilder
     var body: some View {
-        if layout == .listRows {
-            rows
-        } else {
-            LazyVStack(spacing: 1) { rows }
+        switch layout {
+        case .stack:
+            LazyVStack(spacing: rowSpacing) { rows(in: tracks.indices) }
+        case .viewport(let viewport):
+            // Reserve the exact height even for rows that have never appeared.
+            // A plain stack renders only this window, so playback/header updates
+            // cannot replace offscreen row heights with estimates and move it.
+            GeometryReader { geometry in
+                let localViewport = viewport.offsetBy(
+                    dx: 0,
+                    dy: -geometry.frame(in: .named(Self.scrollContentCoordinateSpace)).minY
+                )
+                let window = TrackListWindow(count: tracks.count, rowHeight: style.desktopRowHeight,
+                                             spacing: rowSpacing, viewport: localViewport)
+                VStack(spacing: rowSpacing) { rows(in: window.range) }
+                    .offset(y: window.leadingHeight)
+            }
+            .frame(height: TrackListWindow.contentHeight(count: tracks.count,
+                                                        rowHeight: style.desktopRowHeight,
+                                                        spacing: rowSpacing))
         }
     }
 
-    private var rows: some View {
-        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+    private func rows(in range: Range<Int>) -> some View {
+        ForEach(range.map { (index: $0, track: tracks[$0]) }, id: \.track.id) { index, track in
             let recommendationHandler = onRecommendationReduced
             let row = TrackRow(
                 track: track,
@@ -624,27 +645,29 @@ struct TrackListView: View {
                 player.play(tracks: playableTracks, source: source, startAt: track,
                             context: context)
             }
-            if let selection {
-                let selected = selection.wrappedValue.contains(track.id)
-                Button {
-                    if selected { selection.wrappedValue.remove(track.id) }
-                    else { selection.wrappedValue.insert(track.id) }
-                } label: {
-                    HStack(spacing: 0) {
-                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 20))
-                            .foregroundStyle(selected ? Theme.accent : Color.secondary)
-                            .frame(width: 32)
-                        row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+            VStack(spacing: 0) {
+                if let selection {
+                    let selected = selection.wrappedValue.contains(track.id)
+                    Button {
+                        if selected { selection.wrappedValue.remove(track.id) }
+                        else { selection.wrappedValue.insert(track.id) }
+                    } label: {
+                        HStack(spacing: 0) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(selected ? Theme.accent : Color.secondary)
+                                .frame(width: 32)
+                            row.disabled(true).allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                        .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
                     }
-                    .contentShape(Rectangle())
-                    .background(Theme.accent.opacity(selected ? 0.07 : 0), in: RoundedRectangle(cornerRadius: Theme.Radius.standard))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
-                .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
-                .accessibilityIdentifier("select-download-\(track.id)")
-            } else { row }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
+                    .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
+                    .accessibilityIdentifier("select-download-\(track.id)")
+                } else { row }
+            }
         }
     }
 
