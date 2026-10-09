@@ -37,8 +37,6 @@ struct TrackTable: NSViewRepresentable {
 
         override init() {
             super.init()
-            headerCell.host.sizingOptions = [.intrinsicContentSize]
-            footerCell.host.sizingOptions = [.intrinsicContentSize]
             let column = NSTableColumn(identifier: .init("tracks"))
             column.resizingMask = .autoresizingMask
             table.addTableColumn(column)
@@ -59,7 +57,7 @@ struct TrackTable: NSViewRepresentable {
             scrollView.drawsBackground = false
             scrollView.borderType = .noBorder
             scrollView.automaticallyAdjustsContentInsets = false
-            scrollView.onWidthChange = { [weak self] in self?.updateChrome() }
+            scrollView.onWidthChange = { [weak self] in self?.updateChrome(contentChanged: false) }
         }
 
         func update(_ next: TrackTable, environment: EnvironmentValues) {
@@ -120,13 +118,15 @@ struct TrackTable: NSViewRepresentable {
         /// these hosts alive offscreen so view state and measured heights survive
         /// cell reuse; scrolling and playback never measure the whole song list.
         @discardableResult
-        private func updateChrome(notifyTable: Bool = true) -> IndexSet {
+        private func updateChrome(contentChanged: Bool = true, notifyTable: Bool = true) -> IndexSet {
             guard let content else { return [] }
             let width = scrollView.contentSize.width
-            let nextHeader = measure(content.header, in: headerCell, width: width,
-                                     fixedHeight: content.headerHeight)
-            let nextFooter = measure(content.footer, in: footerCell, width: width,
-                                     fixedHeight: content.footerHeight)
+            let nextHeader = contentChanged || content.headerHeight == nil
+                ? measure(content.header, in: headerCell, width: width, fixedHeight: content.headerHeight)
+                : headerHeight
+            let nextFooter = contentChanged || content.footerHeight == nil
+                ? measure(content.footer, in: footerCell, width: width, fixedHeight: content.footerHeight)
+                : footerHeight
             var changed = IndexSet()
             if nextHeader != headerHeight { changed.insert(0) }
             if nextFooter != footerHeight { changed.insert(content.trackIDs.count + 1) }
@@ -138,14 +138,24 @@ struct TrackTable: NSViewRepresentable {
 
         private func measure(_ view: AnyView, in cell: Cell, width: CGFloat,
                              fixedHeight: CGFloat?) -> CGFloat {
+            if let fixedHeight {
+                // AppKit can resize this host directly; assigning a new SwiftUI
+                // root for every animation frame would rebuild fixed chrome.
+                cell.host.sizingOptions = []
+                cell.host.rootView = AnyView(view
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .environment(\.self, environment))
+                return max(1, fixedHeight)
+            }
+            cell.host.sizingOptions = [.intrinsicContentSize]
             cell.host.rootView = AnyView(view
                 .frame(width: max(1, width), alignment: .topLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .environment(\.self, environment))
             // The representable receives its viewport after makeNSView.
             // Defer flexible measurement until that width is available.
-            guard width > 0 else { return max(1, fixedHeight ?? 1) }
-            return max(1, fixedHeight ?? ceil(cell.host.intrinsicContentSize.height))
+            guard width > 0 else { return 1 }
+            return max(1, ceil(cell.host.intrinsicContentSize.height))
         }
 
         private func notifyHeightChanges(_ indexes: IndexSet) {
