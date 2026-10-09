@@ -24,7 +24,13 @@ actor ImageCache {
         self.directory = directory
         self.session = session
         self.offlineArtwork = offlineArtwork
+        #if os(macOS)
+        // Small decoded covers for a large playlist can fit within the byte
+        // budget; avoid evicting them after scrolling only a few hundred songs.
+        memory.countLimit = 2_000
+        #else
         memory.countLimit = 300
+        #endif
         memory.totalCostLimit = 64 * 1024 * 1024
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
@@ -37,10 +43,11 @@ actor ImageCache {
     /// Surface local pixels before waiting for a larger version. The returned
     /// image still prefers the requested resolution, including after reconnect.
     func image(for url: URL, onCachedImage: CachedImageHandler? = nil) async -> PlatformImage? {
-        let key = Self.cacheKey(for: url)
-        if let cached = memory.object(forKey: key as NSString) {
+        let memoryKey = url.absoluteString as NSString
+        if let cached = memory.object(forKey: memoryKey) {
             return cached
         }
+        let key = Self.cacheKey(for: url)
         let requestGeneration = generation
         // The exact file, decoded once: it is both the preview and the answer.
         let exact = onCachedImage == nil ? nil : diskImage(for: key, requestedURL: url)
@@ -50,7 +57,7 @@ actor ImageCache {
         guard !Task.isCancelled else { return nil }
         // Delivering the preview hops to MainActor; another caller may have
         // completed the exact request while this actor was suspended.
-        if let cached = memory.object(forKey: key as NSString) { return cached }
+        if let cached = memory.object(forKey: memoryKey) { return cached }
         if let existing = inflight[key] {
             let result = await existing.task.value
             return result ?? cachedVariant(for: url)
@@ -74,7 +81,7 @@ actor ImageCache {
         if generation == requestGeneration, let result {
             let width = result.size.width
             let height = result.size.height
-            memory.setObject(result, forKey: key as NSString,
+            memory.setObject(result, forKey: memoryKey,
                              cost: Int(width * height * 4))
         }
         // Do not store a smaller fallback under the requested size: a later
@@ -155,9 +162,9 @@ actor ImageCache {
             components.queryItems = otherItems + (size.map { [URLQueryItem(name: "param", value: "\($0)y\($0)")] } ?? [])
             if components.queryItems?.isEmpty == true { components.queryItems = nil }
             guard let candidate = components.url, candidate != url else { continue }
-            let key = Self.cacheKey(for: candidate)
-            if let image = memory.object(forKey: key as NSString),
+            if let image = memory.object(forKey: candidate.absoluteString as NSString),
                let preview = Self.preview(image, for: url) { return preview }
+            let key = Self.cacheKey(for: candidate)
             if let image = diskImage(for: key, requestedURL: url) { return image }
         }
         return nil
@@ -189,7 +196,8 @@ actor ImageCache {
     /// thread-safe). Returns nil unless the image is resident in memory; use
     /// `image(for:)` for disk/network loads.
     nonisolated func cachedImage(for url: URL) -> PlatformImage? {
-        memory.object(forKey: Self.cacheKey(for: url) as NSString)
+        // Hashing is only necessary for disk filenames, not hot row lookups.
+        memory.object(forKey: url.absoluteString as NSString)
     }
 
     private static func cacheKey(for url: URL) -> String {

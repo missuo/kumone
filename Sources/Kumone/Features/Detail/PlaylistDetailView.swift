@@ -13,9 +13,6 @@ struct PlaylistDetailView: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showFullDescription = false
-    #if os(macOS)
-    @State private var trackViewport = CGRect.zero
-    #endif
     #if os(iOS)
     @State private var showSearch = false
     @State private var searchFocused = false
@@ -108,19 +105,31 @@ struct PlaylistDetailView: View {
                          summary: account.userPlaylists.first { $0.id == playlistID })
     }
 
+    @ViewBuilder
     private var onlineContent: some View {
         #if os(macOS)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                playlistContents
+        Group {
+            if model.loadedScope == account.offlineScope, let detail = model.detail {
+                let tracks = model.filteredTracks
+                PlaylistTable(
+                    trackIDs: tracks.map(\.id),
+                    header: AnyView(regularHeader(detail)
+                        .padding(.horizontal, Theme.Layout.contentInset)
+                        .padding(.top, 16)
+                        .padding(.bottom, 20)),
+                    footer: AnyView(VStack(spacing: 20) {
+                        playlistStatus(detail)
+                        PlayerClearanceSpacer()
+                    }.padding(.top, 20)),
+                    footerHeight: desktopFooterHeight(detail)
+                ) { index in
+                    AnyView(trackList(tracks, layout: .singleRow(index))
+                        .padding(.horizontal, Theme.Layout.contentInset - 10))
+                }
+            } else {
+                ScrollView { playlistContents }
             }
-            .coordinateSpace(name: TrackListView.scrollContentCoordinateSpace)
         }
-        .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, rect in
-            trackViewport = rect
-        }
-        // The window extends behind a transparent titlebar. Keep song content
-        // inside the safe area instead of painting over the window title.
         .clipped()
         .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
         #else
@@ -149,12 +158,28 @@ struct PlaylistDetailView: View {
         #endif
     }
 
-    private var trackListLayout: TrackListView.Layout {
-        #if os(macOS)
-        return .viewport(trackViewport)
-        #else
-        return .stack
-        #endif
+    #if os(macOS)
+    private func desktopFooterHeight(_ detail: PlaylistDetail) -> CGFloat {
+        let clearance = Theme.Layout.playerChromeClearance + Theme.Layout.scrollBreathingMargin + 20
+        if model.isLoading || model.isLoadingMore { return clearance + 60 }
+        if model.tracks.isEmpty { return clearance + 100 }
+        if model.tracks.count < detail.trackCount { return clearance + 40 }
+        return clearance
+    }
+    #endif
+
+    private func trackList(_ tracks: [Track], layout: TrackListView.Layout = .stack) -> some View {
+        TrackListView(
+            tracks: tracks,
+            privileges: model.privileges,
+            source: .playlist(playlistID),
+            context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
+            removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
+            onRemoved: { track in Task { await model.remove(track) } },
+            recommendationContext: recommendationContext,
+            onRecommendationReduced: { model.replaceRecommendation($0, with: $1) },
+            layout: layout
+        )
     }
 
     @ViewBuilder
@@ -211,61 +236,10 @@ struct PlaylistDetailView: View {
             }
             #endif
 
-            TrackListView(
-                tracks: filteredTracks,
-                privileges: model.privileges,
-                source: .playlist(playlistID),
-                context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
-                removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                onRemoved: { track in Task { await model.remove(track) } },
-                recommendationContext: recommendationContext,
-                onRecommendationReduced: { model.replaceRecommendation($0, with: $1) },
-                layout: trackListLayout
-            )
-            .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+            trackList(filteredTracks)
+                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
 
-            if model.isLoading || model.isLoadingMore {
-                HStack {
-                    Spacer()
-                    ProgressView().controlSize(.small)
-                    #if os(iOS)
-                    if supportsPlaylistSearch {
-                        Text("正在加载歌单，搜索结果会继续更新…")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    #endif
-                    Spacer()
-                }
-                .padding(.vertical, 12)
-            } else if model.tracks.isEmpty {
-                Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 32)
-            } else if model.tracks.count < detail.trackCount {
-                Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-            }
-
-            #if os(iOS)
-            if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
-                VStack(spacing: 8) {
-                    Text("歌单未完整加载，搜索结果可能不完整")
-                        .font(.subheadline)
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("重试") { Task { await loadPlaylist() } }
-                        .buttonStyle(.bordered)
-                }
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-            }
-            #endif
+            playlistStatus(detail)
         } else if model.isLoading {
             loadingHeader
         } else if let message = model.errorMessage {
@@ -278,6 +252,52 @@ struct PlaylistDetailView: View {
                 .frame(minHeight: 400)
         }
         PlayerClearanceSpacer()
+    }
+
+    @ViewBuilder
+    private func playlistStatus(_ detail: PlaylistDetail) -> some View {
+        if model.isLoading || model.isLoadingMore {
+            HStack {
+                Spacer()
+                ProgressView().controlSize(.small)
+                #if os(iOS)
+                if supportsPlaylistSearch {
+                    Text("正在加载歌单，搜索结果会继续更新…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
+                Spacer()
+            }
+            .padding(.vertical, 12)
+        } else if model.tracks.isEmpty {
+            Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+        } else if model.tracks.count < detail.trackCount {
+            Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+        }
+
+        #if os(iOS)
+        if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
+            VStack(spacing: 8) {
+                Text("歌单未完整加载，搜索结果可能不完整")
+                    .font(.subheadline)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("重试") { Task { await loadPlaylist() } }
+                    .buttonStyle(.bordered)
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+        }
+        #endif
     }
 
     // MARK: - Compact (Mobile) Header

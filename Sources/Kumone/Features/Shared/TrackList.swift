@@ -163,7 +163,9 @@ struct TrackRow: View {
         )
         .contentShape(Rectangle())
         .onHover { hovering in
-            withAnimation(AppAnimation.quick) { isHovering = hovering }
+            // Scrolling moves many rows beneath the pointer. Avoid starting a
+            // new implicit animation for every row crossed during a scroll.
+            isHovering = hovering
         }
         #if os(macOS)
         .onTapGesture(count: 2) {
@@ -579,11 +581,12 @@ final class SpectrumBarsView: PlatformView {
 struct TrackListView: View {
     enum Layout {
         case stack
-        /// Visible rectangle in the enclosing scroll content's coordinates.
-        case viewport(CGRect)
+        #if os(macOS)
+        /// One reusable native table cell, retaining the complete playback queue.
+        case singleRow(Int)
+        #endif
     }
 
-    static let scrollContentCoordinateSpace = "trackListScrollContent"
     private let rowSpacing: CGFloat = 1
 
     let tracks: [Track]
@@ -608,23 +611,10 @@ struct TrackListView: View {
         switch layout {
         case .stack:
             LazyVStack(spacing: rowSpacing) { rows(in: tracks.indices) }
-        case .viewport(let viewport):
-            // Reserve the exact height even for rows that have never appeared.
-            // A plain stack renders only this window, so playback/header updates
-            // cannot replace offscreen row heights with estimates and move it.
-            GeometryReader { geometry in
-                let localViewport = viewport.offsetBy(
-                    dx: 0,
-                    dy: -geometry.frame(in: .named(Self.scrollContentCoordinateSpace)).minY
-                )
-                let window = TrackListWindow(count: tracks.count, rowHeight: style.desktopRowHeight,
-                                             spacing: rowSpacing, viewport: localViewport)
-                VStack(spacing: rowSpacing) { rows(in: window.range) }
-                    .offset(y: window.leadingHeight)
-            }
-            .frame(height: TrackListWindow.contentHeight(count: tracks.count,
-                                                        rowHeight: style.desktopRowHeight,
-                                                        spacing: rowSpacing))
+        #if os(macOS)
+        case .singleRow(let index):
+            rows(in: index..<index + 1)
+        #endif
         }
     }
 
