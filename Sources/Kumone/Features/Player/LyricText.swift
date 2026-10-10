@@ -3,9 +3,11 @@ import SwiftUI
 /// The lyric itself, with furigana over the kanji when the reader asked for it
 /// and the line has kanji worth annotating.
 ///
-/// Every other case falls through to a plain `Text`, so lyrics that are not
-/// Japanese, and the two annotation modes that are not furigana, keep exactly
-/// the rendering they had.
+/// The karaoke wipe draws through the same `Canvas` as the furigana lines:
+/// concatenating a `Text` per character here instead made SwiftUI rebuild and
+/// re-resolve the whole line — and re-lay-out the page around it — on every
+/// display frame while the song played. Lines with neither furigana nor a
+/// wipe stay a plain `Text`.
 struct LyricText: View {
     let line: LyricLine
     let size: CGFloat
@@ -35,23 +37,26 @@ struct LyricText: View {
             // visual aid and would only clutter it spoken.
             .accessibilityRepresentation { Text(line.text.isEmpty ? "♪" : line.text) }
         } else if let alphas, !alphas.isEmpty {
-            wiped(alphas)
-                .font(.system(size: size, weight: weight, design: rounded ? .rounded : .default))
+            // The wipe rides the same `Canvas` pipeline as the furigana
+            // lines: `RubyAttributedString` already bakes one foreground
+            // colour per character, and Core Text can restyle a run without
+            // SwiftUI having to resolve the text anew every frame.
+            RubyText(
+                segments: [RubySegment(line.text)],
+                size: size,
+                weight: weight,
+                color: color,
+                alignment: alignment,
+                rounded: rounded,
+                alphas: alphas
+            )
+            // The line is glyphs in a `Canvas`, which carries no text for
+            // VoiceOver to read. Stand in the plain lyric.
+            .accessibilityRepresentation { Text(line.text.isEmpty ? "♪" : line.text) }
         } else {
             Text(line.text.isEmpty ? "♪" : line.text)
                 .font(.system(size: size, weight: weight, design: rounded ? .rounded : .default))
                 .foregroundStyle(color)
         }
-    }
-
-    /// One concatenated `Text`, so the line still wraps, with the wipe applied
-    /// per character.
-    private func wiped(_ alphas: [Double]) -> Text {
-        var out = Text(verbatim: "")
-        for (index, character) in line.text.enumerated() {
-            let alpha = index < alphas.count ? alphas[index] : 1
-            out = out + Text(verbatim: String(character)).foregroundColor(color.opacity(alpha))
-        }
-        return out
     }
 }
