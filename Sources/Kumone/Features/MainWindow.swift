@@ -396,6 +396,12 @@ struct MainWindowConfigurator: NSViewRepresentable {
         private var hasScheduledAmbientConfiguration = false
         private var titlebarFadedOut = false
         private var windowToolbarHidden = false
+        /// The item views the immersive page swaps out, kept so the home page
+        /// gets them back; see `suppressImmersiveToolbarItems`.
+        private var hiddenToolbarItemViews: [String: NSView] = [:]
+        private var toolbarItemStandIn: NSView?
+        /// Separator items the page hides (they have no view to swap).
+        private var hiddenToolbarSeparatorIdentifiers: Set<String> = []
 
         /// Hides the titlebar text while the immersive page covers the window.
         /// The toolbar is dropped separately, and the window buttons stay: this
@@ -438,27 +444,57 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if toolbar.isVisible != shouldBeVisible {
                 toolbar.isVisible = shouldBeVisible
             }
-            applySidebarToggleVisibility(in: toolbar)
+            suppressImmersiveToolbarItems(in: toolbar)
         }
 
-        /// Hides the split view's system sidebar-toggle item while the
-        /// immersive page is up. `.toolbar(removing: .sidebarToggle)` is a
-        /// no-op for the toggle `NavigationSplitView` injects on this macOS,
-        /// and a SwiftUI-owned item cannot be dropped by hand — but its view
-        /// can be hidden: a hidden view draws nothing while the toolbar keeps
-        /// its items and its height (#128). SwiftUI may rebuild the item at
-        /// will, so this rides the same re-assert path as the toolbar itself.
-        private func applySidebarToggleVisibility(in toolbar: NSToolbar) {
-            let shouldHide = windowToolbarHidden
-            for item in toolbar.items {
-                guard item.itemIdentifier.rawValue
-                    .lowercased()
-                    .contains("togglesidebar")
-                else { continue }
-                if item.view?.isHidden != shouldHide {
-                    item.view?.isHidden = shouldHide
+        /// Takes the whole toolbar's items out of the immersive page — except
+        /// the 1pt placeholder keeping the bar (and the titlebar height that
+        /// parks the window buttons) alive. The split view's sidebar toggle
+        /// and separator, and the navigation stack's back button when the page
+        /// was opened from a pushed screen, are all built into the toolbar
+        /// whether or not the page covers them; `.toolbar(removing:)` is a
+        /// no-op for what the frameworks inject. Merely hiding an item's view
+        /// is not enough either: AppKit re-shows toolbar item views on its own
+        /// schedule, so hovering brings a button right back, live and
+        /// clickable, over the page. Swapping in an empty stand-in instead
+        /// leaves nothing to re-show, whatever the toolbar decides; separator
+        /// items have no view to swap, so those are hidden outright.
+        private func suppressImmersiveToolbarItems(in toolbar: NSToolbar) {
+            if windowToolbarHidden {
+                for item in toolbar.items {
+                    if let view = item.view {
+                        guard view !== standInToolbarItemView() else { continue }
+                        hiddenToolbarItemViews[item.itemIdentifier.rawValue] = view
+                        item.view = standInToolbarItemView()
+                    } else if item.itemIdentifier.rawValue.lowercased().contains("separator"),
+                              !item.isHidden {
+                        hiddenToolbarSeparatorIdentifiers.insert(item.itemIdentifier.rawValue)
+                        item.isHidden = true
+                    }
+                }
+            } else {
+                for (identifier, original) in hiddenToolbarItemViews {
+                    hiddenToolbarItemViews.removeValue(forKey: identifier)
+                    guard let item = toolbar.items.first(where: {
+                        $0.itemIdentifier.rawValue == identifier
+                    }),
+                    item.view === standInToolbarItemView() else { continue }
+                    item.view = original
+                }
+                for identifier in hiddenToolbarSeparatorIdentifiers {
+                    hiddenToolbarSeparatorIdentifiers.remove(identifier)
+                    toolbar.items.first {
+                        $0.itemIdentifier.rawValue == identifier
+                    }?.isHidden = false
                 }
             }
+        }
+
+        private func standInToolbarItemView() -> NSView {
+            if let toolbarItemStandIn { return toolbarItemStandIn }
+            let standIn = HiddenToolbarItemView()
+            toolbarItemStandIn = standIn
+            return standIn
         }
 
         func attach(to window: NSWindow?) {
@@ -603,6 +639,13 @@ struct MainWindowConfigurator: NSViewRepresentable {
             return super.forwardingTarget(for: aSelector)
         }
     }
+}
+
+/// Stands in for a toolbar item the immersive page does not want shown: it
+/// draws nothing, takes no hits, and — unlike a merely hidden view, which the
+/// toolbar may re-show on hover — has nothing to show.
+private final class HiddenToolbarItemView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 #endif
 
