@@ -11,6 +11,10 @@ struct MainWindow: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var toasts: ToastCenter
 
+    /// Whether the main window is on screen at all — the page is put away
+    /// while it is not (miniaturised or hidden), see the overlay below.
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
+
     #if os(macOS)
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     #else
@@ -196,7 +200,12 @@ struct MainWindow: View {
             LoginSheet()
         }
         .overlay {
-            if player.showNowPlaying {
+            // The page is put away while the window is off screen
+            // (miniaturised or ordered out): the vinyl, lyrics and cover it
+            // holds together add up to tens of megabytes, and rebuilding the
+            // page takes a single frame when the window comes back. The
+            // player state — and the page on restore — is untouched.
+            if player.showNowPlaying, windowVisibility.isOnScreen {
                 #if os(macOS)
                 NowPlayingView(onOpenDestination: openDestination)
                     .environmentObject(artworkStore)
@@ -519,16 +528,16 @@ struct MainWindowConfigurator: NSViewRepresentable {
             }
         }
 
-        /// Miniaturised, ordered out and fully occluded all mean the page is
-        /// not on screen: the spinning vinyl, the tonearm's wobble and the
-        /// karaoke wipe stand their clocks down while nothing can see them
+        /// Miniaturised, ordered out and fully occluded all mean nothing can
+        /// see the page: its animations stand their clocks down, and a window
+        /// in the Dock (or hidden) also has the page itself put away
         /// (#128 performance work).
         private func refreshWindowVisibility() {
             guard let window else { return }
+            let onScreen = window.isVisible && !window.isMiniaturized
             MainWindowVisibility.shared.update(
-                isVisible: window.isVisible
-                    && !window.isMiniaturized
-                    && window.occlusionState.contains(.visible)
+                isVisible: onScreen && window.occlusionState.contains(.visible),
+                isOnScreen: onScreen
             )
         }
 
