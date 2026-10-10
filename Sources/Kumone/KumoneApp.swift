@@ -195,6 +195,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            // The window is on screen again: let the page's animations resume
+            // even if the occlusion observer lags the fronting.
+            MainWindowVisibility.shared.update(
+                isVisible: window.isVisible && !window.isMiniaturized
+            )
         } else {
             openMainWindow?()
         }

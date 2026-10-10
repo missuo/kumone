@@ -1048,10 +1048,13 @@ struct LyricMainText: View {
     var inactiveOpacity: Double = 0.45
 
     @EnvironmentObject private var player: PlayerService
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
 
     var body: some View {
         if isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(paused: !player.isPlaying)) { _ in
+            TimelineView(.animation(
+                paused: !player.isPlaying || !windowVisibility.isVisible
+            )) { _ in
                 LyricText(
                     line: line, size: size, weight: weight, color: .white,
                     alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)

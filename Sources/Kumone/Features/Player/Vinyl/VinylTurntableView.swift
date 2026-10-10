@@ -15,6 +15,7 @@ public struct VinylTurntableView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
     @State private var isTransitioningTrack = false
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
 
     public init(
         artworkImage: PlatformImage?,
@@ -42,7 +43,10 @@ public struct VinylTurntableView: View {
 
         return ZStack(alignment: .top) {
             // MARK: 1. Rotating Vinyl Disc (with horizontal drag & slide transitions)
-            TimelineView(.animation(paused: !isPlaying || isDragging || isTransitioningTrack)) { timeline in
+            TimelineView(.animation(
+                paused: !isPlaying || isDragging || isTransitioningTrack
+                    || !windowVisibility.isVisible
+            )) { timeline in
                 let currentAngle = rotationState.currentAngle(at: timeline.date)
 
                 VinylRecordView(artworkImage: artworkImage, size: discSize)

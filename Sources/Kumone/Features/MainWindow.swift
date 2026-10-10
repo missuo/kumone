@@ -464,6 +464,8 @@ struct MainWindowConfigurator: NSViewRepresentable {
             }
             AppDelegate.shared?.mainWindow = window
             observeFullScreenChanges(of: window)
+            observeWindowVisibility(of: window)
+            refreshWindowVisibility()
         }
 
         /// Full screen hands the titlebar and toolbar to a system-managed
@@ -495,9 +497,45 @@ struct MainWindowConfigurator: NSViewRepresentable {
             }
         }
 
+        /// SwiftUI keeps the page's `TimelineView`s ticking while the window
+        /// is off screen, so track the states that take it there — and bring
+        /// it back — and tell `MainWindowVisibility`.
+        private func observeWindowVisibility(of window: NSWindow) {
+            let center = NotificationCenter.default
+            for name in [
+                NSWindow.didMiniaturizeNotification,
+                NSWindow.didDeminiaturizeNotification,
+                NSWindow.didChangeOcclusionStateNotification
+            ] {
+                center.addObserver(
+                    forName: name,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.refreshWindowVisibility()
+                    }
+                }
+            }
+        }
+
+        /// Miniaturised, ordered out and fully occluded all mean the page is
+        /// not on screen: the spinning vinyl, the tonearm's wobble and the
+        /// karaoke wipe stand their clocks down while nothing can see them
+        /// (#128 performance work).
+        private func refreshWindowVisibility() {
+            guard let window else { return }
+            MainWindowVisibility.shared.update(
+                isVisible: window.isVisible
+                    && !window.isMiniaturized
+                    && window.occlusionState.contains(.visible)
+            )
+        }
+
         private func reassertChromeState() {
             window?.titleVisibility = titlebarFadedOut ? .hidden : .visible
             applyWindowToolbarVisibility()
+            refreshWindowVisibility()
         }
 
         func requestAmbientBackgroundConfiguration(
@@ -528,6 +566,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if let window {
                 ambientAppearance.updateLayout(in: window)
             }
+            refreshWindowVisibility()
         }
 
         func windowDidResize(_ notification: Notification) {
@@ -535,11 +574,13 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if let window {
                 ambientAppearance.updateLayout(in: window)
             }
+            refreshWindowVisibility()
         }
 
         // Hide instead of close; keep the scene alive.
         func windowShouldClose(_ sender: NSWindow) -> Bool {
             sender.orderOut(nil)
+            refreshWindowVisibility()
             return false
         }
 

@@ -7,6 +7,7 @@ public struct VinylTonearmView: View {
     public let isPlaying: Bool
     public let height: CGFloat
     public let reduceMotion: Bool
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
 
     public init(isPlaying: Bool, height: CGFloat = 175, reduceMotion: Bool = false) {
         self.isPlaying = isPlaying
@@ -25,7 +26,9 @@ public struct VinylTonearmView: View {
                 .zIndex(3)
 
             // 2. Rotating Arm Assembly (可旋转的臂杆总成)
-            TimelineView(.animation(paused: !isPlaying || reduceMotion)) { timeline in
+            TimelineView(.animation(
+                paused: !isPlaying || reduceMotion || !windowVisibility.isVisible
+            )) { timeline in
                 let wobble = wobbleDegrees(at: timeline.date)
                 armAssembly(width: width, height: height)
                     .rotationEffect(
