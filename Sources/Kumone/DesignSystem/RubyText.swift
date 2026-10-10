@@ -257,7 +257,7 @@ private struct RubyTextLayout: Layout {
     }
 }
 
-private extension Font.Weight {
+extension Font.Weight {
     var platform: PlatformFont.Weight {
         switch self {
         case .ultraLight: return .ultraLight

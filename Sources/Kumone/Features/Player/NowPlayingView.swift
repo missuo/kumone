@@ -44,18 +44,19 @@ struct NowPlayingView: View {
             .frame(width: geo.size.width)
             .overlay(alignment: .topLeading) {
                 if showsClassicChrome(isCompact: isCompact) {
-                    Button {
-                        close()
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .frame(width: 36, height: 36)
-                            .background(.white.opacity(0.12), in: Circle())
-                    }
-                    .buttonStyle(.pressable)
-                    .padding(.top, 20)
-                    .padding(.leading, 20)
+                    #if os(macOS)
+                    // The window keeps its own buttons while this page is up
+                    // (#128). Beside them the chevron reads as one toolbar row:
+                    // a 28pt bubble whose center matches the 14pt traffic
+                    // lights (y 19…33 inside the 52pt titlebar).
+                    collapseButton(diameter: 28, glyphSize: 12)
+                        .padding(.top, 12)
+                        .padding(.leading, 91)
+                    #else
+                    collapseButton(diameter: 36, glyphSize: 14)
+                        .padding(.top, 20)
+                        .padding(.leading, 20)
+                    #endif
                 }
             }
             .overlay(alignment: .topTrailing) {
@@ -155,6 +156,20 @@ struct NowPlayingView: View {
         #endif
     }
 
+    /// Collapse back to the browse UI. Shared by both platforms so the macOS
+    /// layout can park it beside the window buttons (#128).
+    private func collapseButton(diameter: CGFloat, glyphSize: CGFloat) -> some View {
+        Button {
+            close()
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: glyphSize, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: diameter, height: diameter)
+                .background(.white.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.pressable)
+    }
 
     /// Jump straight to the line the song is on. Used when the view appears,
     /// where waiting for the next line change would leave the lyrics parked at
@@ -1033,15 +1048,32 @@ struct LyricMainText: View {
     var inactiveOpacity: Double = 0.45
 
     @EnvironmentObject private var player: PlayerService
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
 
     var body: some View {
         if isActive, verbatim, let words = line.words, !words.isEmpty {
-            TimelineView(.animation(paused: !player.isPlaying)) { _ in
+            #if os(macOS)
+            // The wipe runs on a display link inside the host: a per-frame
+            // SwiftUI value here re-measured the page's whole layout while a
+            // verbatim line was up (see KaraokeLyricLine).
+            KaraokeLyricLine(
+                line: line,
+                words: words,
+                size: size,
+                weight: weight,
+                playing: player.isPlaying && windowVisibility.isVisible
+            )
+            #else
+            TimelineView(.animation(
+                minimumInterval: 1 / 30,
+                paused: !player.isPlaying || !windowVisibility.isVisible
+            )) { _ in
                 LyricText(
                     line: line, size: size, weight: weight, color: .white,
                     alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)
                 )
             }
+            #endif
         } else {
             LyricText(
                 line: line, size: size, weight: weight,

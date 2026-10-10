@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 
 /// Vector mechanical tonearm (唱臂与唱针) matching vintage / NetEase turntable styling.
@@ -7,6 +8,7 @@ public struct VinylTonearmView: View {
     public let isPlaying: Bool
     public let height: CGFloat
     public let reduceMotion: Bool
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
 
     public init(isPlaying: Bool, height: CGFloat = 175, reduceMotion: Bool = false) {
         self.isPlaying = isPlaying
@@ -25,17 +27,14 @@ public struct VinylTonearmView: View {
                 .zIndex(3)
 
             // 2. Rotating Arm Assembly (可旋转的臂杆总成)
-            TimelineView(.animation(paused: !isPlaying || reduceMotion)) { timeline in
-                let wobble = wobbleDegrees(at: timeline.date)
-                armAssembly(width: width, height: height)
-                    .rotationEffect(
-                        .degrees(rotationAngle + wobble),
-                        anchor: UnitPoint(x: 0.5, y: pivotSize * 0.5 / height)
-                    )
-            }
-            .animation(
-                reduceMotion ? nil : .spring(response: 0.48, dampingFraction: 0.74, blendDuration: 0.08),
-                value: isPlaying
+            EngagingTonearm(
+                arm: armAssembly(width: width, height: height),
+                engaged: isPlaying,
+                wobbling: isPlaying && !reduceMotion && windowVisibility.isVisible,
+                animated: !reduceMotion,
+                width: width,
+                height: height,
+                pivotY: pivotSize * 0.5
             )
             .shadow(color: .black.opacity(0.4), radius: 6, x: -3, y: 5)
             .zIndex(2)
@@ -43,14 +42,11 @@ public struct VinylTonearmView: View {
         .frame(width: width, height: height, alignment: .top)
     }
 
-    private var rotationAngle: Double {
-        // Playing: resting onto outer track (0°); Paused: lifted and parked away (-32°)
-        isPlaying ? 0.0 : -32.0
-    }
-
-    private func wobbleDegrees(at date: Date) -> Double {
-        guard isPlaying, !reduceMotion else { return 0 }
-        let seconds = date.timeIntervalSinceReferenceDate
+    /// The arm's idle wobble, sampled by the layer animation the arm now runs
+    /// on. `seconds` is an offset into the wobble's own timeline: the two
+    /// sines meet again after 35.2 s (3.2 s × 11 == 1.1 s × 32), which is what
+    /// makes the looping layer animation seamless.
+    static func wobbleDegrees(at seconds: Double) -> Double {
         let harmonic1 = sin(seconds * 2.0 * .pi / 3.2) * 0.20
         let harmonic2 = sin(seconds * 2.0 * .pi / 1.1 + 0.6) * 0.08
         return harmonic1 + harmonic2
@@ -261,3 +257,239 @@ private struct Triangle: Shape {
         return path
     }
 }
+
+// MARK: - Arm motion on the layer
+
+/// Drives the arm's layer: a spring for the engage/disengage swing, and an
+/// additive keyframe wobble while the record plays. The `TimelineView` this
+/// replaces re-evaluated the whole arm — and the page's layout around it —
+/// on every display frame for that ±0.28° shimmer (#128 performance work).
+private final class TonearmMotionController {
+    private static let restedDegrees: Double = 0
+    private static let parkedDegrees: Double = -32
+
+    private let layer: CALayer
+    private var engaged: Bool
+    private var wobbling = false
+
+    init(layer: CALayer, engaged: Bool) {
+        self.layer = layer
+        self.engaged = engaged
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setValue(Self.zRotation(engaged: engaged), forKeyPath: "transform.rotation.z")
+        CATransaction.commit()
+    }
+
+    func setEngaged(_ engaged: Bool, animated: Bool) {
+        guard engaged != self.engaged else { return }
+        self.engaged = engaged
+        let target = Self.zRotation(engaged: engaged)
+        // Retarget from what is on screen, not from the model: a drag released
+        // mid-swing must reverse smoothly rather than jump to the far end.
+        let from = layer.presentation()?.value(forKeyPath: "transform.rotation.z") as? Double
+            ?? layer.value(forKeyPath: "transform.rotation.z") as? Double ?? 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.setValue(target, forKeyPath: "transform.rotation.z")
+        CATransaction.commit()
+        guard animated else { return }
+        // CASpringAnimation parameters converted from the SwiftUI spring this
+        // replaces (response 0.48, damping fraction 0.74, mass 1).
+        let spring = CASpringAnimation(keyPath: "transform.rotation.z")
+        spring.mass = 1
+        spring.stiffness = 171.5
+        spring.damping = 19.4
+        spring.initialVelocity = 0
+        spring.fromValue = from
+        spring.toValue = target
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "tonearm-engage")
+    }
+
+    func setWobbling(_ wobbling: Bool) {
+        guard wobbling != self.wobbling else { return }
+        self.wobbling = wobbling
+        guard wobbling else {
+            layer.removeAnimation(forKey: "tonearm-wobble")
+            return
+        }
+        // One seamless period of `wobbleDegrees`, sampled. Additive: the
+        // shimmer rides on the resting angle the spring sets instead of
+        // replacing it.
+        let period = 35.2
+        let step = 0.1
+        let samples = Int(period / step) + 1
+        let values = (0..<samples).map { index in
+            -VinylTonearmView.wobbleDegrees(at: Double(index) * step) * .pi / 180
+        }
+        let animation = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        animation.values = values
+        animation.duration = period
+        animation.repeatCount = .infinity
+        animation.isAdditive = true
+        animation.calculationMode = .linear
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        layer.add(animation, forKey: "tonearm-wobble")
+    }
+
+    /// Core Animation measures angles the other way round from SwiftUI, so the
+    /// SwiftUI-side degrees (`-32` parks the arm away from the record) arrive
+    /// on the layer negated.
+    private static func zRotation(engaged: Bool) -> Double {
+        -(engaged ? restedDegrees : parkedDegrees) * .pi / 180
+    }
+}
+
+#if os(macOS)
+private struct EngagingTonearm<Content: View>: PlatformViewRepresentable {
+    let arm: Content
+    let engaged: Bool
+    let wobbling: Bool
+    let animated: Bool
+    let width: CGFloat
+    let height: CGFloat
+    let pivotY: CGFloat
+
+    func makeNSView(context: Context) -> TonearmHost<Content> {
+        TonearmHost(arm: arm, engaged: engaged, wobbling: wobbling,
+                    width: width, height: height, pivotY: pivotY)
+    }
+
+    func updateNSView(_ host: TonearmHost<Content>, context: Context) {
+        host.update(arm: arm, width: width, height: height, pivotY: pivotY)
+        host.motion.setEngaged(engaged, animated: animated)
+        host.motion.setWobbling(wobbling)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TonearmHost<Content>, context: Context) -> CGSize? {
+        CGSize(width: width, height: height)
+    }
+}
+
+/// Holds the arm inside a stage whose origin sits *on the arm's pivot*: AppKit
+/// anchors a view's backing layer at its origin, so the pivot is placed at the
+/// stage's origin and the arm at negative coordinates — the layer rotation
+/// then swings the arm around that point instead of the stage's corner.
+private final class TonearmHost<Content: View>: NSView {
+    private let arm: NSHostingView<Content>
+    private let stage = NSView()
+    private var width: CGFloat
+    private var height: CGFloat
+    private var pivotY: CGFloat
+    private(set) var motion: TonearmMotionController!
+
+    init(arm: Content, engaged: Bool, wobbling: Bool,
+         width: CGFloat, height: CGFloat, pivotY: CGFloat) {
+        self.arm = NSHostingView(rootView: arm)
+        self.width = width
+        self.height = height
+        self.pivotY = pivotY
+        super.init(frame: .zero)
+        stage.wantsLayer = true
+        addSubview(stage)
+        stage.addSubview(self.arm)
+        motion = TonearmMotionController(layer: stage.layer ?? CALayer(), engaged: engaged)
+        motion.setWobbling(wobbling)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func update(arm: Content, width: CGFloat, height: CGFloat, pivotY: CGFloat) {
+        self.arm.rootView = arm
+        self.width = width
+        self.height = height
+        self.pivotY = pivotY
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        // The arm's pivot is given from the top; AppKit layers measure it from
+        // the bottom-left, where their anchor sits.
+        stage.frame = CGRect(x: bounds.midX, y: bounds.height - pivotY,
+                             width: width, height: height)
+        arm.frame = CGRect(x: -width / 2, y: -(bounds.height - pivotY),
+                           width: width, height: height)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+#else
+private struct EngagingTonearm<Content: View>: PlatformViewRepresentable {
+    let arm: Content
+    let engaged: Bool
+    let wobbling: Bool
+    let animated: Bool
+    let width: CGFloat
+    let height: CGFloat
+    let pivotY: CGFloat
+
+    func makeUIView(context: Context) -> TonearmHost<Content> {
+        TonearmHost(arm: arm, engaged: engaged, wobbling: wobbling,
+                    width: width, height: height, pivotY: pivotY)
+    }
+
+    func updateUIView(_ host: TonearmHost<Content>, context: Context) {
+        host.update(arm: arm, width: width, height: height, pivotY: pivotY)
+        host.motion.setEngaged(engaged, animated: animated)
+        host.motion.setWobbling(wobbling)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: TonearmHost<Content>, context: Context) -> CGSize? {
+        CGSize(width: width, height: height)
+    }
+}
+
+/// Same square stage as the macOS host — see above.
+private final class TonearmHost<Content: View>: UIView {
+    private let armController: UIHostingController<Content>
+    private let stage = UIView()
+    private var width: CGFloat
+    private var height: CGFloat
+    private var pivotY: CGFloat
+    private(set) var motion: TonearmMotionController!
+
+    init(arm: Content, engaged: Bool, wobbling: Bool,
+         width: CGFloat, height: CGFloat, pivotY: CGFloat) {
+        armController = UIHostingController(rootView: arm)
+        self.width = width
+        self.height = height
+        self.pivotY = pivotY
+        super.init(frame: .zero)
+        armController.view.backgroundColor = .clear
+        addSubview(stage)
+        stage.addSubview(armController.view)
+        motion = TonearmMotionController(layer: stage.layer, engaged: engaged)
+        motion.setWobbling(wobbling)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func update(arm: Content, width: CGFloat, height: CGFloat, pivotY: CGFloat) {
+        armController.rootView = arm
+        self.width = width
+        self.height = height
+        self.pivotY = pivotY
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let side = Self.stageSide(width: width, height: height, pivotY: pivotY)
+        stage.frame = CGRect(x: bounds.midX - side / 2, y: pivotY - side / 2,
+                             width: side, height: side)
+        armController.view.frame = CGRect(x: side / 2 - width / 2, y: side / 2 - pivotY,
+                                          width: width, height: height)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+    private static func stageSide(width: CGFloat, height: CGFloat, pivotY: CGFloat) -> CGFloat {
+        let reach = hypot(width / 2, max(pivotY, height - pivotY))
+        return (reach + 12).rounded(.up) * 2
+    }
+}
+#endif
+

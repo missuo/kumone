@@ -11,6 +11,10 @@ struct MainWindow: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var toasts: ToastCenter
 
+    /// Whether the main window is on screen at all — the page is put away
+    /// while it is not (miniaturised or hidden), see the overlay below.
+    @ObservedObject private var windowVisibility = MainWindowVisibility.shared
+
     #if os(macOS)
     @StateObject private var artworkStore = NowPlayingArtworkStore()
     #else
@@ -70,30 +74,45 @@ struct MainWindow: View {
             }
         }
         .toolbar {
-            if #available(macOS 26.0, iOS 26.0, *) {
-                ToolbarItem(placement: .primaryAction) {
-                    SearchFieldView { query in
-                        path.append(Destination.search(query))
-                    }
+            if nowPlayingChromeHidden {
+                // Immersive now-playing page: the real items step aside (the
+                // sidebar toggle is hidden by the coordinator; `.toolbar(
+                // removing:)` is a no-op for the toggle the split view
+                // injects), but a 1pt clear placeholder keeps the NSToolbar
+                // alive. SwiftUI tears the whole toolbar — and with it the
+                // taller titlebar that parks the window buttons at their home
+                // position — down when its last item leaves (#128).
+                ToolbarItem(placement: .automatic) {
+                    Color.clear.frame(width: 1, height: 1)
                 }
-                // Hide the Liquid Glass shared toolbar background behind the
-                // custom capsule search field, else it double-backgrounds on
-                // macOS 26 (dropped by #86's toolbar rewrite, restored here).
-                .sharedBackgroundVisibility(.hidden)
             } else {
-                ToolbarItem(placement: .primaryAction) {
-                    SearchFieldView { query in
-                        path.append(Destination.search(query))
+                if #available(macOS 26.0, iOS 26.0, *) {
+                    ToolbarItem(placement: .primaryAction) {
+                        SearchFieldView { query in
+                            path.append(Destination.search(query))
+                        }
+                    }
+                    // Hide the Liquid Glass shared toolbar background behind the
+                    // custom capsule search field, else it double-backgrounds on
+                    // macOS 26 (dropped by #86's toolbar rewrite, restored here).
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .primaryAction) {
+                        SearchFieldView { query in
+                            path.append(Destination.search(query))
+                        }
                     }
                 }
             }
         }
         #if os(macOS)
-        // Immersive now-playing page: hide the whole window toolbar
-        // (sidebar toggle, navigation title, search field).
-        .toolbar(nowPlayingChromeHidden ? .hidden : .automatic, for: .windowToolbar)
-        // Keep the single main window alive on Cmd+W / red button so the Dock
-        // icon can always bring it back (#60/#63/#66/#70).
+        // Immersive now-playing page: its real toolbar items (sidebar toggle,
+        // title, search field) step aside, and a placeholder keeps the
+        // NSToolbar — and the titlebar height that positions the window
+        // buttons at the home position — alive (#128). Only full screen drops
+        // the toolbar itself, where the system would otherwise pin it over the
+        // page. Keep the single main window alive on Cmd+W / red button so the
+        // Dock icon can always bring it back (#60/#63/#66/#70).
         .background(
             MainWindowConfigurator(
                 ambientConfiguration: MainWindowAmbientConfiguration(
@@ -105,7 +124,8 @@ struct MainWindow: View {
                     intensity: settings.mainWindowAmbientBackgroundIntensity,
                     isDark: isDarkAppearance
                 ),
-                titlebarFadedOut: nowPlayingChromeFadedOut
+                titlebarFadedOut: nowPlayingChromeFadedOut,
+                toolbarHidden: nowPlayingChromeHidden
             )
         )
         #endif
@@ -155,9 +175,13 @@ struct MainWindow: View {
             artworkStore.setArtworkNeeded(needsCurrentArtwork)
             nowPlayingChromeTask?.cancel()
             if player.showNowPlaying {
-                // Fade the titlebar out as the page rises to cover it, then
-                // drop the toolbar once nothing is left to see — snapping it
-                // away at once reads as a glitch above the rising page.
+                // Quiet the titlebar as the page rises to cover it: hide the
+                // title text, then swap the toolbar's items (search field,
+                // sidebar toggle) for a placeholder once nothing is left to
+                // see — snapping them away at once reads as a glitch above
+                // the rising page. The buttons stay: this page is the whole
+                // window, so they are its only way to close, dock or zoom it
+                // (#128).
                 nowPlayingChromeTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled else { return }
@@ -176,7 +200,12 @@ struct MainWindow: View {
             LoginSheet()
         }
         .overlay {
-            if player.showNowPlaying {
+            // The page is put away while the window is off screen
+            // (miniaturised or ordered out): the vinyl, lyrics and cover it
+            // holds together add up to tens of megabytes, and rebuilding the
+            // page takes a single frame when the window comes back. The
+            // player state — and the page on restore — is untouched.
+            if player.showNowPlaying, windowVisibility.isOnScreen {
                 #if os(macOS)
                 NowPlayingView(onOpenDestination: openDestination)
                     .environmentObject(artworkStore)
@@ -322,7 +351,14 @@ struct ArrowCursorOverride: NSViewRepresentable {
 /// forwarded untouched to SwiftUI's own delegate.
 struct MainWindowConfigurator: NSViewRepresentable {
     let ambientConfiguration: MainWindowAmbientConfiguration
+    /// Hides the titlebar text while the immersive page covers the window;
+    /// the window buttons stay on top of the page (#128).
     let titlebarFadedOut: Bool
+    /// Drops the window toolbar while the immersive page covers the window in
+    /// full screen, where the system otherwise pins it over the page. In a
+    /// window the toolbar stays (its items swapped for a placeholder) so the
+    /// titlebar keeps the height that positions the window buttons (#128).
+    let toolbarHidden: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -334,6 +370,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 ambientConfiguration: ambientConfiguration
             )
             context.coordinator.setTitlebarFadedOut(titlebarFadedOut)
+            context.coordinator.setToolbarHidden(toolbarHidden)
         }
         return view
     }
@@ -345,6 +382,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 ambientConfiguration: ambientConfiguration
             )
             context.coordinator.setTitlebarFadedOut(titlebarFadedOut)
+            context.coordinator.setToolbarHidden(toolbarHidden)
         }
     }
 
@@ -357,25 +395,106 @@ struct MainWindowConfigurator: NSViewRepresentable {
         private var pendingAmbientConfiguration: MainWindowAmbientConfiguration?
         private var hasScheduledAmbientConfiguration = false
         private var titlebarFadedOut = false
+        private var windowToolbarHidden = false
+        /// The item views the immersive page swaps out, kept so the home page
+        /// gets them back; see `suppressImmersiveToolbarItems`.
+        private var hiddenToolbarItemViews: [String: NSView] = [:]
+        private var toolbarItemStandIn: NSView?
+        /// Separator items the page hides (they have no view to swap).
+        private var hiddenToolbarSeparatorIdentifiers: Set<String> = []
 
-        /// Fades the titlebar chrome (traffic lights, title, toolbar) instead
-        /// of letting `.toolbar(.hidden)` snap it away. The superview of the
-        /// standard window buttons is the titlebar container, so one alpha
-        /// animation covers the whole bar.
+        /// Hides the titlebar text while the immersive page covers the window.
+        /// The toolbar is dropped separately, and the window buttons stay: this
+        /// page is the whole window, so they are its only way to close,
+        /// minimize or zoom it — and the page paints its backdrop around them
+        /// (#128). Leaving them in the system's hands also keeps their
+        /// full-screen behaviour (auto-hide, reveal on hover) for free.
         func setTitlebarFadedOut(_ fadedOut: Bool) {
             guard fadedOut != titlebarFadedOut else { return }
             titlebarFadedOut = fadedOut
-            guard let titlebar = window?
-                .standardWindowButton(.closeButton)?.superview
-            else { return }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = fadedOut ? 0.2 : 0.25
-                context.timingFunction = CAMediaTimingFunction(
-                    name: fadedOut ? .easeIn : .easeOut
-                )
-                titlebar.animator().alphaValue = fadedOut ? 0 : 1
-            }
+            window?.titleVisibility = fadedOut ? .hidden : .visible
             ambientAppearance.setTitlebarMaskFadedOut(fadedOut)
+        }
+
+        /// Drops the window toolbar while the immersive page is up *in full
+        /// screen*, the classic AppKit way: `toolbar.isVisible = false` takes
+        /// the bar away and leaves the window buttons in place. In a window
+        /// the toolbar stays: the page swaps its items for a placeholder (see
+        /// MainWindow) so the titlebar keeps the height that parks the buttons
+        /// at their home position (#128). Hiding it through SwiftUI's
+        /// `.toolbar(.hidden, for: .windowToolbar)` instead takes the entire
+        /// titlebar — buttons included — down with it, and leaves AppKit's
+        /// `isVisible` at `true`, which is what pins a toolbar over the page
+        /// in full screen.
+        func setToolbarHidden(_ hidden: Bool) {
+            guard hidden != windowToolbarHidden else { return }
+            windowToolbarHidden = hidden
+            applyWindowToolbarVisibility()
+        }
+
+        /// SwiftUI re-commits toolbar visibility on its own schedule and can
+        /// bring the toolbar back mid-immersion, so re-apply whenever the
+        /// window state may have moved underneath us. Only full screen hides
+        /// the toolbar; in a window it must stay so the window buttons hold
+        /// the home position (#128).
+        private func applyWindowToolbarVisibility() {
+            guard let window, let toolbar = window.toolbar else { return }
+            let shouldBeVisible = !(windowToolbarHidden
+                && window.styleMask.contains(.fullScreen))
+            if toolbar.isVisible != shouldBeVisible {
+                toolbar.isVisible = shouldBeVisible
+            }
+            suppressImmersiveToolbarItems(in: toolbar)
+        }
+
+        /// Takes the whole toolbar's items out of the immersive page — except
+        /// the 1pt placeholder keeping the bar (and the titlebar height that
+        /// parks the window buttons) alive. The split view's sidebar toggle
+        /// and separator, and the navigation stack's back button when the page
+        /// was opened from a pushed screen, are all built into the toolbar
+        /// whether or not the page covers them; `.toolbar(removing:)` is a
+        /// no-op for what the frameworks inject. Merely hiding an item's view
+        /// is not enough either: AppKit re-shows toolbar item views on its own
+        /// schedule, so hovering brings a button right back, live and
+        /// clickable, over the page. Swapping in an empty stand-in instead
+        /// leaves nothing to re-show, whatever the toolbar decides; separator
+        /// items have no view to swap, so those are hidden outright.
+        private func suppressImmersiveToolbarItems(in toolbar: NSToolbar) {
+            if windowToolbarHidden {
+                for item in toolbar.items {
+                    if let view = item.view {
+                        guard view !== standInToolbarItemView() else { continue }
+                        hiddenToolbarItemViews[item.itemIdentifier.rawValue] = view
+                        item.view = standInToolbarItemView()
+                    } else if item.itemIdentifier.rawValue.lowercased().contains("separator"),
+                              !item.isHidden {
+                        hiddenToolbarSeparatorIdentifiers.insert(item.itemIdentifier.rawValue)
+                        item.isHidden = true
+                    }
+                }
+            } else {
+                for (identifier, original) in hiddenToolbarItemViews {
+                    hiddenToolbarItemViews.removeValue(forKey: identifier)
+                    guard let item = toolbar.items.first(where: {
+                        $0.itemIdentifier.rawValue == identifier
+                    }),
+                    item.view === standInToolbarItemView() else { continue }
+                    item.view = original
+                }
+                for identifier in hiddenToolbarSeparatorIdentifiers {
+                    hiddenToolbarSeparatorIdentifiers.remove(identifier)
+                    toolbar.items.first {
+                        $0.itemIdentifier.rawValue == identifier
+                    }?.isHidden = false
+                }
+            }
+        }
+
+        private func standInToolbarItemView() -> NSView {
+            if let toolbarItemStandIn { return toolbarItemStandIn }
+            let standIn = HiddenToolbarItemView()
+            toolbarItemStandIn = standIn
+            return standIn
         }
 
         func attach(to window: NSWindow?) {
@@ -389,6 +508,79 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 window.delegate = self
             }
             AppDelegate.shared?.mainWindow = window
+            observeFullScreenChanges(of: window)
+            observeWindowVisibility(of: window)
+            refreshWindowVisibility()
+        }
+
+        /// Full screen hands the titlebar and toolbar to a system-managed
+        /// window of their own, and the hand-off re-commits toolbar
+        /// visibility: the toolbar can come back pinned over the immersive
+        /// page, covering the page's controls and swallowing their clicks —
+        /// the collapse chevron then only answers to Escape (#128). Re-assert
+        /// the immersive state once the transition settles.
+        private func observeFullScreenChanges(of window: NSWindow) {
+            let center = NotificationCenter.default
+            for name in [
+                NSWindow.didEnterFullScreenNotification,
+                NSWindow.didExitFullScreenNotification
+            ] {
+                center.addObserver(
+                    forName: name,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.reassertChromeState()
+                        // SwiftUI re-commits toolbar visibility around the
+                        // hand-off (see MainWindowAmbientAppearanceController),
+                        // so run one more pass once that commit settles.
+                        try? await Task.sleep(for: .milliseconds(100))
+                        self?.reassertChromeState()
+                    }
+                }
+            }
+        }
+
+        /// SwiftUI keeps the page's `TimelineView`s ticking while the window
+        /// is off screen, so track the states that take it there — and bring
+        /// it back — and tell `MainWindowVisibility`.
+        private func observeWindowVisibility(of window: NSWindow) {
+            let center = NotificationCenter.default
+            for name in [
+                NSWindow.didMiniaturizeNotification,
+                NSWindow.didDeminiaturizeNotification,
+                NSWindow.didChangeOcclusionStateNotification
+            ] {
+                center.addObserver(
+                    forName: name,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.refreshWindowVisibility()
+                    }
+                }
+            }
+        }
+
+        /// Miniaturised, ordered out and fully occluded all mean nothing can
+        /// see the page: its animations stand their clocks down, and a window
+        /// in the Dock (or hidden) also has the page itself put away
+        /// (#128 performance work).
+        private func refreshWindowVisibility() {
+            guard let window else { return }
+            let onScreen = window.isVisible && !window.isMiniaturized
+            MainWindowVisibility.shared.update(
+                isVisible: onScreen && window.occlusionState.contains(.visible),
+                isOnScreen: onScreen
+            )
+        }
+
+        private func reassertChromeState() {
+            window?.titleVisibility = titlebarFadedOut ? .hidden : .visible
+            applyWindowToolbarVisibility()
+            refreshWindowVisibility()
         }
 
         func requestAmbientBackgroundConfiguration(
@@ -408,6 +600,9 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 self.attach(to: self.configurationHost?.window)
                 guard let window = self.window else { return }
                 self.ambientAppearance.configure(configuration, in: window)
+                // SwiftUI re-commits toolbar visibility on its own schedule;
+                // put the immersive state back whenever it may have drifted.
+                self.applyWindowToolbarVisibility()
             }
         }
 
@@ -416,6 +611,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if let window {
                 ambientAppearance.updateLayout(in: window)
             }
+            refreshWindowVisibility()
         }
 
         func windowDidResize(_ notification: Notification) {
@@ -423,11 +619,13 @@ struct MainWindowConfigurator: NSViewRepresentable {
             if let window {
                 ambientAppearance.updateLayout(in: window)
             }
+            refreshWindowVisibility()
         }
 
         // Hide instead of close; keep the scene alive.
         func windowShouldClose(_ sender: NSWindow) -> Bool {
             sender.orderOut(nil)
+            refreshWindowVisibility()
             return false
         }
 
@@ -441,6 +639,13 @@ struct MainWindowConfigurator: NSViewRepresentable {
             return super.forwardingTarget(for: aSelector)
         }
     }
+}
+
+/// Stands in for a toolbar item the immersive page does not want shown: it
+/// draws nothing, takes no hits, and — unlike a merely hidden view, which the
+/// toolbar may re-show on hover — has nothing to show.
+private final class HiddenToolbarItemView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 #endif
 
