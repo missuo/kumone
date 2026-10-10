@@ -41,6 +41,17 @@ for flag in ${SWIFT_BUILD_FLAGS:-}; do
   EXTRA_FLAGS+=("$flag")
 done
 
+# Record the real SDK version in the linked binary. Left to itself, SwiftPM
+# passes the deployment target as both the minimum *and* the SDK version on
+# the linker's `-platform_version` flag, so the app reads as one built with
+# the macOS 15 SDK — and the system then gives it the legacy window
+# appearance on macOS 26/27 (no current-generation chrome) even though it was
+# built on a machine running the new SDK.
+SDK_VERSION="$(xcrun --show-sdk-version 2>/dev/null || true)"
+if [ -n "$SDK_VERSION" ]; then
+  EXTRA_FLAGS+=(-Xlinker -platform_version -Xlinker macos -Xlinker 15.0 -Xlinker "$SDK_VERSION")
+fi
+
 # ${arr[@]+...} keeps macOS's bash 3.2 happy under set -u with empty arrays
 build_slice() { # [triple] — prints nothing; sets SLICE_BIN_PATH
   local triple_flags=()
