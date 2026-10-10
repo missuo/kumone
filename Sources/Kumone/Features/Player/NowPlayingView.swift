@@ -1052,7 +1052,20 @@ struct LyricMainText: View {
 
     var body: some View {
         if isActive, verbatim, let words = line.words, !words.isEmpty {
+            #if os(macOS)
+            // The wipe runs on a display link inside the host: a per-frame
+            // SwiftUI value here re-measured the page's whole layout while a
+            // verbatim line was up (see KaraokeLyricLine).
+            KaraokeLyricLine(
+                line: line,
+                words: words,
+                size: size,
+                weight: weight,
+                playing: player.isPlaying && windowVisibility.isVisible
+            )
+            #else
             TimelineView(.animation(
+                minimumInterval: 1 / 30,
                 paused: !player.isPlaying || !windowVisibility.isVisible
             )) { _ in
                 LyricText(
@@ -1060,6 +1073,7 @@ struct LyricMainText: View {
                     alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)
                 )
             }
+            #endif
         } else {
             LyricText(
                 line: line, size: size, weight: weight,

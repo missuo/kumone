@@ -37,19 +37,42 @@ struct LyricText: View {
             // visual aid and would only clutter it spoken.
             .accessibilityRepresentation { Text(line.text.isEmpty ? "♪" : line.text) }
         } else if let alphas, !alphas.isEmpty {
-            // The wipe rides the same `Canvas` pipeline as the furigana
-            // lines: `RubyAttributedString` already bakes one foreground
-            // colour per character, and Core Text can restyle a run without
-            // SwiftUI having to resolve the text anew every frame.
+            // The wipe used to be one `RubyText` per frame. Every frame that
+            // view value changed, so SwiftUI re-measured it — and with it the
+            // page's whole layout chain — while the karaoke line was up,
+            // worth ~40% of a core. Laying the line out twice instead — dim
+            // ink once, fixed, with the wiped ink as an overlay — keeps the
+            // per-frame value inside the overlay: the row's layout inputs
+            // never move, and only the overlay repaints.
+            //
+            // The overlay carries the wipe with the dim floor (0.28) removed,
+            // so it composites *over* the base to exactly the intended
+            // opacity: base 0.28 + overlay β reads 0.28 + 0.72β, which is the
+            // wipe's own alpha when β = (α − 0.28) / 0.72. `Self.alphas` in
+            // NowPlayingView is where that floor is defined.
             RubyText(
                 segments: [RubySegment(line.text)],
                 size: size,
                 weight: weight,
-                color: color,
+                color: color.opacity(0.28),
                 alignment: alignment,
-                rounded: rounded,
-                alphas: alphas
+                rounded: rounded
             )
+            .overlay {
+                RubyText(
+                    segments: [RubySegment(line.text)],
+                    size: size,
+                    weight: weight,
+                    color: color,
+                    alignment: alignment,
+                    rounded: rounded,
+                    alphas: alphas.map { max(0, ($0 - 0.28) / 0.72) }
+                )
+            }
+            // Keep the per-frame wipe inside this row's own geometry: without
+            // it, every frame the overlay changes makes SwiftUI re-measure the
+            // whole page above the line (#128 performance work).
+            .geometryGroup()
             // The line is glyphs in a `Canvas`, which carries no text for
             // VoiceOver to read. Stand in the plain lyric.
             .accessibilityRepresentation { Text(line.text.isEmpty ? "♪" : line.text) }
