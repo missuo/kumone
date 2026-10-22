@@ -108,6 +108,7 @@ struct SettingsView: View {
                     }
                 }
                 #endif
+                Toggle("点击封面打开专辑", isOn: $settings.openAlbumOnArtworkClick)
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
                 Toggle("逐字歌词（卡拉OK）", isOn: $settings.verbatimLyrics)
                 Picker("日文歌词读音", selection: $settings.lyricsAnnotation) {

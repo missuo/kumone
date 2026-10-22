@@ -98,6 +98,7 @@ final class SettingsManager: ObservableObject {
         static let quality = "settings.audioQuality"
         static let appearance = "settings.appearance"
         static let nowPlayingMode = "settings.nowPlayingMode"
+        static let openAlbumOnArtworkClick = "settings.openAlbumOnArtworkClick"
         static let showTranslation = "settings.showLyricsTranslation"
         static let showRomaji = "settings.showLyricsRomaji"  // migrated to `annotation`
         static let annotation = "settings.lyricsAnnotation"
@@ -172,6 +173,10 @@ final class SettingsManager: ObservableObject {
 
     @Published var nowPlayingMode: NowPlayingMode {
         didSet { UserDefaults.standard.set(nowPlayingMode.rawValue, forKey: Keys.nowPlayingMode) }
+    }
+
+    @Published var openAlbumOnArtworkClick: Bool {
+        didSet { UserDefaults.standard.set(openAlbumOnArtworkClick, forKey: Keys.openAlbumOnArtworkClick) }
     }
 
     @Published var showLyricsTranslation: Bool {
@@ -333,6 +338,7 @@ final class SettingsManager: ObservableObject {
         defaults.set(normalizedAudioCacheSizeMB, forKey: Keys.audioCacheSizeMB)
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
+        openAlbumOnArtworkClick = defaults.object(forKey: Keys.openAlbumOnArtworkClick) as? Bool ?? true
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         // Carry over the old on/off romaji toggle for anyone who had it on.
         lyricsAnnotation = defaults.string(forKey: Keys.annotation).flatMap(LyricsAnnotation.init)

@@ -696,7 +696,8 @@ struct NowPlayingView: View {
 
     private func artworkView(size: CGFloat) -> some View {
         Group {
-            if let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
+            if settings.openAlbumOnArtworkClick,
+               let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
                 Button {
                     onOpenDestination(.album(album.id))
                 } label: {
