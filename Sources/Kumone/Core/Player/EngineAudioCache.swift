@@ -30,7 +30,13 @@ actor EngineAudioCache {
     static let stalePartAge: TimeInterval = 60 * 60
 
     private let directory: URL
-    private var inflight: [Key: Task<URL, Error>] = [:]
+    private struct Download {
+        let id: UUID
+        let task: Task<Void, Never>
+        var consumers: [UUID: CheckedContinuation<URL?, Error>] = [:]
+    }
+    private var inflight: [Key: Download] = [:]
+    private let fetch: @Sendable (URL) async throws -> (URL, URLResponse)
     private(set) var limitBytes: Int64
     /// Resolved paths of files a deck currently has open (or is about to), as
     /// last reported by the player. Lock-protected rather than actor-isolated
@@ -40,6 +46,7 @@ actor EngineAudioCache {
 
     private init() {
         directory = KumoneDirectories.caches("Audio")
+        fetch = { try await Self.fetch($0) }
         if UserDefaults.standard.object(forKey: SettingsManager.Keys.audioCacheLimit) != nil {
             limitBytes = Int64(UserDefaults.standard
                 .integer(forKey: SettingsManager.Keys.audioCacheLimit))
@@ -50,9 +57,11 @@ actor EngineAudioCache {
 
     /// A private cache over `directory`, for tests. Does not read or write the
     /// persisted limit.
-    init(directory: URL, limitBytes: Int64) {
+    init(directory: URL, limitBytes: Int64,
+         fetch: @escaping @Sendable (URL) async throws -> (URL, URLResponse) = { try await EngineAudioCache.fetch($0) }) {
         self.directory = directory
         self.limitBytes = limitBytes
+        self.fetch = fetch
     }
 
     // MARK: - Lookup
@@ -115,29 +124,87 @@ actor EngineAudioCache {
     /// its final path — never through the `.part` slot, which belongs to a
     /// possibly concurrent progressive-stream mirror of the same key.
     func download(from remote: URL, key: Key) async throws -> URL {
+        guard let url = try await waitForDownload(for: key, startingFrom: remote) else {
+            throw URLError(.resourceUnavailable)
+        }
+        return url
+    }
+
+    /// Join an existing transfer as a consumer without exposing its shared
+    /// Task. Cancelling this wait cannot cancel another consumer's playback.
+    func waitForDownload(for key: Key) async throws -> URL? {
+        try await waitForDownload(for: key, startingFrom: nil)
+    }
+
+    func downloadConsumerCount(for key: Key) -> Int {
+        inflight[key]?.consumers.count ?? 0
+    }
+
+    private func waitForDownload(for key: Key, startingFrom remote: URL?) async throws -> URL? {
+        try Task.checkCancellation()
         if let cached = cachedFileURL(for: key) { return cached }
-        if let existing = inflight[key] {
-            return try await existing.value
-        }
-        let task = Task<URL, Error> {
-            let (temp, response) = try await Self.fetch(remote)
-            if let http = response as? HTTPURLResponse,
-               !(200..<300).contains(http.statusCode) {
-                try? FileManager.default.removeItem(at: temp)
-                throw URLError(.badServerResponse)
+        let consumerID = UUID()
+        let url: URL? = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                if inflight[key] == nil, let remote { startDownload(from: remote, key: key) }
+                guard inflight[key] != nil else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                inflight[key]?.consumers[consumerID] = continuation
             }
-            let final = fileURL(for: key)
-            ensureDirectory()
-            if FileManager.default.fileExists(atPath: final.path) {
-                try? FileManager.default.removeItem(at: final)
-            }
-            try FileManager.default.moveItem(at: temp, to: final)
-            evictIfNeeded(sparing: final)
-            return final
+        } onCancel: {
+            Task { await self.cancelDownloadConsumer(consumerID, key: key) }
         }
-        inflight[key] = task
-        defer { inflight[key] = nil }
-        return try await task.value
+        try Task.checkCancellation()
+        return url
+    }
+
+    private func startDownload(from remote: URL, key: Key) {
+        let id = UUID()
+        let task = Task {
+            let result: Result<URL, Error>
+            do {
+                let (temp, response) = try await fetch(remote)
+                defer { try? FileManager.default.removeItem(at: temp) }
+                try Task.checkCancellation()
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    throw URLError(.badServerResponse)
+                }
+                let final = fileURL(for: key)
+                ensureDirectory()
+                if FileManager.default.fileExists(atPath: final.path) {
+                    try FileManager.default.removeItem(at: final)
+                }
+                try FileManager.default.moveItem(at: temp, to: final)
+                evictIfNeeded(sparing: final)
+                result = .success(final)
+            } catch {
+                result = .failure(error)
+            }
+            // An old transfer may finish after a new one for this key starts.
+            guard let download = inflight[key], download.id == id else { return }
+            inflight[key] = nil
+            for consumer in download.consumers.values { consumer.resume(with: result.map(Optional.some)) }
+        }
+        inflight[key] = Download(id: id, task: task)
+    }
+
+    private func cancelDownloadConsumer(_ id: UUID, key: Key) {
+        guard var download = inflight[key],
+              let consumer = download.consumers.removeValue(forKey: id) else { return }
+        if download.consumers.isEmpty {
+            inflight[key] = nil
+            download.task.cancel()
+        } else {
+            inflight[key] = download
+        }
+        consumer.resume(throwing: CancellationError())
     }
 
     /// Downloads `remote`, starting on its CDN twin when its host failed
@@ -160,13 +227,6 @@ actor EngineAudioCache {
                 throw error
             }
         }
-    }
-
-    /// The in-flight coalesced download for this key, if any — lets callers
-    /// wait for a prefetch already underway instead of opening a second
-    /// transfer of the same file.
-    func activeDownload(for key: Key) -> Task<URL, Error>? {
-        inflight[key]
     }
 
     // MARK: - In use

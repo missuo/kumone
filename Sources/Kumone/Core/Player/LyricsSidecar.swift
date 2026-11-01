@@ -67,9 +67,10 @@ enum LyricsSidecar {
         // same body every prefetch. (Lyrics for a published track are as good
         // as immutable; an edit upstream is picked up whenever the audio is
         // re-cached.)
-        guard !FileManager.default.fileExists(
+        guard !Task.isCancelled, !FileManager.default.fileExists(
             atPath: Audition.Lyrics.sidecarURL(for: audio).path) else { return }
         guard let response = try? await NeteaseAPI.lyric(id: trackID) else { return }
+        guard !Task.isCancelled else { return }
         write(response.lrc?.lyric, for: audio)
     }
 }

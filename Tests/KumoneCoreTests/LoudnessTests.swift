@@ -134,12 +134,12 @@ import Foundation
 
     /// The property the whole feature rests on: `referenceLoudness` measures
     /// the master's level, so the same music 10 dB down must read 10 dB down.
-    @Test func analysisReferenceLoudnessTracksGainExactly() {
+    @Test func analysisReferenceLoudnessTracksGainExactly() throws {
         let sr = TrackAnalyzer.analysisSampleRate
         let x = sine(220, dBFS: -12, seconds: 30, sampleRate: sr)
         let quiet = x.map { $0 * Float(pow(10.0, -10.0 / 20.0)) }
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
-        let b = TrackAnalyzer.analyze(samples: quiet, sampleRate: sr)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let b = try TrackAnalyzer.analyze(samples: quiet, sampleRate: sr)
         let loud = try! #require(a.referenceLoudness)
         let soft = try! #require(b.referenceLoudness)
         #expect(abs((loud - soft) - 10) < 0.05)

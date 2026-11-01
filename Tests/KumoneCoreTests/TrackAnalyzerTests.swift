@@ -7,6 +7,22 @@ import Foundation
 
 @Suite struct TrackAnalyzerTests {
 
+    @Test func cancelledBackgroundAnalysisDoesNotOpenTheFile() async {
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await TrackAnalyzer.analyzeInBackground(fileAt: URL(fileURLWithPath: "/missing-audio"))
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test func cancelledInMemoryAnalysisDoesNotReturnAPartialResult() async {
+        let task = Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try TrackAnalyzer.analyze(samples: [0.1, 0.2], sampleRate: 22_050)
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
     // MARK: - Synthetic signal generator
 
     /// Kick-drum train at a known BPM: short exponentially decaying 55 Hz
@@ -51,10 +67,10 @@ import Foundation
         [0.5, 1.0, 2.0].map { abs(measured * $0 - truth) }.min()!
     }
 
-    private func assertKickTrainAnalysis(bpm: Double, sampleRate: Double) {
+    private func assertKickTrainAnalysis(bpm: Double, sampleRate: Double) throws {
         let seconds = 60.0
         let samples = kickTrain(bpm: bpm, seconds: seconds, sampleRate: sampleRate)
-        let analysis = TrackAnalyzer.analyze(samples: samples, sampleRate: sampleRate)
+        let analysis = try TrackAnalyzer.analyze(samples: samples, sampleRate: sampleRate)
 
         // BPM within ±2 after double/half folding.
         let bpmError = foldedBPMError(measured: analysis.bpm, truth: bpm)
@@ -106,24 +122,24 @@ import Foundation
 
     // MARK: - BPM regression
 
-    @Test func kickTrain100BPM() {
-        assertKickTrainAnalysis(bpm: 100, sampleRate: 22_050)
+    @Test func kickTrain100BPM() throws {
+        try assertKickTrainAnalysis(bpm: 100, sampleRate: 22_050)
     }
 
-    @Test func kickTrain120BPMAt44100() {
+    @Test func kickTrain120BPMAt44100() throws {
         // 44.1 kHz input exercises the resampling path.
-        assertKickTrainAnalysis(bpm: 120, sampleRate: 44_100)
+        try assertKickTrainAnalysis(bpm: 120, sampleRate: 44_100)
     }
 
-    @Test func kickTrain128BPM() {
-        assertKickTrainAnalysis(bpm: 128, sampleRate: 22_050)
+    @Test func kickTrain128BPM() throws {
+        try assertKickTrainAnalysis(bpm: 128, sampleRate: 22_050)
     }
 
     // MARK: - Structure features
 
-    @Test func introEndAndEnvelopeOnKickTrain() {
+    @Test func introEndAndEnvelopeOnKickTrain() throws {
         let samples = kickTrain(bpm: 120, seconds: 60, sampleRate: 22_050)
-        let analysis = TrackAnalyzer.analyze(samples: samples, sampleRate: 22_050)
+        let analysis = try TrackAnalyzer.analyze(samples: samples, sampleRate: 22_050)
         #expect(analysis.rmsEnvelope.count == 60)
         #expect(abs(analysis.duration - 60) < 0.1)
         #expect(analysis.introEnd >= 0)
@@ -144,33 +160,33 @@ import Foundation
             if t > fadeStart { gain = max(0, 1 - (t - fadeStart) / 20) }
             x[i] = Float(0.5 * gain * sin(2 * .pi * 220 * t))
         }
-        let analysis = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let analysis = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
         let outro = try #require(analysis.outroFadeStart)
         #expect(abs(outro - fadeStart) <= 5, "outro detected at \(outro)")
     }
 
     // MARK: - Edge cases
 
-    @Test func silenceDoesNotCrashAndHasLowConfidence() {
+    @Test func silenceDoesNotCrashAndHasLowConfidence() throws {
         let silence = [Float](repeating: 0, count: Int(30 * 22_050))
-        let analysis = TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
+        let analysis = try TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
         #expect(analysis.bpmConfidence < 0.3)
         #expect(analysis.beats.isEmpty)
         #expect(analysis.downbeats.isEmpty)
         #expect(analysis.outroFadeStart == nil)
     }
 
-    @Test func veryShortInputDoesNotCrash() {
+    @Test func veryShortInputDoesNotCrash() throws {
         for seconds in [0.01, 1.0, 3.0] {
             let samples = kickTrain(bpm: 120, seconds: seconds, sampleRate: 22_050)
-            let analysis = TrackAnalyzer.analyze(samples: samples, sampleRate: 22_050)
+            let analysis = try TrackAnalyzer.analyze(samples: samples, sampleRate: 22_050)
             #expect(analysis.version == TrackAnalysis.currentVersion)
             #expect(abs(analysis.duration - seconds) < 0.2)
         }
     }
 
-    @Test func emptyInput() {
-        let analysis = TrackAnalyzer.analyze(samples: [], sampleRate: 22_050)
+    @Test func emptyInput() throws {
+        let analysis = try TrackAnalyzer.analyze(samples: [], sampleRate: 22_050)
         #expect(analysis.bpmConfidence == 0)
         #expect(analysis.beats.isEmpty)
     }
@@ -225,49 +241,49 @@ import Foundation
         return (0..<n).map { _ in 0.3 * noise() }
     }
 
-    @Test func detectsCMajorFromArpeggio() {
+    @Test func detectsCMajorFromArpeggio() throws {
         // C4-E4-G4-C5 arpeggio: pitch classes C, E, G.
         let x = arpeggio(
             midiNotes: [60, 64, 67, 72, 67, 64, 60, 55],
             seconds: 40, sampleRate: 22_050)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
         #expect(a.keyPitchClass == 0, "expected C, got \(String(describing: a.keyPitchClass))")
         #expect(!a.keyIsMinor)
         #expect(a.keyConfidence > 0.4, "confidence \(a.keyConfidence)")
         #expect(a.keyConfidence <= 1)
     }
 
-    @Test func detectsAMinorFromArpeggio() {
+    @Test func detectsAMinorFromArpeggio() throws {
         // A3-C4-E4-A4: pitch classes A, C, E.
         let x = arpeggio(
             midiNotes: [57, 60, 64, 69, 64, 60, 57, 52],
             seconds: 40, sampleRate: 22_050)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
         #expect(a.keyPitchClass == 9, "expected A, got \(String(describing: a.keyPitchClass))")
         #expect(a.keyIsMinor)
         #expect(a.keyConfidence > 0.4, "confidence \(a.keyConfidence)")
     }
 
-    @Test func whiteNoiseHasNoKey() {
-        let a = TrackAnalyzer.analyze(
+    @Test func whiteNoiseHasNoKey() throws {
+        let a = try TrackAnalyzer.analyze(
             samples: whiteNoise(seconds: 40, sampleRate: 22_050), sampleRate: 22_050)
         #expect(a.keyPitchClass == nil)
         #expect(a.keyConfidence == 0)
     }
 
-    @Test func keyIsTranspositionEquivariant() {
+    @Test func keyIsTranspositionEquivariant() throws {
         // The same arpeggio a whole tone up must come out as D major.
         let x = arpeggio(
             midiNotes: [62, 66, 69, 74, 69, 66, 62, 57],
             seconds: 40, sampleRate: 22_050)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: 22_050)
         #expect(a.keyPitchClass == 2, "expected D, got \(String(describing: a.keyPitchClass))")
         #expect(!a.keyIsMinor)
     }
 
-    @Test func silenceHasNoKeyAndNoVocals() {
+    @Test func silenceHasNoKeyAndNoVocals() throws {
         let silence = [Float](repeating: 0, count: Int(30 * 22_050))
-        let a = TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
+        let a = try TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
         #expect(a.keyPitchClass == nil)
         #expect(a.keyConfidence == 0)
         #expect(a.vocalActivity.count == a.rmsEnvelope.count)
@@ -283,7 +299,7 @@ import Foundation
     }
 
     @Test func timbreProfileIsUnitNormAndLevelFree() throws {
-        let a = TrackAnalyzer.analyze(
+        let a = try TrackAnalyzer.analyze(
             samples: kickTrain(bpm: 120, seconds: 40, sampleRate: 22_050),
             sampleRate: 22_050)
         #expect(a.melProfile.count == 40)
@@ -295,14 +311,14 @@ import Foundation
         #expect(abs(norm - 1) < 1e-4, "profile squared norm \(norm)")
     }
 
-    @Test func timbreDistanceSeparatesDifferentSpectra() {
+    @Test func timbreDistanceSeparatesDifferentSpectra() throws {
         let sr = 22_050.0
-        let noise = TrackAnalyzer.analyze(
+        let noise = try TrackAnalyzer.analyze(
             samples: whiteNoise(seconds: 40, sampleRate: sr), sampleRate: sr)
-        let tones = TrackAnalyzer.analyze(
+        let tones = try TrackAnalyzer.analyze(
             samples: arpeggio(midiNotes: [60, 64, 67, 72], seconds: 40, sampleRate: sr),
             sampleRate: sr)
-        let kicks = TrackAnalyzer.analyze(
+        let kicks = try TrackAnalyzer.analyze(
             samples: kickTrain(bpm: 120, seconds: 40, sampleRate: sr), sampleRate: sr)
 
         // A mid-range harmonic stack against flat noise or a bass-heavy kick
@@ -322,14 +338,14 @@ import Foundation
                      noiseTones, tonesKicks, noiseKicks))
     }
 
-    @Test func timbreDistanceIgnoresLevelAndTempo() {
+    @Test func timbreDistanceIgnoresLevelAndTempo() throws {
         let sr = 22_050.0
-        let loud = TrackAnalyzer.analyze(
+        let loud = try TrackAnalyzer.analyze(
             samples: kickTrain(bpm: 120, seconds: 40, sampleRate: sr), sampleRate: sr)
-        let quiet = TrackAnalyzer.analyze(
+        let quiet = try TrackAnalyzer.analyze(
             samples: kickTrain(bpm: 120, seconds: 40, sampleRate: sr).map { $0 * 0.05 },
             sampleRate: sr)
-        let faster = TrackAnalyzer.analyze(
+        let faster = try TrackAnalyzer.analyze(
             samples: kickTrain(bpm: 150, seconds: 40, sampleRate: sr), sampleRate: sr)
 
         // 26 dB quieter, same instrument: the fingerprint must not move.
@@ -344,10 +360,10 @@ import Foundation
                      levelDistance, tempoDistance))
     }
 
-    @Test func timbreProfileEmptyForUnusableInput() {
-        #expect(TrackAnalyzer.analyze(samples: [], sampleRate: 22_050).melProfile.isEmpty)
+    @Test func timbreProfileEmptyForUnusableInput() throws {
+        #expect(try TrackAnalyzer.analyze(samples: [], sampleRate: 22_050).melProfile.isEmpty)
         let silence = [Float](repeating: 0, count: Int(30 * 22_050))
-        let a = TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
+        let a = try TrackAnalyzer.analyze(samples: silence, sampleRate: 22_050)
         // Digital silence has no shape at all; either an empty profile or a
         // zero-sum one is fine, but it must never claim a timbre.
         #expect(a.melProfile.isEmpty || abs(a.melProfile.reduce(0, +)) < 1e-3)
@@ -403,13 +419,13 @@ import Foundation
         return a.vocalActivity.reduce(0, +) / Float(a.vocalActivity.count)
     }
 
-    @Test func vocalActivityRanksVoiceAboveBassAndNoise() {
+    @Test func vocalActivityRanksVoiceAboveBassAndNoise() throws {
         let sr = 22_050.0
-        let voice = TrackAnalyzer.analyze(
+        let voice = try TrackAnalyzer.analyze(
             samples: vocalLike(seconds: 40, sampleRate: sr), sampleRate: sr)
-        let bass = TrackAnalyzer.analyze(
+        let bass = try TrackAnalyzer.analyze(
             samples: bassLine(seconds: 40, sampleRate: sr), sampleRate: sr)
-        let noise = TrackAnalyzer.analyze(
+        let noise = try TrackAnalyzer.analyze(
             samples: whiteNoise(seconds: 40, sampleRate: sr), sampleRate: sr)
 
         let vVoice = meanVocalActivity(voice)
@@ -426,10 +442,10 @@ import Foundation
                      vVoice, vBass, vNoise))
     }
 
-    @Test func vocalActivityMatchesEnvelopeGrid() {
+    @Test func vocalActivityMatchesEnvelopeGrid() throws {
         let sr = 22_050.0
         for seconds in [31.0, 45.5] {
-            let a = TrackAnalyzer.analyze(
+            let a = try TrackAnalyzer.analyze(
                 samples: vocalLike(seconds: seconds, sampleRate: sr), sampleRate: sr)
             #expect(a.vocalActivity.count == a.rmsEnvelope.count,
                     "\(a.vocalActivity.count) vs \(a.rmsEnvelope.count) at \(seconds)s")
@@ -437,12 +453,12 @@ import Foundation
         }
     }
 
-    @Test func vocalActivityIsZeroInSilentSections() {
+    @Test func vocalActivityIsZeroInSilentSections() throws {
         // 20 s of voice, then 20 s of silence.
         let sr = 22_050.0
         var x = vocalLike(seconds: 20, sampleRate: sr)
         x.append(contentsOf: [Float](repeating: 0, count: Int(20 * sr)))
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
         #expect(a.vocalActivity.count == a.rmsEnvelope.count)
         let head = a.vocalActivity.prefix(18)
         let tail = a.vocalActivity.suffix(15)

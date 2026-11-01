@@ -22,6 +22,7 @@ enum UnblockService {
         excluding attemptedSources: Set<AudioSourceID>
     ) async -> Resolution {
         var newlyAttemptedSources = Set<AudioSourceID>()
+        guard !Task.isCancelled else { return Resolution(source: nil, attemptedSources: []) }
         if enabledSources.contains(.pyncmd), !attemptedSources.contains(.pyncmd) {
             newlyAttemptedSources.insert(.pyncmd)
             do {
@@ -30,18 +31,21 @@ enum UnblockService {
                     attemptedSources: newlyAttemptedSources
                 )
             } catch {
+                if Task.isCancelled { return Resolution(source: nil, attemptedSources: newlyAttemptedSources) }
                 logFailure(source: .pyncmd, operation: "resolve", error: error)
             }
         }
 
         for provider in fallbackProviders where enabledSources.contains(provider.id)
             && !attemptedSources.contains(provider.id) {
+            guard !Task.isCancelled else { break }
             newlyAttemptedSources.insert(provider.id)
             do {
                 if let resolved = try await provider.resolve(track: track) {
                     return Resolution(source: resolved, attemptedSources: newlyAttemptedSources)
                 }
             } catch {
+                if Task.isCancelled { break }
                 logFailure(source: provider.id, operation: "resolve", error: error)
             }
         }

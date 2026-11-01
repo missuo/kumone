@@ -82,7 +82,7 @@ import Foundation
         let block = 20.0     // 40 beats — comfortably over the 8-bar minimum
         let pattern = [lowTimbre, highTimbre, lowTimbre, highTimbre, lowTimbre, highTimbre]
         let x = blockedTrack(bpm: bpm, blockSeconds: block, timbres: pattern, sampleRate: sr)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
 
         #expect(a.structureConfidence > StructureSegmenter.confidenceGate,
                 "confidence \(a.structureConfidence) on clearly blocked material")
@@ -129,31 +129,31 @@ import Foundation
 
     // MARK: - The gate
 
-    @Test func homogeneousTrackYieldsNoSections() {
+    @Test func homogeneousTrackYieldsNoSections() throws {
         let sr = 22_050.0
         // Same timbre for all six blocks: there is no structure to find, and
         // inventing one here is the failure mode the confidence gate exists for.
         let pattern = [[Double]](repeating: lowTimbre, count: 6)
         let x = blockedTrack(bpm: 120, blockSeconds: 20, timbres: pattern, sampleRate: sr)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
         #expect(a.sections.isEmpty,
                 "invented \(a.sections.count) sections at confidence \(a.structureConfidence)")
         #expect(a.structureConfidence < StructureSegmenter.confidenceGate)
     }
 
-    @Test func shortTrackYieldsNoSections() {
+    @Test func shortTrackYieldsNoSections() throws {
         // 25 s at 120 BPM is 50 beats — under the 64-beat floor, so the matrix
         // never gets built and the fields come back inert.
         let sr = 22_050.0
         let x = blockedTrack(
             bpm: 120, blockSeconds: 12.5, timbres: [lowTimbre, highTimbre], sampleRate: sr)
-        let a = TrackAnalyzer.analyze(samples: x, sampleRate: sr)
+        let a = try TrackAnalyzer.analyze(samples: x, sampleRate: sr)
         #expect(a.sections.isEmpty)
         #expect(a.structureConfidence == 0)
     }
 
-    @Test func silenceYieldsNoSections() {
-        let a = TrackAnalyzer.analyze(
+    @Test func silenceYieldsNoSections() throws {
+        let a = try TrackAnalyzer.analyze(
             samples: [Float](repeating: 0, count: Int(90 * 22_050)), sampleRate: 22_050)
         #expect(a.sections.isEmpty)
         #expect(a.structureConfidence == 0)
