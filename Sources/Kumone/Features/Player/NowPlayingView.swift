@@ -1069,7 +1069,12 @@ struct NowPlayingView: View {
                     tint: queueOrderIsActive ? Theme.accent : nil,
                     action: cycleQueueOrder
                 )
+                #if os(macOS)
+                .accessibilityLabel(player.queueOrder.controlHelp)
+                #else
                 .accessibilityLabel("随机播放")
+                .accessibilityAddTraits(player.shuffleEnabled ? .isSelected : [])
+                #endif
                 .frame(maxWidth: .infinity)
                 circleButton(icon: "backward.fill", size: 16) {
                     player.previous()
@@ -1105,6 +1110,7 @@ struct NowPlayingView: View {
                     player.cycleRepeatMode()
                 }
                 .accessibilityLabel("循环播放")
+                .accessibilityValue(repeatModeAccessibilityValue)
                 .frame(maxWidth: .infinity)
             }
         }
@@ -1141,6 +1147,15 @@ struct NowPlayingView: View {
         #else
         "shuffle"
         #endif
+    }
+
+    /// Spoken state of the repeat button, which cycles three modes.
+    private var repeatModeAccessibilityValue: Text {
+        switch player.repeatMode {
+        case .off: return Text("不循环")
+        case .all: return Text("列表循环")
+        case .one: return Text("单曲循环")
+        }
     }
 
     private var queueOrderIsActive: Bool {
