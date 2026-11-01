@@ -415,13 +415,17 @@ struct NowPlayingView: View {
         let image: PlatformImage?
         let colors: ArtworkColors
 
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
         private static let cycle: TimeInterval = 18
 
         var body: some View {
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+            // Reduce Motion holds the backdrop at its rest pose instead of
+            // redrawing a full-screen blur 24 times a second.
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
-                let sway = sin(t * 2 * .pi / Self.cycle)
-                let breathe = cos(t * 2 * .pi / (Self.cycle * 0.78))
+                let sway = reduceMotion ? 0 : sin(t * 2 * .pi / Self.cycle)
+                let breathe = reduceMotion ? 0 : cos(t * 2 * .pi / (Self.cycle * 0.78))
 
                 GeometryReader { geo in
                     ZStack {
