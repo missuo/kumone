@@ -40,4 +40,10 @@ struct VinylRecordTests {
         #expect(NowPlayingMode.allCases.contains(.vinyl))
         #expect(NowPlayingMode.vinyl.displayName == "黑胶模式")
     }
+
+    @Test func landscapeNowPlayingStyleCases() {
+        #expect(LandscapeNowPlayingStyle.allCases == [.classic, .immersive])
+        #expect(LandscapeNowPlayingStyle.classic.displayName == "经典双栏")
+        #expect(LandscapeNowPlayingStyle.immersive.displayName == "沉浸歌词")
+    }
 }

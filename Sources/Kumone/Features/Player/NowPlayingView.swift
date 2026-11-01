@@ -35,7 +35,16 @@ struct NowPlayingView: View {
                 if isCompact {
                     compactLayout(size: geo.size)
                 } else {
+                    #if os(iOS)
+                    switch settings.landscapeNowPlayingStyle {
+                    case .classic:
+                        regularLayout(size: geo.size)
+                    case .immersive:
+                        landscapeImmersiveLayout(size: geo.size)
+                    }
+                    #else
                     regularLayout(size: geo.size)
+                    #endif
                 }
             }
             // Pin to the screen width so an intrinsically-wide child can never
@@ -270,6 +279,216 @@ struct NowPlayingView: View {
         .padding(.horizontal, 48)
         .padding(.vertical, size.height < 500 ? 24 : 40)
     }
+
+    #if os(iOS)
+    /// Full-screen karaoke page for iPhone landscape / iPad. The scrubber is
+    /// deliberately absent: the sung line and its wipe own the middle of the
+    /// screen, the track sits at the bottom-left and the transport at the
+    /// bottom-right, over a slowly drifting artwork backdrop.
+    private func landscapeImmersiveLayout(size: CGSize) -> some View {
+        ZStack {
+            AnimatedKaraokeBackdrop(image: artworkImage, colors: colors)
+
+            VStack(spacing: 0) {
+                landscapeUtilityRow
+                    .padding(.top, 18)
+                    .padding(.trailing, 24)
+
+                Group {
+                    if showQueueOnMobile {
+                        CompactQueueContent()
+                            .transition(.opacity)
+                    } else {
+                        lyricsScroll(
+                            topInset: max(12, size.height * 0.06),
+                            bottomInset: max(20, size.height * 0.10),
+                            horizontalPadding: 60,
+                            karaoke: true
+                        )
+                        .transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: 1000)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeInOut(duration: 0.2), value: showQueueOnMobile)
+
+                HStack(alignment: .center, spacing: 14) {
+                    landscapeNowPlayingMetadata
+                    Spacer(minLength: 12)
+                    landscapeTransportRow
+                }
+                .padding(.horizontal, 28)
+                .padding(.bottom, max(16, size.height * 0.03))
+            }
+        }
+    }
+
+    private var landscapeUtilityRow: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
+
+            circleButton(
+                icon: "list.bullet", size: 15,
+                tint: showQueueOnMobile ? Theme.accent : nil
+            ) {
+                withAnimation(AppAnimation.standard) {
+                    showQueueOnMobile.toggle()
+                }
+            }
+            .accessibilityLabel(showQueueOnMobile ? "关闭播放队列" : "显示播放队列")
+
+            RoutePickerButton(diameter: 40, glyphSize: 16)
+        }
+    }
+
+    private var landscapeNowPlayingMetadata: some View {
+        HStack(spacing: 12) {
+            artworkView(size: 52, shadowRadius: 10, cornerRadius: 12)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(player.currentTrack?.name ?? "")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if player.currentTrack?.fee == 1 {
+                        VIPBadge()
+                    }
+                }
+                if let track = player.currentTrack {
+                    NowPlayingTrackDestinationLinks(
+                        track: track,
+                        font: .system(size: 12),
+                        color: .white.opacity(0.62),
+                        onOpenDestination: onOpenDestination
+                    )
+                    .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: 360, alignment: .leading)
+    }
+
+    private var landscapeTransportRow: some View {
+        HStack(spacing: 14) {
+            circleButton(icon: "backward.fill", size: 18) {
+                player.previous()
+            }
+            .accessibilityLabel("上一首")
+
+            playPauseButton(diameter: 50, glyphSize: 20)
+
+            circleButton(icon: "forward.fill", size: 18) {
+                player.next()
+            }
+            .accessibilityLabel("下一首")
+
+            if let track = player.currentTrack {
+                let liked = account.isLiked(track.id)
+                Button {
+                    Task { await account.toggleLike(trackID: track.id) }
+                } label: {
+                    Image(systemName: liked ? "heart.fill" : "heart")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(liked ? Theme.accent : .white.opacity(0.85))
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+            } else {
+                // Keep the trailing slot so the transport never shifts.
+                Color.clear.frame(width: 40, height: 40)
+            }
+        }
+        .accessibilityIdentifier("landscapeTransportRow")
+    }
+
+    /// A continuously moving backdrop for the karaoke page: the blurred cover
+    /// drifts and breathes while two artwork-tinted glows slide across it.
+    ///
+    /// `TimelineView` drives the phase rather than a `repeatForever`
+    /// animation on `@State`: the artwork image arrives asynchronously, and an
+    /// image inserted after the animation started inherited its end value and
+    /// stayed still — the reported "动态背景不动".
+    private struct AnimatedKaraokeBackdrop: View {
+        let image: PlatformImage?
+        let colors: ArtworkColors
+
+        private static let cycle: TimeInterval = 18
+
+        var body: some View {
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let sway = sin(t * 2 * .pi / Self.cycle)
+                let breathe = cos(t * 2 * .pi / (Self.cycle * 0.78))
+
+                GeometryReader { geo in
+                    ZStack {
+                        LinearGradient(
+                            colors: [colors.primary, colors.secondary],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+
+                        if let image {
+                            Image(platformImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(
+                                    width: geo.size.width * 1.5,
+                                    height: geo.size.height * 1.5
+                                )
+                                .blur(radius: 70)
+                                .drawingGroup()
+                                .rotationEffect(.degrees(2.5 * sway))
+                                .scaleEffect(1.02 + 0.08 * breathe)
+                                .offset(
+                                    x: geo.size.width * 0.06 * sway,
+                                    y: geo.size.height * 0.05 * breathe
+                                )
+                                .opacity(0.62)
+                        }
+
+                        RadialGradient(
+                            colors: [colors.primary.opacity(0.55), .clear],
+                            center: .center, startRadius: 0,
+                            endRadius: geo.size.width * 0.75
+                        )
+                        .frame(width: geo.size.width * 1.2, height: geo.size.width * 1.2)
+                        .offset(
+                            x: -geo.size.width * 0.28 + 60 * sway,
+                            y: -geo.size.height * 0.22 + 40 * breathe
+                        )
+                        .blendMode(.plusLighter)
+                        .drawingGroup()
+
+                        RadialGradient(
+                            colors: [colors.secondary.opacity(0.5), .clear],
+                            center: .center, startRadius: 0,
+                            endRadius: geo.size.width * 0.7
+                        )
+                        .frame(width: geo.size.width, height: geo.size.width)
+                        .offset(
+                            x: geo.size.width * 0.3 - 50 * breathe,
+                            y: geo.size.height * 0.25 - 30 * sway
+                        )
+                        .blendMode(.plusLighter)
+                        .drawingGroup()
+
+                        LinearGradient(
+                            colors: [.black.opacity(0.16), .black.opacity(0.5)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                }
+            }
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func compactLayout(size: CGSize) -> some View {
@@ -694,25 +913,33 @@ struct NowPlayingView: View {
 
     // MARK: - Views
 
-    private func artworkView(size: CGFloat) -> some View {
+    private func artworkView(
+        size: CGFloat,
+        shadowRadius: CGFloat = 36,
+        cornerRadius: CGFloat = 18
+    ) -> some View {
         Group {
             if settings.openAlbumOnArtworkClick,
                let album = player.currentTrack?.album, album.id > 0, !album.name.isEmpty {
                 Button {
                     onOpenDestination(.album(album.id))
                 } label: {
-                    artworkSurface(size: size)
+                    artworkSurface(size: size, shadowRadius: shadowRadius, cornerRadius: cornerRadius)
                 }
                 .buttonStyle(.plain)
                 .noFocusRing()
                 .accessibilityLabel("打开专辑：\(album.name)")
             } else {
-                artworkSurface(size: size)
+                artworkSurface(size: size, shadowRadius: shadowRadius, cornerRadius: cornerRadius)
             }
         }
     }
 
-    private func artworkSurface(size: CGFloat) -> some View {
+    private func artworkSurface(
+        size: CGFloat,
+        shadowRadius: CGFloat = 36,
+        cornerRadius: CGFloat = 18
+    ) -> some View {
         ZStack {
             Rectangle()
                 .fill(.white.opacity(0.06))
@@ -729,8 +956,8 @@ struct NowPlayingView: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.45), radius: 36, y: 18)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .shadow(color: .black.opacity(0.45), radius: shadowRadius, y: shadowRadius * 0.5)
         .animation(.easeIn(duration: 0.25), value: artworkImage != nil)
         .scaleEffect(player.isPlaying ? 1 : 0.95)
         .animation(AppAnimation.bouncy, value: player.isPlaying)
@@ -802,21 +1029,30 @@ struct NowPlayingView: View {
         // metadata off the right edge. `maxWidth: .infinity` per control makes
         // the row scale to any width instead.
         HStack(spacing: 0) {
-            if let track = player.currentTrack {
-                let liked = account.isLiked(track.id)
-                circleButton(
-                    icon: liked ? "heart.fill" : "heart",
-                    size: 15, tint: liked ? Theme.accent : nil
-                ) {
-                    Task { await account.toggleLike(trackID: track.id) }
+            // The like slot stays even when the track is briefly unavailable:
+            // adding or removing it re-divides the equal-width row, which made
+            // every other control jump sideways during a track change.
+            Group {
+                if let track = player.currentTrack {
+                    let liked = account.isLiked(track.id)
+                    circleButton(
+                        icon: liked ? "heart.fill" : "heart",
+                        size: 15, tint: liked ? Theme.accent : nil
+                    ) {
+                        Task { await account.toggleLike(trackID: track.id) }
+                    }
+                    .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+                } else {
+                    Color.clear.frame(width: 40, height: 40)
                 }
-                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: .infinity)
 
             if player.isFMMode {
                 circleButton(icon: "trash", size: 14) {
                     player.fmTrash()
                 }
+                .accessibilityLabel("不喜欢")
                 .frame(maxWidth: .infinity)
             } else {
                 // All three queue orders on the one button; the cycle skips
@@ -829,19 +1065,22 @@ struct NowPlayingView: View {
                     tint: queueOrderIsActive ? Theme.accent : nil,
                     action: cycleQueueOrder
                 )
+                .accessibilityLabel("随机播放")
                 .frame(maxWidth: .infinity)
                 circleButton(icon: "backward.fill", size: 16) {
                     player.previous()
                 }
+                .accessibilityLabel("上一首")
                 .frame(maxWidth: .infinity)
             }
 
-            playPauseButton
+            playPauseButton()
                 .frame(maxWidth: .infinity)
 
             circleButton(icon: "forward.fill", size: 16) {
                 player.next()
             }
+            .accessibilityLabel("下一首")
             .frame(maxWidth: .infinity)
 
             RoutePickerButton(diameter: 40, glyphSize: 15)
@@ -861,27 +1100,30 @@ struct NowPlayingView: View {
                 ) {
                     player.cycleRepeatMode()
                 }
+                .accessibilityLabel("循环播放")
                 .frame(maxWidth: .infinity)
             }
         }
+        .accessibilityIdentifier("nowPlayingTransport")
     }
 
-    private var playPauseButton: some View {
+    private func playPauseButton(diameter: CGFloat = 58, glyphSize: CGFloat = 21) -> some View {
         Button {
             player.togglePlayPause()
         } label: {
             ZStack {
                 Circle()
                     .fill(.white)
-                    .frame(width: 58, height: 58)
+                    .frame(width: diameter, height: diameter)
                     .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 21, weight: .bold))
+                    .font(.system(size: glyphSize, weight: .bold))
                     .foregroundStyle(.black.opacity(0.85))
                     .contentTransition(.opacity)
             }
         }
         .buttonStyle(.pressable)
+        .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
     }
 
     // MARK: - Queue-order control
@@ -929,19 +1171,44 @@ struct NowPlayingView: View {
 
     @ViewBuilder
     private var lyricsColumn: some View {
+        lyricsScroll(topInset: 200, bottomInset: 240, horizontalPadding: 24)
+    }
+
+    /// The scrolling lyric list shared by the regular page and the
+    /// landscape immersive page. Insets are the space parked above and below
+    /// the lines so the active one can sit mid-viewport; the short landscape
+    /// page needs them much smaller than a full-height window does.
+    @ViewBuilder
+    private func lyricsScroll(
+        topInset: CGFloat,
+        bottomInset: CGFloat,
+        horizontalPadding: CGFloat,
+        karaoke: Bool = false
+    ) -> some View {
         if let lyrics = player.lyrics, !lyrics.isEmpty {
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        Color.clear.frame(height: 200)
+                    LazyVStack(alignment: karaoke ? .center : .leading,
+                               spacing: karaoke ? 20 : 26) {
+                        Color.clear.frame(height: topInset)
                         ForEach(lyrics.lines) { line in
-                            bigLyricLine(line, isActive: line.id == activeIndex)
-                                .id(line.id)
+                            Group {
+                                if karaoke {
+                                    landscapeKaraokeLine(line, isActive: line.id == activeIndex)
+                                } else {
+                                    bigLyricLine(line, isActive: line.id == activeIndex)
+                                }
+                            }
+                            .id(line.id)
                         }
-                        Color.clear.frame(height: 240)
+                        Color.clear.frame(height: bottomInset)
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, horizontalPadding)
                 }
+                // A new track gets a fresh list: reusing the old scroll view
+                // crossfaded the outgoing and incoming lines on top of each
+                // other for one frame while `lyrics` reloaded.
+                .id(player.currentTrack?.id)
                 .mask(
                     LinearGradient(
                         stops: [
@@ -1021,6 +1288,46 @@ struct NowPlayingView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
         .animation(.easeOut(duration: 0.25), value: isUserScrolling)
     }
+
+    /// Centre-aligned karaoke line for the landscape page. The active line is
+    /// large and carries the verbatim wipe like a KTV subtitle; the neighbours
+    /// stay smaller and dimmer so the eye follows the sung line.
+    private func landscapeKaraokeLine(_ line: LyricLine, isActive: Bool) -> some View {
+        Button {
+            player.seek(to: line.time)
+        } label: {
+            VStack(spacing: 7) {
+                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
+                    Text(romaji)
+                        .font(.system(size: isActive ? 16 : 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.3))
+                }
+                LyricMainText(
+                    line: line, isActive: isActive,
+                    size: isActive ? 32 : 21,
+                    weight: isActive ? .bold : .medium,
+                    verbatim: settings.verbatimLyrics,
+                    alignment: .center
+                )
+                if settings.showLyricsTranslation, let translation = line.translation {
+                    Text(translation)
+                        .font(.system(size: isActive ? 17 : 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.3))
+                }
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .contentShape(Rectangle())
+            .opacity(isActive ? 1 : 0.6)
+            .scaleEffect(isActive ? 1 : 0.97)
+            .blur(radius: isActive || isUserScrolling ? 0 : 0.4)
+            .shadow(color: .black.opacity(isActive ? 0.45 : 0),
+                    radius: isActive ? 18 : 0, y: isActive ? 6 : 0)
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: isActive)
+        .animation(.easeOut(duration: 0.25), value: isUserScrolling)
+    }
 }
 
 
@@ -1037,6 +1344,7 @@ struct LyricMainText: View {
     let weight: Font.Weight
     let verbatim: Bool
     var inactiveOpacity: Double = 0.45
+    var alignment: NSTextAlignment = .left
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var windowVisibility = MainWindowVisibility.shared
@@ -1052,6 +1360,7 @@ struct LyricMainText: View {
                 words: words,
                 size: size,
                 weight: weight,
+                alignment: alignment,
                 playing: player.isPlaying && windowVisibility.isVisible
             )
             #else
@@ -1061,6 +1370,7 @@ struct LyricMainText: View {
             )) { _ in
                 LyricText(
                     line: line, size: size, weight: weight, color: .white,
+                    alignment: alignment,
                     alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)
                 )
             }
@@ -1068,7 +1378,8 @@ struct LyricMainText: View {
         } else {
             LyricText(
                 line: line, size: size, weight: weight,
-                color: .white.opacity(isActive ? 1 : inactiveOpacity)
+                color: .white.opacity(isActive ? 1 : inactiveOpacity),
+                alignment: alignment
             )
         }
     }

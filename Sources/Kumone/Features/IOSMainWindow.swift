@@ -489,6 +489,7 @@ struct IOSMiniPlayerBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel(nowPlayingAccessibilityLabel)
             .accessibilityHint("打开正在播放")
+            .accessibilityIdentifier("mini-player-now-playing")
 
             if !presentation.isInline {
                 Button(action: player.previous) {
