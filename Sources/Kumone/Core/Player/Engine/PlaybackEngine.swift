@@ -1474,6 +1474,21 @@ final class PlaybackEngine: @unchecked Sendable {
         queue.async { self.cancelTransitionLocked() }
     }
 
+    /// Withdraw speculative preparation without stopping a deck whose audio
+    /// has already started. Check and teardown share the engine queue so a
+    /// transition tick cannot start the incoming deck between the two.
+    @discardableResult
+    func discardPreparedDeck(_ deck: Deck) -> Bool {
+        queue.sync {
+            guard let state = deckStates[deck], !state.isPlaying,
+                  transition.map({ $0.phase == .waiting && $0.to == deck }) ?? true
+            else { return false }
+            cancelTransitionLocked()
+            resetDeckLocked(state)
+            return true
+        }
+    }
+
     /// Swap the plan of a scheduled transition that has not started yet
     /// (phase .waiting). No-op once the hand-over is armed or overlapping,
     /// so a late re-plan can never cut audio that is already sounding.

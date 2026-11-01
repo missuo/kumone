@@ -865,6 +865,36 @@ struct PlaybackEngineSmokeTests {
                 "deck B position should advance after the hand-over (\(o.bPosEarly) → \(o.bPosLate))")
     }
 
+    @Test func withdrawingPreparationPreservesAnUnconsumedHandOver() async throws {
+        guard await audioOutputAvailable.value else { return }
+        let result = await withWatchdog("withdrawPreparation", timeout: 20) {
+            let engine = PlaybackEngine()
+            defer { engine.stopAll() }
+            engine.outputVolume = 0
+            guard (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .a)) != nil,
+                  (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .b)) != nil
+            else { return (false, true, true, false) }
+            // Do not consume engine.events: the main actor can still hold the
+            // outgoing deck while midpoint/completed wait in the event stream.
+            engine.play(deck: .a, from: 4)
+            engine.scheduleTransition(.plain(.crossfade(duration: 1, outPoint: 5, inPoint: 0)),
+                                      from: .a, to: .b)
+            let deadline = Date().addingTimeInterval(12)
+            while !engine.handOverStarted, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let started = engine.handOverStarted
+            let discardedDuring = engine.discardPreparedDeck(.b)
+            while engine.hasPendingTransition, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let discardedAfter = engine.discardPreparedDeck(.b)
+            let playing = engine.position(of: .b) > 0 && engine.duration(of: .b) != nil
+            return (started, discardedDuring, discardedAfter, playing)
+        }
+        guard let (started, discardedDuring, discardedAfter, playing) = result else { return }
+        #expect(started)
+        #expect(!discardedDuring)
+        #expect(!discardedAfter)
+        #expect(playing)
+    }
+
     // (f) TransitionStyle execution. Each style runs a real A → B overlap and
     // must (1) show its effect engaged while the overlap is live and (2) leave
     // BOTH decks fully neutral once everything has settled — decks are reused,

@@ -315,7 +315,7 @@ final class PlayerService: ObservableObject {
     private var offlineScanID = UUID()
     private var networkState = DownloadNetworkState.unknown
     private var networkObservation: AnyCancellable?
-    private var queueOrderSettingsObservation: AnyCancellable?
+    private var autoMixSettingsObservation: AnyCancellable?
     private var offlineActivatedScope: String?
     /// Set by an automatic advance and consumed by `startPlaying`: a song that
     /// turns out to be missing offline is skipped rather than reported.
@@ -430,13 +430,20 @@ final class PlayerService: ObservableObject {
         }
         restoreState()
         let settings = SettingsManager.shared
-        queueOrderSettingsObservation = settings.$automixEnabled
+        autoMixSettingsObservation = settings.$automixEnabled
             .combineLatest(settings.$automixOrderEnabled)
-            .map { $0 && $1 }
-            .removeDuplicates()
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
             // @Published emits before assignment; reconcile after both values are stored.
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.reconcileQueueOrderAvailability() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.reconcileQueueOrderAvailability()
+                if settings.automixEnabled, self.currentAnalysis == nil,
+                   let key = self.currentCacheKey, let file = self.currentLocalURL {
+                    self.ensureCurrentAnalysis(key: key, fileURL: file)
+                }
+                self.schedulePrefetch()
+            }
     }
 
     /// Set while the user drags the seek bar so the time observer doesn't fight the thumb.
@@ -1355,6 +1362,23 @@ final class PlayerService: ObservableObject {
     /// (Re)start the pipeline for the current auto-advance target. Call after
     /// playback starts and whenever the upcoming list changes.
     private func schedulePrefetch() {
+        guard SettingsManager.shared.automixEnabled else {
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
+            currentAnalysisTask?.cancel()
+            currentAnalysisTask = nil
+            // A hand-over that is already audible finishes normally. Its
+            // midpoint still needs the pending track and its file metadata.
+            guard engine.discardPreparedDeck(activeDeck.other) else { return }
+            disarmTransition()
+            deckFiles[activeDeck.other] = nil
+            prefetchedNext = nil
+            AutoMixDebugModel.shared.clearNext()
+            return
+        }
+        // Restoring a paused session or resolving a new source does not yet
+        // create a playback context worth downloading the next track for.
+        guard deckLoaded else { return }
         // AutoMix order decides *which* track is next, and until it has there
         // is nothing to prefetch: committing to the list's answer now would
         // download the wrong song and arm it before the choice was made.
@@ -1457,7 +1481,8 @@ final class PlayerService: ObservableObject {
     }
 
     private func armTransitionIfReady() {
-        guard !transitionArmed, let next = prefetchedNext else { return }
+        guard SettingsManager.shared.automixEnabled,
+              !transitionArmed, let next = prefetchedNext else { return }
         // "Stop after this track" needs the track to *end*: an armed hand-over
         // (AutoMix or gapless) would carry playback into the next one first.
         guard sleepTimer.state != .endOfCurrentTrack else { return }
