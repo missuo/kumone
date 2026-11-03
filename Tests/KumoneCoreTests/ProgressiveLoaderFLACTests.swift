@@ -90,7 +90,8 @@ struct ProgressiveLoaderFLACTests {
     // by minutes; tying the commit to `onCompleted` left the first track of
     // every fresh playlist without an analysis (field: .part files never
     // committed, `order commit … because=noOutgoingAnalysis`).
-    @Test func mirrorCompletesWhileDecodingIsSuspended() throws {
+    @Test(arguments: [false, true])
+    func mirrorCompletesWhileDecodingIsSuspended(removeAfterCommit: Bool) throws {
         let caf = try Fixtures.writeSineCAF(seconds: 6, name: "flac-src-mirror")
         let flac = try Self.flacFixture(from: caf, name: "stream-mirror")
         let payload = try Data(contentsOf: flac)
@@ -133,6 +134,13 @@ struct ProgressiveLoaderFLACTests {
         #expect(try Data(contentsOf: partURL) == payload,
                 "the .part must be a complete, byte-identical copy once reported")
 
+        // Decoding must retain its open reader when cache promotion changes
+        // the path, including an immediate cache clear before the next drain.
+        let committed = partURL.appendingPathExtension("flac")
+        defer { try? FileManager.default.removeItem(at: committed) }
+        try FileManager.default.moveItem(at: partURL, to: committed)
+        if removeAfterCommit { try FileManager.default.removeItem(at: committed) }
+
         // Releasing the backpressure still finishes the parse, reporting the
         // mirror as committed.
         loader.setDownloadSuspended(false)
@@ -159,6 +167,69 @@ struct ProgressiveLoaderFLACTests {
         let expected = AVAudioFramePosition(6 * 44_100)
         #expect(abs(o.decodedFrames - expected) < 44_100 / 4,
                 "decoded \(o.decodedFrames) frames, expected ≈\(expected)")
+    }
+
+    @Test func unavailableCacheDirectoryStillAllowsStreaming() throws {
+        let caf = try Fixtures.writeSineCAF(seconds: 6, name: "flac-src-6s")
+        let flac = try Self.flacFixture(from: caf, name: "stream-6s")
+        let outcome = try stream(try Data(contentsOf: flac), hint: "flac",
+                                 partName: "missing-\(UUID().uuidString)/audio.part")
+        #expect(outcome.error == nil)
+        #expect(outcome.completed)
+        #expect(outcome.decodedFrames > 5 * 44_100)
+    }
+
+    @Test func seekDiscardsPendingBytesAndDoesNotPublishARangedMirror() throws {
+        let payload = try Data(contentsOf: Fixtures.streamADTS)
+        let server = try TestHTTPServer(serving: payload)
+        defer { server.stop() }
+        let part = Fixtures.dir.appendingPathComponent("seek-\(UUID().uuidString).part")
+        defer { try? FileManager.default.removeItem(at: part) }
+        let output = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let callbackQueue = DispatchQueue(label: "stream-seek-test")
+        let loader = ProgressiveLoader(remoteURL: server.url, formatHint: "aac",
+                                       partURL: part, output: output, queue: callbackQueue)
+        final class Outcome: @unchecked Sendable {
+            var mirrors = 0
+            var error: Error?
+            var seeking = false
+            var framesAfterSeek: AVAudioFramePosition = 0
+        }
+        let outcome = Outcome()
+        let mirrored = DispatchSemaphore(value: 0)
+        let completed = DispatchSemaphore(value: 0)
+        loader.onBuffer = { [weak loader] buffer in
+            if outcome.seeking {
+                outcome.framesAfterSeek += AVAudioFramePosition(buffer.frameLength)
+            } else {
+                loader?.setDownloadSuspended(true)
+            }
+        }
+        loader.onMirrorCompleted = { _ in
+            outcome.mirrors += 1
+            mirrored.signal()
+        }
+        loader.onCompleted = { completed.signal() }
+        loader.onError = { error in
+            outcome.error = error
+            completed.signal()
+        }
+        loader.start()
+        defer { loader.cancel() }
+        #expect(mirrored.wait(timeout: .now() + 30) == .success)
+        #expect(loader.canSeek)
+        callbackQueue.sync {
+            outcome.seeking = true
+            loader.seek(to: 5)
+        }
+        #expect(completed.wait(timeout: .now() + 30) == .success)
+        callbackQueue.sync {
+            #expect(outcome.error == nil)
+            #expect(outcome.mirrors == 1)
+            #expect(outcome.framesAfterSeek > 10 * 44_100)
+            #expect(outcome.framesAfterSeek < 19 * 44_100)
+        }
+        #expect(try Data(contentsOf: part) == payload)
     }
 
     // Hi-Res FLAC (48k source → 44.1k graph rate): the loader owns the rate
