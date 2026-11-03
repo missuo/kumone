@@ -52,6 +52,18 @@ enum TrackAnalyzer {
 
     // MARK: - Entry points
 
+    static func analyzeInBackground(fileAt url: URL) async throws -> TrackAnalysis {
+        try Task.checkCancellation()
+        let task = Task.detached(priority: .utility) { try analyze(fileAt: url) }
+        return try await withTaskCancellationHandler {
+            let analysis = try await task.value
+            try Task.checkCancellation()
+            return analysis
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     /// Decode to 22.05 kHz mono, then analyze. CPU-bound; callers run this
     /// off the main thread.
     ///
@@ -81,19 +93,21 @@ enum TrackAnalyzer {
     /// half-gigabyte actually was.
     static func analyze(fileAt url: URL) throws -> TrackAnalysis {
         try autoreleasepool {
+            try Task.checkCancellation()
             let samples = try decodeMono(url: url, targetRate: analysisSampleRate)
             // Second, stereo decode for the mid/side vocal cue. Best-effort: a
             // failure (or a truly mono master) simply drops the cue, and the
             // three mono-spectral features carry the estimate on their own.
             let midSide = try? stereoVoiceEnergies(url: url, targetRate: analysisSampleRate)
-            return analyze(samples: samples, sampleRate: analysisSampleRate, midSide: midSide)
+            try Task.checkCancellation()
+            return try analyze(samples: samples, sampleRate: analysisSampleRate, midSide: midSide)
         }
     }
 
     /// In-memory entry point (used by tests with synthetic signals).
     /// `samples` is mono; any sample rate is accepted and resampled.
-    static func analyze(samples: [Float], sampleRate: Double) -> TrackAnalysis {
-        analyze(samples: samples, sampleRate: sampleRate, midSide: nil)
+    static func analyze(samples: [Float], sampleRate: Double) throws -> TrackAnalysis {
+        try analyze(samples: samples, sampleRate: sampleRate, midSide: nil)
     }
 
     /// Core analysis. `midSide`, when present, carries per-STFT-frame vocal-band
@@ -101,7 +115,8 @@ enum TrackAnalyzer {
     /// vocal cue; it is `nil` for the mono test entry and for mono masters.
     static func analyze(
         samples: [Float], sampleRate: Double, midSide: (mid: [Float], side: [Float])?
-    ) -> TrackAnalysis {
+    ) throws -> TrackAnalysis {
+        try Task.checkCancellation()
         let sr = analysisSampleRate
         let x = resample(samples, from: sampleRate, to: sr)
         let duration = Double(x.count) / sr
@@ -121,7 +136,8 @@ enum TrackAnalyzer {
                 peakDBFS: LoudnessMeter.peakDBFS(x))
         }
 
-        let features = stftFeatures(x, sampleRate: sr)
+        let features = try stftFeatures(x, sampleRate: sr)
+        try Task.checkCancellation()
         let mel = features.mel
         let lowEnergy = features.low
         let onset = onsetEnvelope(mel)
@@ -150,6 +166,7 @@ enum TrackAnalyzer {
         let intro = introEnd(
             rmsEnvelope: rmsEnvelope, downbeats: downbeats, beats: beats)
 
+        try Task.checkCancellation()
         let key = detectKey(
             chromaFrames: features.chroma, frameEnergy: features.chromaEnergy)
         // Align the (independently decoded) stereo envelopes to the mono frame
@@ -169,6 +186,7 @@ enum TrackAnalyzer {
         // second sweep over the audio — and returns nothing at all when it is
         // not confident, so everything downstream keeps its pre-v7 behaviour
         // unless the track is one the segmenter is sure about.
+        try Task.checkCancellation()
         let structure = StructureSegmenter.segment(
             mel: mel, chroma: features.chroma, low: lowEnergy, fps: fps,
             beats: beats, downbeats: downbeats,
@@ -299,6 +317,7 @@ enum TrackAnalyzer {
         var reachedEnd = false
 
         while true {
+            try Task.checkCancellation()
             outBuf.frameLength = 0
             var convError: NSError?
             let status = converter.convert(to: outBuf, error: &convError) { _, outStatus in
@@ -362,6 +381,7 @@ enum TrackAnalyzer {
         var reachedEnd = false
 
         while true {
+            try Task.checkCancellation()
             outBuf.frameLength = 0
             var convError: NSError?
             let status = converter.convert(to: outBuf, error: &convError) { _, outStatus in
@@ -552,7 +572,7 @@ enum TrackAnalyzer {
     /// Single STFT pass producing every downstream feature.
     private static func stftFeatures(
         _ x: [Float], sampleRate sr: Double
-    ) -> STFTFeatures {
+    ) throws -> STFTFeatures {
         let n = windowSize
         let hop = hopSize
         guard x.count >= n else { return STFTFeatures() }
@@ -596,8 +616,9 @@ enum TrackAnalyzer {
         var imagp = [Float](repeating: 0, count: n / 2)
         var mags = [Float](repeating: 0, count: nBins)
 
-        x.withUnsafeBufferPointer { xb in
+        try x.withUnsafeBufferPointer { xb in
             for t in 0..<nFrames {
+                try Task.checkCancellation()
                 let start = t * hop
                 vDSP_vmul(xb.baseAddress! + start, 1, window, 1, &frame, 1, vDSP_Length(n))
 

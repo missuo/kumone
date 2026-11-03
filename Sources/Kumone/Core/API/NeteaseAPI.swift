@@ -473,6 +473,7 @@ enum NeteaseAPI {
             (v1.lrc?.lyric?.isEmpty == false) || (v1.yrc?.lyric?.isEmpty == false) {
             return v1
         }
+        try Task.checkCancellation()
         return try await eapi(LyricResponse.self, "/song/lyric",
                               ["id": id, "lv": -1, "kv": -1, "tv": -1, "rv": -1])
     }

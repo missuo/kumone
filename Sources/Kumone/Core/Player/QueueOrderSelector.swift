@@ -103,14 +103,30 @@ final class QueueOrderSelector {
     /// **The whole download budget: one.** The same discipline the existing
     /// prefetch runs under, for the same reason — a second concurrent transfer
     /// competes with the audio that is playing.
-    private var fetching = false
-    private var scanning = false
+    private var fetchTask: Task<Void, Never>?
+    private var scanTask: Task<Void, Never>?
+    private var fetching: Bool { fetchTask != nil }
+    private var scanning: Bool { scanTask != nil }
+    private var pickGeneration = 0
+    private let loadAnalyses: (Set<Int>) async -> [Int: TrackAnalysis]
+    private let fetchAnalysis: (Track) async throws -> ScoringFetch
 
     /// The last pick's full candidate table, best first — what the debug panel
     /// prints and the only reason the scores are kept after the choice.
     private(set) var lastPick: [Candidate] = []
 
-    init() {}
+    init(
+        loadAnalyses: ((Set<Int>) async -> [Int: TrackAnalysis])? = nil,
+        fetchAnalysis: ((Track) async throws -> ScoringFetch)? = nil
+    ) {
+        self.loadAnalyses = loadAnalyses ?? { await AnalysisStore.shared.analyses(forTrackIDs: $0) }
+        self.fetchAnalysis = fetchAnalysis ?? { try await Self.scoringAnalysis(for: $0) }
+    }
+
+    deinit {
+        fetchTask?.cancel()
+        scanTask?.cancel()
+    }
 
     // MARK: - Pool bookkeeping
 
@@ -160,6 +176,11 @@ final class QueueOrderSelector {
     /// richer pool this pick starts from, which is the entire point of paying
     /// for them once (predev §2.2).
     func beginPick() {
+        pickGeneration += 1
+        fetchTask?.cancel()
+        fetchTask = nil
+        scanTask?.cancel()
+        scanTask = nil
         admitted.removeAll()
         lastRoundSize = 0
         rounds = 0
@@ -202,13 +223,16 @@ final class QueueOrderSelector {
         // costs nothing, and finding it may end the escalation outright.
         let unscanned = remaining.filter { !scanned.contains($0.id) }
         if !unscanned.isEmpty {
-            scanning = true
             let ids = Set(unscanned.map(\.id))
-            Task { [weak self] in
-                let found = await AnalysisStore.shared.analyses(forTrackIDs: ids)
-                guard let self else { return }
+            let generation = pickGeneration
+            let loadAnalyses = self.loadAnalyses
+            scanTask = Task { [weak self] in
+                let found = await loadAnalyses(ids)
+                guard let self, generation == self.pickGeneration else { return }
+                // Release before the callback, which may start the next scan.
+                self.scanTask = nil
+                guard !Task.isCancelled else { return }
                 self.scanned.formUnion(ids)
-                self.scanning = false
                 var landed = false
                 for (id, analysis) in found where self.analyses[id] == nil {
                     self.analyses[id] = analysis
@@ -271,12 +295,22 @@ final class QueueOrderSelector {
     }
 
     private func startFetch(_ track: Track) {
-        fetching = true
         downloadsThisPick += 1
-        Task { [weak self] in
-            let fetched = await Self.scoringAnalysis(for: track)
-            guard let self else { return }
-            self.fetching = false
+        let generation = pickGeneration
+        let fetchAnalysis = self.fetchAnalysis
+        fetchTask = Task { [weak self] in
+            let result: Result<ScoringFetch, Error>
+            do { result = .success(try await fetchAnalysis(track)) }
+            catch { result = .failure(error) }
+            guard let self, generation == self.pickGeneration else { return }
+            self.fetchTask = nil
+            guard !Task.isCancelled else { return }
+            let fetched: ScoringFetch
+            switch result {
+            case .success(let value): fetched = value
+            case .failure(is CancellationError): return
+            case .failure(let error): fetched = .refused(error.localizedDescription)
+            }
             switch fetched {
             case .analyzed(let analysis):
                 self.analyses[track.id] = analysis
@@ -548,10 +582,8 @@ final class QueueOrderSelector {
 
     // MARK: - Test hooks
     //
-    // The pool arithmetic is worth asserting on and the fetch is not: it is a
-    // network call, and every property the bookkeeping has is a property of
-    // what the fetch *produced*, not of the fetching. So the two states a
-    // fetch can end in are settable directly.
+    // Pure bookkeeping fixtures; asynchronous acquisition is tested through
+    // the same injected dependencies used by the production task lifecycle.
 
     func injectAnalysisForTesting(_ analysis: TrackAnalysis, forTrackID id: Int) {
         analyses[id] = analysis
@@ -582,6 +614,12 @@ final class QueueOrderSelector {
     /// opening `n` real transfers.
     func markDownloadsForTesting(_ n: Int) { downloadsThisPick = n }
 
+    /// Capture work before a new pick replaces it, so tests can await late
+    /// completions without depending on executor timing.
+    func acquisitionTasksForTesting() -> [Task<Void, Never>] {
+        [scanTask, fetchTask].compactMap { $0 }
+    }
+
     // MARK: - Fetching
 
     /// Whether the two tracks share a credited artist — the same-artist
@@ -608,35 +646,47 @@ final class QueueOrderSelector {
     /// scoring a different piece of music.
     /// One fetch's outcome, with the refusal reason kept for the journal —
     /// the mass-refusal failure mode is invisible without it.
-    private enum ScoringFetch {
+    enum ScoringFetch {
         case analyzed(TrackAnalysis)
         case refused(String)
     }
 
-    private static func scoringAnalysis(for track: Track) async -> ScoringFetch {
+    private static func scoringAnalysis(for track: Track) async throws -> ScoringFetch {
+        try Task.checkCancellation()
         // Keyed by track ID, so this hits whatever quality the track was last
         // analyzed at and spares the resolve entirely.
         if let cached = await AnalysisStore.shared.loadAnalysis(forTrackID: track.id) {
             return .analyzed(cached)
         }
-        guard let data = try? await NeteaseAPI.songURL(
+        try Task.checkCancellation()
+        var failureReason = "songURL failed"
+        do {
+            guard let data = try await NeteaseAPI.songURL(
                 ids: [track.id], level: scoringLevel).first
-        else { return .refused("songURL failed") }
-        guard data.freeTrialInfo == nil else { return .refused("trial fragment") }
-        guard let urlString = data.url,
-              let remote = URL(string: urlString.replacingOccurrences(
-                  of: "http://", with: "https://"))
-        else { return .refused("no url served") }
-        let ext = remote.pathExtension.isEmpty ? "mp3" : remote.pathExtension.lowercased()
-        let key = EngineAudioCache.Key(trackID: track.id, level: data.level ?? scoringLevel,
-                                 source: "netease", fileExtension: ext)
-        guard let local = try? await EngineAudioCache.shared.download(from: remote, key: key)
-        else { return .refused("download failed") }
-        guard let analyzed = await Task.detached(priority: .utility, operation: {
-            try? TrackAnalyzer.analyze(fileAt: local)
-        }).value else { return .refused("analysis failed") }
-        await AnalysisStore.shared.storeAnalysis(analyzed, for: key)
-        return .analyzed(analyzed)
+            else { return .refused("songURL failed") }
+            guard data.freeTrialInfo == nil else { return .refused("trial fragment") }
+            guard let urlString = data.url,
+                  let remote = URL(string: urlString.replacingOccurrences(
+                    of: "http://", with: "https://"))
+            else { return .refused("no url served") }
+            let ext = remote.pathExtension.isEmpty ? "mp3" : remote.pathExtension.lowercased()
+            let key = EngineAudioCache.Key(trackID: track.id, level: data.level ?? scoringLevel,
+                                          source: "netease", fileExtension: ext)
+            try Task.checkCancellation()
+            failureReason = "download failed"
+            let local = try await EngineAudioCache.shared.download(from: remote, key: key)
+            try Task.checkCancellation()
+            failureReason = "analysis failed"
+            let analyzed = try await TrackAnalyzer.analyzeInBackground(fileAt: local)
+            try Task.checkCancellation()
+            await AnalysisStore.shared.storeAnalysis(analyzed, for: key)
+            return .analyzed(analyzed)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            return .refused(failureReason)
+        }
     }
 }
 
