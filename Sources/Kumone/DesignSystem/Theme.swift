@@ -28,11 +28,26 @@ enum Theme {
             let visibleCount = max(1, Int(ceil((usableWidth + spacing) / (cardSize + spacing))))
             return max(1, (usableWidth - CGFloat(visibleCount - 1) * spacing) / CGFloat(visibleCount))
         }
+        #if os(iOS)
+        /// Row height for a shelf of cover cards: artwork, one line of title
+        /// and one of subtitle. Shelf titles are single-line on iOS
+        /// (`shelfTitleLineLimit`), so the row carries no slack below them.
+        static let coverShelfHeight: CGFloat = 206
+        /// Row height for a shelf of artist cards: circular artwork, one name.
+        static let artistShelfHeight: CGFloat = 160
+        static let shelfTitleLineLimit = 1
+        /// Top inset of a browsing page; the large navigation title already
+        /// separates it from the status bar.
+        static let pageTopPadding: CGFloat = 4
+        #else
         /// Row height for a shelf of cover cards: artwork, then up to two lines
         /// of title and one of subtitle.
         static let coverShelfHeight: CGFloat = 226
         /// Row height for a shelf of artist cards: circular artwork, one name.
         static let artistShelfHeight: CGFloat = 196
+        static let shelfTitleLineLimit = 2
+        static let pageTopPadding: CGFloat = contentInset - 8
+        #endif
         static let sidebarWidth: CGFloat = 220
         static let playerBarHeight: CGFloat = 56
         /// Gap between the floating player bar and the window's bottom edge.
@@ -42,6 +57,17 @@ enum Theme {
         static var playerChromeClearance: CGFloat { playerBarHeight + playerBarBottomMargin }
         /// Extra breathing margin for scrollable content clearing chrome.
         static let scrollBreathingMargin: CGFloat = 8
+
+        /// Vertical gap between the sections of a browsing page, and between a
+        /// section header and its cards. iOS shows one column on a short
+        /// screen, so its sections sit tighter than the desktop ones.
+        #if os(iOS)
+        static let sectionSpacing: CGFloat = 20
+        static let sectionHeaderSpacing: CGFloat = 10
+        #else
+        static let sectionSpacing: CGFloat = 34
+        static let sectionHeaderSpacing: CGFloat = 14
+        #endif
 
         #if os(iOS)
         enum FloatingChrome {
