@@ -44,13 +44,51 @@ final class NowPlayingManager {
 
     private init() {}
 
+    #if os(iOS)
+    private var activationAttemptInFlight = false
+    private var lastActivationAttempt: Date = .distantPast
+    /// `updateElapsed` ticks several times a second; activation is retried
+    /// no more often than this.
+    private static let activationRetryInterval: TimeInterval = 2
+
+    /// Claims the session again when it has lost its active slot (another app
+    /// took Now Playing while we were paused). While audio is audibly playing
+    /// a refusal means this install cannot activate a session at all, which
+    /// happens with some re-signed builds; the shared centers then take over
+    /// so the lock screen and Control Center keep their controls.
+    private func reclaimSessionIfNeeded(whilePlaying playing: Bool) {
+        guard let session, !session.isActive, !activationAttemptInFlight,
+              Date().timeIntervalSince(lastActivationAttempt) >= Self.activationRetryInterval
+        else { return }
+        activationAttemptInFlight = true
+        lastActivationAttempt = Date()
+        session.becomeActiveIfPossible { [weak self] success in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activationAttemptInFlight = false
+                if !success, playing { self.fallBackToSharedCenters() }
+            }
+        }
+    }
+
+    /// Gives up the session: commands move to `MPRemoteCommandCenter.shared()`
+    /// and the current metadata is republished on the default info center.
+    private func fallBackToSharedCenters() {
+        guard session != nil, let player else { return }
+        session = nil
+        registerRemoteCommands(for: player)
+        let rate = info[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? 0
+        infoCenter.nowPlayingInfo = info.isEmpty ? nil : info
+        infoCenter.playbackState = info.isEmpty ? .stopped : (rate > 0 ? .playing : .paused)
+        refreshLikeState()
+    }
+    #endif
+
     /// - Parameter avPlayer: the iOS AVPlayer backing playback. When supplied,
     ///   the Now Playing session is bound to it so the system can identify the
     ///   app behind the session.
     func attach(to player: PlayerService, avPlayer: AVPlayer? = nil) {
         self.player = player
-        playbackStateCancellables.removeAll()
-
         #if os(iOS)
         if let avPlayer {
             let session = MPNowPlayingSession(players: [avPlayer])
@@ -61,7 +99,13 @@ final class NowPlayingManager {
             session.becomeActiveIfPossible { _ in }
         }
         #endif
+        registerRemoteCommands(for: player)
+    }
 
+    /// Registers the remote commands on the current command center. Run again
+    /// when that center changes, i.e. when the session is given up.
+    private func registerRemoteCommands(for player: PlayerService) {
+        playbackStateCancellables.removeAll()
         let center = commandCenter
 
         center.playCommand.addTarget { [weak player] _ in
@@ -179,10 +223,9 @@ final class NowPlayingManager {
     func updateMetadata(for track: Track, duration: TimeInterval) {
         #if os(iOS)
         // A session can lose its active slot while playback was stopped;
-        // claim it again as soon as a new track is put up.
-        if let session, !session.isActive {
-            session.becomeActiveIfPossible { _ in }
-        }
+        // claim it again as soon as a new track is put up. The player may not
+        // be audible yet, so a refusal here is not held against the session.
+        reclaimSessionIfNeeded(whilePlaying: false)
         #endif
         info = [
             MPMediaItemPropertyTitle: track.name,
@@ -217,6 +260,10 @@ final class NowPlayingManager {
     }
 
     func updateElapsed(_ elapsed: TimeInterval, rate: Double) {
+        #if os(iOS)
+        // Resuming the same track publishes through here, not updateMetadata.
+        if rate > 0 { reclaimSessionIfNeeded(whilePlaying: true) }
+        #endif
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
         infoCenter.nowPlayingInfo = info
