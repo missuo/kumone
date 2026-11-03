@@ -206,6 +206,7 @@ struct HomeView: View {
                             .padding(.horizontal, Theme.Layout.contentInset)
                             .frame(height: Theme.Layout.coverShelfHeight)
                         }
+                        .shelfEdgeClip()
                     }
                     .frame(height: Theme.Layout.coverShelfHeight)
                 }
@@ -274,6 +275,7 @@ struct HomeView: View {
             .padding(.vertical, 6)
         }
         .compatScrollClipDisabled()
+        .shelfEdgeClip()
     }
 
     private func startHeartbeatMode() {

@@ -113,6 +113,7 @@ struct Shelf<Content: View>: View {
                     .padding(.vertical, 6)
             }
             .compatScrollClipDisabled()
+            .shelfEdgeClip()
         }
     }
 

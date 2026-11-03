@@ -15,10 +15,12 @@ struct ArtistDetailView: View {
     private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif

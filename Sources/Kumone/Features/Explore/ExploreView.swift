@@ -147,6 +147,7 @@ struct ExploreView: View {
             }
             .padding(.vertical, 2)
         }
+        .shelfEdgeClip()
     }
 
     private func playPlaylist(_ id: Int) {
