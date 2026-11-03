@@ -14,6 +14,11 @@
          Shared.xcconfig in favour of this flat, correct declaration. -->
     <key>UILaunchScreen</key>
     <dict/>
+    <!-- Distribution channel, substituted from KUMONE_DISTRIBUTION: sideload by
+         default (Shared.xcconfig), testflight from TestFlight.xcconfig. Read by
+         DistributionChannel to decide whether the in-app updater may run. -->
+    <key>KumoneDistribution</key>
+    <string>$(KUMONE_DISTRIBUTION)</string>
     <key>UIBackgroundModes</key>
     <array>
         <string>audio</string>

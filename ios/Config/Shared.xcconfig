@@ -38,6 +38,9 @@ GENERATE_INFOPLIST_FILE = YES
 KUMONE_INFOPLIST_FILE = Config/Info.plist
 INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
 INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown
+// Written into Info.plist as KumoneDistribution; see DistributionChannel.
+// TestFlight.xcconfig overrides it.
+KUMONE_DISTRIBUTION = sideload
 
 // ==========================================
 // Entitlements

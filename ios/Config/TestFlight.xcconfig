@@ -1,0 +1,30 @@
+// TestFlight.xcconfig — App Store Connect / TestFlight distribution.
+//
+// Release, plus what a build uploaded to Apple needs. Selected with
+// `xcodebuild -configuration TestFlight` (see Scripts/testflight.sh and
+// `make testflight`); Debug and Release are untouched, so CI and every
+// contributor keep the sideload build.
+
+#include "Release.xcconfig"
+
+// Substituted into Info.plist (KumoneDistribution) and read by
+// DistributionChannel at launch: hides the sideload updater (TrollStore
+// hand-off / IPA download), which App Review 2.5.2 forbids. Everything else in
+// the app is the same binary.
+KUMONE_DISTRIBUTION = testflight
+
+// Only standard HTTPS/system encryption: answers the export-compliance question
+// once here instead of in App Store Connect for every build.
+INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO
+
+// Signing. The team is deliberately not committed: Scripts/testflight.sh passes
+// DEVELOPMENT_TEAM on the command line from $KUMONE_TEAM_ID, or put it in the
+// untracked Config/TestFlight.local.xcconfig:
+//   DEVELOPMENT_TEAM = XXXXXXXXXX
+CODE_SIGN_STYLE = Automatic
+#include? "TestFlight.local.xcconfig"
+
+// CarPlay rides on the same opt-in overlay as every other build
+// (`make configure-carplay` → Config/CarPlay.local.xcconfig, included by
+// Shared.xcconfig). Until the carplay-audio entitlement is approved for the
+// App ID, archive without it: the overlay would fail signing.

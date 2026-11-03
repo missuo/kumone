@@ -135,6 +135,32 @@ Once your developer account has the entitlement approved:
 To test without a car, use the CarPlay Simulator: Xcode ▸ Open Developer Tool ▸
 Simulator, then I/O ▸ External Displays ▸ CarPlay.
 
+### TestFlight (iOS)
+
+The sideload build updates itself from GitHub releases (TrollStore hand-off or
+an IPA download), which App Review does not allow. Builds for App Store Connect
+therefore use the `TestFlight` configuration: Release plus
+`ios/Config/TestFlight.xcconfig`, which writes `KumoneDistribution = testflight`
+into Info.plist. `DistributionChannel` reads it at launch and hides the
+in-app updater; everything else is the same binary. Debug and Release are
+untouched, so CI and contributors keep the sideload build.
+
+```bash
+export KUMONE_TEAM_ID=XXXXXXXXXX          # or DEVELOPMENT_TEAM in ios/Config/TestFlight.local.xcconfig
+make testflight                           # archive + export .build/testflight/export/KumoneIOS.ipa
+make testflight UPLOAD=1                  # archive + upload to App Store Connect
+make testflight UPLOAD=1 CARPLAY=1        # once the carplay-audio entitlement is approved
+```
+
+The version comes from the latest `v*` tag and the build number from the commit
+count, the same as the release workflow; override with
+`Scripts/testflight.sh --version 0.4.0 --build 1234`. Set `ASC_KEY_ID`,
+`ASC_ISSUER_ID` and `ASC_KEY_PATH` to an App Store Connect API key for
+unattended provisioning and upload; without them Xcode's signed-in account is
+used. `CARPLAY=1` goes through the same `make configure-carplay` overlay as a
+device build, so it fails to sign until the App ID has the capability.
+
+
 ## Building
 
 Requires macOS 15+ and Xcode 26+.
