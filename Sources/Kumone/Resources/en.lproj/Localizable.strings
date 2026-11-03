@@ -222,6 +222,14 @@
 "经典模式" = "Classic";
 "沉浸模式" = "Immersive";
 "简洁模式" = "Minimal";
+"横屏播放页样式" = "Landscape Player Style";
+"经典双栏" = "Classic Split";
+"沉浸歌词" = "Immersive Lyrics";
+"循环播放" = "Repeat";
+"不喜欢" = "Dislike";
+"显示播放队列" = "Show Queue";
+"关闭播放队列" = "Hide Queue";
+"iPhone 横放或 iPad 打开播放页时使用；竖屏仍按上面的「播放页模式」" = "Used when the player opens in iPhone landscape or on iPad; portrait keeps the mode above";
 "显示歌词翻译" = "Show Lyrics Translation";
 "点击封面打开专辑" = "Click Artwork to Open Album";
 "逐字歌词（卡拉OK）" = "Word-by-Word Lyrics (Karaoke)";

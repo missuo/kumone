@@ -108,6 +108,14 @@ struct SettingsView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
+                Picker("横屏播放页样式", selection: $settings.landscapeNowPlayingStyle) {
+                    ForEach(LandscapeNowPlayingStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                Text("iPhone 横放或 iPad 打开播放页时使用；竖屏仍按上面的「播放页模式」")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 #endif
                 Toggle("点击封面打开专辑", isOn: $settings.openAlbumOnArtworkClick)
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)

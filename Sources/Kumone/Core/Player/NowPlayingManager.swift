@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import Foundation
 import MediaPlayer
@@ -11,13 +12,57 @@ final class NowPlayingManager {
     private var artworkTask: Task<Void, Never>?
     private var playbackStateCancellables: Set<AnyCancellable> = []
     private var info: [String: Any] = [:]
+    #if os(iOS)
+    /// Binds the app's Now Playing state to its AVPlayer. The system's Now
+    /// Playing / lock-screen / Dynamic Island surface launches the app behind
+    /// the session on a tap; publishing through the process-wide centers
+    /// leaves that association implicit. `MPNowPlayingSession` is the iOS 16+
+    /// API for it (macOS has no equivalent). This is the client-side
+    /// hardening for #124/#40 — the launch itself is still controlled by the
+    /// system and the installed app's signing identity.
+    private var session: MPNowPlayingSession?
+    #endif
+
+    /// Where metadata is published. With a session this must be the session's
+    /// own center — the default center is not associated with it.
+    private var infoCenter: MPNowPlayingInfoCenter {
+        #if os(iOS)
+        if let session { return session.nowPlayingInfoCenter }
+        #endif
+        return .default()
+    }
+
+    /// Where remote commands are registered. The session owns its own
+    /// command center; registering on `.shared()` would leave those commands
+    /// outside the session.
+    private var commandCenter: MPRemoteCommandCenter {
+        #if os(iOS)
+        if let session { return session.remoteCommandCenter }
+        #endif
+        return .shared()
+    }
 
     private init() {}
 
-    func attach(to player: PlayerService) {
+    /// - Parameter avPlayer: the iOS AVPlayer backing playback. When supplied,
+    ///   the Now Playing session is bound to it so the system can identify the
+    ///   app behind the session.
+    func attach(to player: PlayerService, avPlayer: AVPlayer? = nil) {
         self.player = player
         playbackStateCancellables.removeAll()
-        let center = MPRemoteCommandCenter.shared()
+
+        #if os(iOS)
+        if let avPlayer {
+            let session = MPNowPlayingSession(players: [avPlayer])
+            // We publish the full dictionary ourselves (elapsed time, queue
+            // count, artwork), which the automatic publisher would omit.
+            session.automaticallyPublishesNowPlayingInfo = false
+            self.session = session
+            session.becomeActiveIfPossible { _ in }
+        }
+        #endif
+
+        let center = commandCenter
 
         center.playCommand.addTarget { [weak player] _ in
             guard let player, player.hasCurrentTrack else { return .noActionableNowPlayingItem }
@@ -124,14 +169,21 @@ final class NowPlayingManager {
     /// Reflects the current track's hearted state on the like command.
     func refreshLikeState() {
         guard let track = player?.currentTrack else {
-            MPRemoteCommandCenter.shared().likeCommand.isActive = false
+            commandCenter.likeCommand.isActive = false
             return
         }
-        MPRemoteCommandCenter.shared().likeCommand.isActive =
+        commandCenter.likeCommand.isActive =
             AccountStore.shared.isLiked(track.id)
     }
 
     func updateMetadata(for track: Track, duration: TimeInterval) {
+        #if os(iOS)
+        // A session can lose its active slot while playback was stopped;
+        // claim it again as soon as a new track is put up.
+        if let session, !session.isActive {
+            session.becomeActiveIfPossible { _ in }
+        }
+        #endif
         info = [
             MPMediaItemPropertyTitle: track.name,
             MPMediaItemPropertyArtist: track.artistNames,
@@ -143,8 +195,8 @@ final class NowPlayingManager {
             // complete now-playing app (best-effort hardening for #36/#40).
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = .playing
+        infoCenter.nowPlayingInfo = info
+        infoCenter.playbackState = .playing
         refreshLikeState()
 
         artworkTask?.cancel()
@@ -156,7 +208,7 @@ final class NowPlayingManager {
                 guard let self, !Task.isCancelled else { return }
                 let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 self.info[MPMediaItemPropertyArtwork] = artwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = self.info
+                self.infoCenter.nowPlayingInfo = self.info
             }
             if let image = await ImageCache.shared.image(for: url, onCachedImage: apply) {
                 apply(image)
@@ -167,16 +219,16 @@ final class NowPlayingManager {
     func updateElapsed(_ elapsed: TimeInterval, rate: Double) {
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
         info[MPNowPlayingInfoPropertyPlaybackRate] = rate
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
+        infoCenter.nowPlayingInfo = info
+        infoCenter.playbackState = rate > 0 ? .playing : .paused
     }
 
     func clear() {
         artworkTask?.cancel()
         artworkTask = nil
         info = [:]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .stopped
-        MPRemoteCommandCenter.shared().likeCommand.isActive = false
+        infoCenter.nowPlayingInfo = nil
+        infoCenter.playbackState = .stopped
+        commandCenter.likeCommand.isActive = false
     }
 }

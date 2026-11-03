@@ -300,7 +300,7 @@ final class PlayerService: ObservableObject {
             }
         }
 
-        NowPlayingManager.shared.attach(to: self)
+        NowPlayingManager.shared.attach(to: self, avPlayer: engine)
         offlineActivatedScope = AccountStore.shared.offlineScope
         networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.networkState = network
