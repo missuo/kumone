@@ -35,6 +35,7 @@ struct TrackRow: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @ScaledMetric(relativeTo: .body) private var compactArtworkSize: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var compactRowHeight: CGFloat = 64
     @ScaledMetric(relativeTo: .body) private var compactAlbumRowHeight: CGFloat = 50
@@ -80,7 +81,8 @@ struct TrackRow: View {
 
     private var isCompact: Bool {
         #if os(iOS)
-        return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
+        return LayoutSizeClass.isCompact(horizontal: horizontalSizeClass, vertical: verticalSizeClass,
+                                         fallback: UIDevice.current.userInterfaceIdiom == .phone)
         #else
         return false
         #endif

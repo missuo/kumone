@@ -40,7 +40,7 @@ struct SkeletonCardView: View {
 
 struct SkeletonShelf: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.Layout.sectionHeaderSpacing) {
             SkeletonView(cornerRadius: 4).frame(width: 120, height: 20)
             GeometryReader { geometry in
                 let cardSize = Theme.Layout.fittedShelfCardSize(availableWidth: geometry.size.width, leadingInset: 0)

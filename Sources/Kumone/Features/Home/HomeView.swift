@@ -129,7 +129,7 @@ struct HomeView: View {
     }
 
     private var loadingBody: some View {
-        VStack(alignment: .leading, spacing: 32) {
+        VStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(0..<3, id: \.self) { _ in
@@ -146,7 +146,7 @@ struct HomeView: View {
     }
 
     private var loadedBody: some View {
-        LazyVStack(alignment: .leading, spacing: 34) {
+        LazyVStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             // Anonymous users go straight to recommended playlists;
             // the login entry lives in the sidebar / 我的 tab only.
             if account.isLoggedIn {
@@ -170,7 +170,8 @@ struct HomeView: View {
                             CoverCardBody(
                                 coverURL: radar.coverURL?.resizedImageURL(384),
                                 title: radar.title,
-                                subtitle: radar.subtitle
+                                subtitle: radar.subtitle,
+                                titleLineLimit: Theme.Layout.shelfTitleLineLimit
                             ) {
                                 playPlaylist(radar.id)
                             }
@@ -192,7 +193,7 @@ struct HomeView: View {
             }
 
             if !model.newAlbums.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Theme.Layout.sectionHeaderSpacing) {
                     SectionHeader(title: "新碟上架")
                         .padding(.horizontal, Theme.Layout.contentInset)
                     GeometryReader { geometry in
@@ -206,6 +207,7 @@ struct HomeView: View {
                             .padding(.horizontal, Theme.Layout.contentInset)
                             .frame(height: Theme.Layout.coverShelfHeight)
                         }
+                        .shelfEdgeClip()
                     }
                     .frame(height: Theme.Layout.coverShelfHeight)
                 }
@@ -221,7 +223,8 @@ struct HomeView: View {
 
             PlayerClearanceSpacer()
         }
-        .padding(.vertical, Theme.Layout.contentInset - 8)
+        .padding(.top, Theme.Layout.pageTopPadding)
+        .padding(.bottom, Theme.Layout.contentInset - 8)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -274,6 +277,7 @@ struct HomeView: View {
             .padding(.vertical, 6)
         }
         .compatScrollClipDisabled()
+        .shelfEdgeClip()
     }
 
     private func startHeartbeatMode() {
@@ -306,7 +310,8 @@ struct HomeView: View {
                 coverURL: playlist.coverURL?.resizedImageURL(384),
                 title: playlist.name,
                 subtitle: playlist.copywriter,
-                playCount: playlist.playCount
+                playCount: playlist.playCount,
+                titleLineLimit: Theme.Layout.shelfTitleLineLimit
             ) {
                 playPlaylist(playlist.id)
             }
@@ -320,7 +325,8 @@ struct HomeView: View {
                 coverURL: album.picUrl?.resizedImageURL(384),
                 title: album.name,
                 subtitle: album.artistName,
-                size: size
+                size: size,
+                titleLineLimit: Theme.Layout.shelfTitleLineLimit
             ) {
                 Task {
                     if let detail = try? await NeteaseAPI.album(id: album.id) {
@@ -452,6 +458,7 @@ struct CoverCardBody: View {
     var subtitle: String?
     var playCount: Int = 0
     var size: CGFloat = Theme.Layout.cardSize
+    var titleLineLimit = 2
     var onPlay: (() -> Void)?
 
     @State private var isHovering = false
@@ -480,7 +487,7 @@ struct CoverCardBody: View {
 
             Text(title)
                 .font(.system(size: 13, weight: .medium))
-                .lineLimit(2)
+                .lineLimit(titleLineLimit)
                 .multilineTextAlignment(.leading)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: flexibleWidth ? .infinity : size, alignment: .leading)

@@ -317,6 +317,7 @@ public struct IOSMainWindow: View {
         NavigationStack(path: binding(for: tab)) {
             content().appDestinations()
         }
+        .publishesWindowHorizontalInsets()
     }
 
     @ViewBuilder
