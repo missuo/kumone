@@ -838,11 +838,16 @@ struct PlaybackEngineSmokeTests {
             let engine = PlaybackEngine()
             let log = EventLog(engine)
             defer { engine.stopAll() }
-            guard (try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)) != nil,
-                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
+            guard let duration = try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)
+            else { return o }
             engine.outputVolume = 0
-            // Start A near its tail so the hand-over happens within ~3s.
+            // B is not prepared until A enters the ordinary gapless window.
             engine.play(deck: .a, from: 5)
+            let deadline = Date().addingTimeInterval(5)
+            while !PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            guard PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
             engine.scheduleTransition(.plain(.gapless), from: .a, to: .b)
 
             o.completed = log.wait(timeout: 10) {
@@ -863,6 +868,36 @@ struct PlaybackEngineSmokeTests {
         #expect(o.completed, ".transitionCompleted(a→b) should be emitted")
         #expect(o.bPosLate > o.bPosEarly + 0.5,
                 "deck B position should advance after the hand-over (\(o.bPosEarly) → \(o.bPosLate))")
+    }
+
+    @Test func withdrawingPreparationPreservesAnUnconsumedHandOver() async throws {
+        guard await audioOutputAvailable.value else { return }
+        let result = await withWatchdog("withdrawPreparation", timeout: 20) {
+            let engine = PlaybackEngine()
+            defer { engine.stopAll() }
+            engine.outputVolume = 0
+            guard (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .a)) != nil,
+                  (try? engine.loadFile(at: Fixtures.sixSecondStereoCAF, on: .b)) != nil
+            else { return (false, true, true, false) }
+            // Do not consume engine.events: the main actor can still hold the
+            // outgoing deck while midpoint/completed wait in the event stream.
+            engine.play(deck: .a, from: 4)
+            engine.scheduleTransition(.plain(.crossfade(duration: 1, outPoint: 5, inPoint: 0)),
+                                      from: .a, to: .b)
+            let deadline = Date().addingTimeInterval(12)
+            while !engine.handOverStarted, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let started = engine.handOverStarted
+            let discardedDuring = engine.discardPreparedDeck(.b)
+            while engine.hasPendingTransition, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let discardedAfter = engine.discardPreparedDeck(.b)
+            let playing = engine.position(of: .b) > 0 && engine.duration(of: .b) != nil
+            return (started, discardedDuring, discardedAfter, playing)
+        }
+        guard let (started, discardedDuring, discardedAfter, playing) = result else { return }
+        #expect(started)
+        #expect(!discardedDuring)
+        #expect(!discardedAfter)
+        #expect(playing)
     }
 
     // (f) TransitionStyle execution. Each style runs a real A → B overlap and
