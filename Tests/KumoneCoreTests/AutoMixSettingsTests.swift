@@ -11,6 +11,28 @@ import Testing
 
 @Suite @MainActor struct AutoMixSettingsTests {
 
+    @Test(arguments: [6.0, 60, 120, 240, 3600])
+    func ordinaryGaplessPreparationWaitsForTheTail(duration: Double) {
+        let boundary = duration - min(30, duration * 0.25)
+        #expect(!PlayerService.gaplessPrefetchReady(position: 0, duration: duration))
+        #expect(!PlayerService.gaplessPrefetchReady(position: boundary - 0.01, duration: duration))
+        #expect(PlayerService.gaplessPrefetchReady(position: boundary, duration: duration))
+        #expect(PlayerService.gaplessPrefetchReady(position: duration - 0.01, duration: duration))
+        // A backward seek leaves the window; an ended track cannot start work.
+        #expect(!PlayerService.gaplessPrefetchReady(position: boundary - 1, duration: duration))
+        #expect(!PlayerService.gaplessPrefetchReady(position: duration, duration: duration))
+        #expect(!PlayerService.gaplessPrefetchReady(position: duration + 1, duration: duration))
+    }
+
+    @Test func anUnknownTimelineCannotStartGaplessPreparation() {
+        for duration in [0.0, -1, .infinity, .nan] {
+            #expect(!PlayerService.gaplessPrefetchReady(position: 0, duration: duration))
+        }
+        for position in [-1.0, .infinity, .nan] {
+            #expect(!PlayerService.gaplessPrefetchReady(position: position, duration: 240))
+        }
+    }
+
     // MARK: - What buys an analysis
 
     @Test func theMasterSwitchIsNecessaryForAnalysis() {

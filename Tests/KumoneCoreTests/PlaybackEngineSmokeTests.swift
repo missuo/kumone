@@ -838,11 +838,16 @@ struct PlaybackEngineSmokeTests {
             let engine = PlaybackEngine()
             let log = EventLog(engine)
             defer { engine.stopAll() }
-            guard (try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)) != nil,
-                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
+            guard let duration = try? engine.loadFile(at: Fixtures.eightSecondCAF, on: .a)
+            else { return o }
             engine.outputVolume = 0
-            // Start A near its tail so the hand-over happens within ~3s.
+            // B is not prepared until A enters the ordinary gapless window.
             engine.play(deck: .a, from: 5)
+            let deadline = Date().addingTimeInterval(5)
+            while !PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            guard PlayerService.gaplessPrefetchReady(position: engine.position(of: .a), duration: duration),
+                  (try? engine.loadFile(at: Fixtures.sixSecondCAF, on: .b)) != nil else { return o }
             engine.scheduleTransition(.plain(.gapless), from: .a, to: .b)
 
             o.completed = log.wait(timeout: 10) {

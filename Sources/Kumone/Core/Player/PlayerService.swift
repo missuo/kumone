@@ -253,10 +253,14 @@ final class PlayerService: ObservableObject {
         let localURL: URL
         let level: String?
         let unblockSource: String?
+        let autoMix: Bool
         var analysis: TrackAnalysis?
     }
 
-    private var prefetchTask: (id: UUID, trackID: Int, work: Task<Void, Never>)?
+    private var prefetchTask: (id: UUID, trackID: Int, generation: Int,
+                              autoMix: Bool, work: Task<Void, Never>)?
+    /// Waiting for the tail window, not a failed transfer to retry every tick.
+    private var gaplessPrefetchDeferred = false
     private var prefetchedNext: PrefetchedNext? { didSet { publishCacheFilesInUse() } }
     private var pendingTransitionTrack: Track?
     /// The plan the engine is currently holding, kept so the stem pre-render
@@ -330,6 +334,9 @@ final class PlayerService: ObservableObject {
             guard let self else { return }
             if state == .endOfCurrentTrack {
                 self.disarmTransition()
+                if !SettingsManager.shared.automixEnabled { self.schedulePrefetch() }
+            } else if !SettingsManager.shared.automixEnabled {
+                self.schedulePrefetch()
             } else {
                 self.armTransitionIfReady()
             }
@@ -391,6 +398,7 @@ final class PlayerService: ObservableObject {
                 guard self.isPlaying, self.deckLoaded, !self.isScrubbing else { return }
                 let seconds = self.engine.position(of: self.activeDeck)
                 guard seconds.isFinite else { return }
+                self.updateGaplessPrefetch(at: seconds)
 
                 // Lyrics need this cadence to stay in sync; the cursor itself
                 // only publishes when the line actually changes.
@@ -613,6 +621,14 @@ final class PlayerService: ObservableObject {
         updateLyricsCursor(at: seconds)
         engine.seek(deck: activeDeck, to: seconds)
         NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+        if !SettingsManager.shared.automixEnabled {
+            if !Self.gaplessPrefetchReady(position: seconds, duration: duration) {
+                // Seeking back out of the tail withdraws unused preparation.
+                schedulePrefetch()
+            } else {
+                updateGaplessPrefetch(at: seconds)
+            }
+        }
         if wasArmed {
             armTransitionIfReady()
             reconcileParkedPrerender()
@@ -714,6 +730,7 @@ final class PlayerService: ObservableObject {
     func removeFromUpcoming(_ track: Track) {
         if let idx = playNextList.firstIndex(where: { $0.id == track.id }) {
             playNextList.remove(at: idx)
+            schedulePrefetch()
             return
         }
         if let idx = queue.firstIndex(where: { $0.id == track.id }),
@@ -967,6 +984,7 @@ final class PlayerService: ObservableObject {
             prefetchTask = nil
         }
         prefetchedNext = nil
+        gaplessPrefetchDeferred = false
         currentAnalysis = nil
         currentLocalURL = nil
         // The active deck is still carrying the *previous* track — `resolveAndLoad`
@@ -1359,14 +1377,45 @@ final class PlayerService: ObservableObject {
         return repeatMode == .all ? activeQueue.first : nil
     }
 
-    /// (Re)start the pipeline for the current auto-advance target. Call after
-    /// playback starts and whenever the upcoming list changes.
+    /// Ordinary gapless playback only buys a download in the last 30 seconds,
+    /// or the last quarter of a short track. This is preparation time, not a
+    /// guarantee that a slow transfer will finish before the boundary.
+    nonisolated static func gaplessPrefetchReady(position: TimeInterval,
+                                                duration: TimeInterval) -> Bool {
+        guard duration.isFinite, duration > 0, position.isFinite,
+              position >= 0, position < duration else { return false }
+        return duration - position <= min(30, duration * 0.25)
+    }
+
+    private func updateGaplessPrefetch(at position: TimeInterval) {
+        guard gaplessPrefetchDeferred,
+              Self.gaplessPrefetchReady(position: position, duration: duration) else { return }
+        schedulePrefetch()
+    }
+
+    /// (Re)start after playback or the upcoming list changes. With AutoMix
+    /// off, the existing playback clock starts deferred work at the tail.
     private func schedulePrefetch() {
-        guard SettingsManager.shared.automixEnabled else {
-            prefetchTask?.work.cancel()
-            prefetchTask = nil
+        gaplessPrefetchDeferred = false
+        let autoMix = SettingsManager.shared.automixEnabled
+        let target = autoAdvanceTarget()
+        if !autoMix {
             currentAnalysisTask?.cancel()
             currentAnalysisTask = nil
+            if deckLoaded, sleepTimer.state != .endOfCurrentTrack,
+               Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration),
+               let target {
+                // Queue edits and a completed stream mirror can leave the next
+                // target unchanged. Keep its transfer or ready gapless deck.
+                if let work = prefetchTask, work.trackID == target.id,
+                   work.generation == resolveGeneration, !work.autoMix { return }
+                if let next = prefetchedNext, next.track.id == target.id, !next.autoMix {
+                    armTransitionIfReady()
+                    return
+                }
+            }
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
             // A hand-over that is already audible finishes normally. Its
             // midpoint still needs the pending track and its file metadata.
             guard engine.discardPreparedDeck(activeDeck.other) else { return }
@@ -1374,7 +1423,12 @@ final class PlayerService: ObservableObject {
             deckFiles[activeDeck.other] = nil
             prefetchedNext = nil
             AutoMixDebugModel.shared.clearNext()
-            return
+            guard deckLoaded, sleepTimer.state != .endOfCurrentTrack else { return }
+            guard isPlaying,
+                  Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else {
+                gaplessPrefetchDeferred = true
+                return
+            }
         }
         // Restoring a paused session or resolving a new source does not yet
         // create a playback context worth downloading the next track for.
@@ -1397,13 +1451,14 @@ final class PlayerService: ObservableObject {
         }
         prefetchTask?.work.cancel()
         prefetchTask = nil
-        let target = autoAdvanceTarget()
         if let armed = pendingTransitionTrack {
             // Already armed for the right track — the pipeline is done.
-            if armed.id == target?.id { return }
-            // The armed hand-over points at a track that is no longer next.
+            if armed.id == target?.id, prefetchedNext?.autoMix == autoMix { return }
+            // The target or preparation mode changed. A light gapless deck
+            // needs analysis/trim when AutoMix is enabled, but an already
+            // committed hand-over must finish with its original metadata.
+            guard engine.discardPreparedDeck(activeDeck.other) else { return }
             disarmTransition()
-            engine.stop(deck: activeDeck.other)
             deckFiles[activeDeck.other] = nil
         }
         prefetchedNext = nil
@@ -1422,7 +1477,7 @@ final class PlayerService: ObservableObject {
         }
         let generation = resolveGeneration
         let taskID = UUID()
-        prefetchTask = (taskID, target.id, Task { [weak self] in
+        prefetchTask = (taskID, target.id, generation, autoMix, Task { [weak self] in
             guard let self else { return }
             defer {
                 // A selected prefetch can outlive its playback generation.
@@ -1444,18 +1499,19 @@ final class PlayerService: ObservableObject {
             }
             guard !Task.isCancelled, generation == self.resolveGeneration else { return }
             AutoMixDebugModel.shared.setNextStage(.downloaded)
-            // The words next: this track is about to be the *incoming* side of
-            // a seam and, one song later, the outgoing side whose lyric line
-            // decides where a vocal exchange hands over. One small JSON call.
-            async let lyrics: Void = LyricsSidecar.fetchAndWrite(trackID: target.id, for: local)
-            AutoMixDebugModel.shared.setNextStage(.analyzing)
-            let analysis = await self.analysis(for: resolved.key, fileURL: local)
+            // AutoMix uses words/analysis to plan future seams. Plain gapless
+            // needs only the audio; its displayed lyrics load after adoption.
+            async let lyrics: Void = autoMix
+                ? LyricsSidecar.fetchAndWrite(trackID: target.id, for: local) : ()
+            if autoMix { AutoMixDebugModel.shared.setNextStage(.analyzing) }
+            let analysis = autoMix ? await self.analysis(for: resolved.key, fileURL: local) : nil
             guard !Task.isCancelled, generation == self.resolveGeneration,
                   self.autoAdvanceTarget()?.id == target.id else { return }
             AutoMixDebugModel.shared.setNextAnalysis(analysis, localURL: local)
             self.prefetchedNext = PrefetchedNext(
                 track: target, key: resolved.key, localURL: local,
-                level: resolved.level, unblockSource: resolved.unblockSource, analysis: analysis)
+                level: resolved.level, unblockSource: resolved.unblockSource,
+                autoMix: autoMix, analysis: analysis)
             self.armTransitionIfReady()
             await lyrics
         })
@@ -1481,8 +1537,10 @@ final class PlayerService: ObservableObject {
     }
 
     private func armTransitionIfReady() {
-        guard SettingsManager.shared.automixEnabled,
-              !transitionArmed, let next = prefetchedNext else { return }
+        guard !transitionArmed, let next = prefetchedNext else { return }
+        if !SettingsManager.shared.automixEnabled {
+            guard Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else { return }
+        }
         // "Stop after this track" needs the track to *end*: an armed hand-over
         // (AutoMix or gapless) would carry playback into the next one first.
         guard sleepTimer.state != .endOfCurrentTrack else { return }
@@ -3800,6 +3858,7 @@ final class PlayerService: ObservableObject {
         releaseOfflineLease()
         prefetchTask?.work.cancel()
         prefetchTask = nil
+        gaplessPrefetchDeferred = false
     }
 
     private func persistState() {
