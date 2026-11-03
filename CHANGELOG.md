@@ -7,6 +7,26 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.26 - 2026-11-03
+
+### Added
+
+- **macOS**: desktop lyrics now sing along — with 逐字歌词（卡拉OK） on, the floating line lights up character by character from the song's word timings, the same wipe as the now-playing page; it freezes while paused and keeps running with the main window hidden (#174).
+
+### Improved
+
+- **macOS**: the About window credits MOE AI LLC.
+
+---
+
+### 新增
+
+- **macOS**：桌面歌词支持逐字卡拉 OK——开启「逐字歌词（卡拉OK）」后，悬浮歌词按歌曲的逐字时间逐个亮起，与播放页同一套扫光；暂停时停住，主窗口隐藏时照常运行（#174）。
+
+### 改进
+
+- **macOS**：关于窗口的版权署名改为 MOE AI LLC。
+
 ## 0.3.25 - 2026-11-03
 
 ### Added
