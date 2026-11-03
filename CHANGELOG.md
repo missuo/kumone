@@ -7,6 +7,58 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.25 - 2026-11-03
+
+### Added
+
+- **iOS + macOS**: a new app icon — a geometric K monogram in white on the app's vermilion accent, drawn as an Icon Composer bundle so macOS 26 renders it with the system's glass treatment (#173).
+- **macOS**: a native menu bar player — cover, title, artist, elapsed time and a like button, with play/pause, previous, next and Settings in its overflow menu. Off by default; turn it on under Settings → 通用 → 在菜单栏显示. Thanks @yamakze (#155, closes #132).
+- **iOS**: a landscape "immersive lyrics" (karaoke) player style — centred word-by-word lyrics on a slowly drifting blurred-cover backdrop, with the track info bottom-left and the transport bottom-right; pick it under Settings → 外观 → 横屏播放页样式 (defaults to the classic two-column layout). Thanks @yxxbc (#167).
+- **iOS**: iPhone Duo support — track rows and the album/artist pages follow the inner display's regular size classes, and shelves stop at the trailing status-bar column instead of drawing into it (#170).
+- **iOS**: a TestFlight build configuration (`make testflight`); TestFlight and App Store builds skip the launch-time update check and the TrollStore / IPA update controls in Settings (#172).
+
+### Fixed
+
+- **iOS + macOS**: editing a search query and searching the previous text again no longer shows an empty "没有找到相关结果" — responses for an older query are dropped, loading is tracked per tab, and a failed request is retried on the next submit instead of being cached as empty (#162, fixes #159).
+- **macOS**: the search field inside a playlist (e.g. 我喜欢的音乐) no longer loses focus after every typed or deleted character — filtering now refreshes the song rows instead of reloading the whole table. Based on the analysis by @menglongyanyu (#156, fixes #142).
+- **iOS**: tapping the Dynamic Island / system Now Playing brings the app to the foreground more reliably — playback now runs under an `MPNowPlayingSession` bound to the player, re-claimed on resume; installs that cannot activate a session fall back to the shared Now Playing centers so lock-screen and Control Center controls still appear. Thanks @yxxbc (#167, #171; #40, #124).
+- **iOS**: the bottom transport buttons no longer shift sideways for a moment when the track changes, and old and new lyrics no longer cross-fade on top of each other (#167, #171).
+- **macOS**: the CoreAudio overload callback is now delivered asynchronously, removing a rare deadlock while the audio engine is torn down or restarted. Thanks @yamakze (#153).
+
+### Improved
+
+- **macOS**: the app is about 57% smaller (bundle 205 → 88 MB) — the ~107 MB Metal kernels for stem separation ship compressed and are unpacked on first use, and release builds strip local symbols with the dSYM kept for crash symbolication. Thanks @yamakze (#153).
+- **macOS**: progressive playback no longer keeps the not-yet-decoded part of a download in memory — it is read back from the on-disk cache mirror in 32 KiB chunks, so peak memory stays flat regardless of file size. Thanks @yamakze (#164, #161).
+- **macOS**: switching tracks quickly cancels the previous track's source resolution, lyrics, prefetch download and analysis instead of letting them finish in the background; a shared download is only cancelled once its last consumer leaves. Thanks @yamakze (#165, #161).
+- **macOS**: with AutoMix off, the next track is no longer prefetched and analysed during plain playback; turning AutoMix on resumes the preparation. Thanks @yamakze (#166, #161).
+- **iOS**: tighter browsing pages — less space between sections and between a section title and its cards, single-line shelf titles, and no blank band under each shelf (#170).
+
+---
+
+### 新增
+
+- **iOS + macOS**：全新 App 图标——朱红底色上的白色几何 K 字母，以 Icon Composer 包提供，macOS 26 会用系统玻璃效果渲染（#173）。
+- **macOS**：原生菜单栏播放器——封面、歌名、歌手、播放时间和喜欢按钮，播放/暂停、上一首、下一首与设置入口收纳在更多菜单中。默认关闭，在 设置 → 通用 → 在菜单栏显示 开启。感谢 @yamakze（#155，关闭 #132）。
+- **iOS**：横屏「沉浸歌词（卡拉 OK）」播放页样式——逐字扫光的歌词居中显示，背景是缓慢漂移的模糊封面，左下角曲目信息、右下角播放控制；在 设置 → 外观 → 横屏播放页样式 中选择（默认仍为经典双栏）。感谢 @yxxbc（#167）。
+- **iOS**：适配 iPhone Duo——歌曲行和专辑、歌手页面按内屏的 regular 尺寸类布局，推荐栏在右侧状态栏列处截止，不再画进去（#170）。
+- **iOS**：新增 TestFlight 构建配置（`make testflight`）；TestFlight 与 App Store 版本不再在启动时检查更新，设置里也不再显示 TrollStore / IPA 更新入口（#172）。
+
+### 修复
+
+- **iOS + macOS**：修改搜索词后再搜回之前的文本不再显示空的「没有找到相关结果」——旧搜索词的响应会被丢弃，加载状态按标签页分别记录，失败的请求下次提交时会重试而不是被当作空结果缓存（#162，修复 #159）。
+- **macOS**：歌单内（如 我喜欢的音乐）的搜索框不再每输入或删除一个字符就失去焦点——过滤时只刷新歌曲行而不再整表重载。基于 @menglongyanyu 的分析（#156，修复 #142）。
+- **iOS**：点击灵动岛 / 系统正在播放更可靠地把 App 拉回前台——播放现在挂在绑定到播放器的 `MPNowPlayingSession` 下，恢复播放时会重新声明；无法激活会话的安装会回退到共享的正在播放中心，锁屏和控制中心的控制按钮仍会出现。感谢 @yxxbc（#167、#171；#40、#124）。
+- **iOS**：换歌瞬间底部控制按钮不再横向跳动，新旧歌词也不再交叉淡入淡出叠在一起（#167、#171）。
+- **macOS**：CoreAudio 过载回调改为异步投递，消除音频引擎销毁或重启时偶发的死锁。感谢 @yamakze（#153）。
+
+### 改进
+
+- **macOS**：App 体积缩小约 57%（包体 205 → 88 MB）——人声分离用的约 107 MB Metal 内核改为压缩内置、首次使用时解压，Release 构建剥离本地符号并单独保留 dSYM 以便崩溃符号化。感谢 @yamakze（#153）。
+- **macOS**：边下边播不再把尚未解码的下载内容留在内存里——改为从磁盘缓存镜像按 32 KiB 分块读回，峰值内存不再随文件大小增长。感谢 @yamakze（#164、#161）。
+- **macOS**：快速切歌会取消上一首的音源解析、歌词、预取下载和分析，不再让它们在后台跑完；共享的下载只在最后一个使用者退出时才取消。感谢 @yamakze（#165、#161）。
+- **macOS**：关闭 AutoMix 时，普通播放不再预取和分析下一首；开启后恢复准备流程。感谢 @yamakze（#166、#161）。
+- **iOS**：浏览页面更紧凑——板块之间、板块标题与卡片之间的间距缩小，推荐栏标题单行显示，每个推荐栏下方不再留空白带（#170）。
+
 ## 0.3.24 - 2026-10-28
 
 ### Fixed
