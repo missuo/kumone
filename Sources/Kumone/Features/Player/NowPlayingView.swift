@@ -287,7 +287,12 @@ struct NowPlayingView: View {
     /// bottom-right, over a slowly drifting artwork backdrop.
     private func landscapeImmersiveLayout(size: CGSize) -> some View {
         ZStack {
-            AnimatedKaraokeBackdrop(image: artworkImage, colors: colors)
+            AnimatedKaraokeBackdrop(
+                image: artworkImage, colors: colors,
+                // A full-screen blur redrawn 24 times a second is not worth it
+                // while nothing moves or the queue covers the lyrics.
+                isPaused: !player.isPlaying || showQueueOnMobile
+            )
 
             VStack(spacing: 0) {
                 landscapeUtilityRow
@@ -414,6 +419,7 @@ struct NowPlayingView: View {
     private struct AnimatedKaraokeBackdrop: View {
         let image: PlatformImage?
         let colors: ArtworkColors
+        var isPaused = false
 
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -422,7 +428,7 @@ struct NowPlayingView: View {
         var body: some View {
             // Reduce Motion holds the backdrop at its rest pose instead of
             // redrawing a full-screen blur 24 times a second.
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion || isPaused)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 let sway = reduceMotion ? 0 : sin(t * 2 * .pi / Self.cycle)
                 let breathe = reduceMotion ? 0 : cos(t * 2 * .pi / (Self.cycle * 0.78))
@@ -1224,6 +1230,9 @@ struct NowPlayingView: View {
                     }
                     .padding(.horizontal, horizontalPadding)
                 }
+                // Inside the per-track identity so a mid-flick track change
+                // tears the tracking down with the list and clears the flag.
+                .lyricsScrollTracking(isUserScrolling: $isUserScrolling)
                 // A new track gets a fresh list: reusing the old scroll view
                 // crossfaded the outgoing and incoming lines on top of each
                 // other for one frame while `lyrics` reloaded.
@@ -1255,8 +1264,8 @@ struct NowPlayingView: View {
                 }
                 .onChange(of: player.currentTrack?.id) { _ in
                     activeIndex = nil
+                    isUserScrolling = false
                 }
-                .lyricsScrollTracking(isUserScrolling: $isUserScrolling)
             }
         } else if player.lyrics?.isInstrumental == true {
             VStack(spacing: 10) {
