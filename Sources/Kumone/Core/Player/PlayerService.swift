@@ -1418,7 +1418,13 @@ final class PlayerService: ObservableObject {
             prefetchTask = nil
             // A hand-over that is already audible finishes normally. Its
             // midpoint still needs the pending track and its file metadata.
-            guard engine.discardPreparedDeck(activeDeck.other) else { return }
+            // A styled seam may still be settling when AutoMix goes off, so
+            // leave the tail clock to retry instead of forgetting the next
+            // boundary.
+            guard engine.discardPreparedDeck(activeDeck.other) else {
+                gaplessPrefetchDeferred = true
+                return
+            }
             disarmTransition()
             deckFiles[activeDeck.other] = nil
             prefetchedNext = nil
