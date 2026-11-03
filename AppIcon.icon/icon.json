@@ -4,15 +4,8 @@
     {
       "layers" : [
         {
-          "image-name" : "ChatGPT Image Aug 16, 2026, 03_05_19 AM.png",
-          "name" : "ChatGPT Image Aug 16, 2026, 03_05_19 AM",
-          "position" : {
-            "scale" : 1.4,
-            "translation-in-points" : [
-              0,
-              34.15625
-            ]
-          }
+          "image-name" : "Mark.png",
+          "name" : "Mark"
         }
       ],
       "shadow" : {
@@ -21,7 +14,23 @@
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.5
+        "value" : 0.25
+      }
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "Background.png",
+          "name" : "Background"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
