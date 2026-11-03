@@ -52,7 +52,7 @@ public struct IOSMainWindow: View {
             .task {
                 await DownloadManager.shared.start()
                 await account.bootstrap()
-                if settings.autoCheckUpdates {
+                if settings.autoCheckUpdates, DistributionChannel.current.allowsSelfUpdate {
                     IOSUpdater.shared.check(interactive: false)
                 }
             }

@@ -25,12 +25,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0646F456C7BF38C0A8ED880E /* KumoneIOS.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KumoneIOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = ../Sources/Kumone/Resources/PrivacyInfo.xcprivacy; sourceTree = SOURCE_ROOT; };
+		0646F456C7BF38C0A8ED880E /* KumoneIOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KumoneIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2199D32FC69383EC32B19794 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
-		25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KumoneIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		45602F996F250E88035F23A9 /* KumoneIOSPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; path = KumoneIOSPackage; sourceTree = SOURCE_ROOT; };
-		66554F47F0D6FC82F2EFDB2A /* KumoneIOS.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = KumoneIOS.xctestplan; sourceTree = "<group>"; };
+		25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = KumoneIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = TestFlight.xcconfig; sourceTree = "<group>"; };
+		45602F996F250E88035F23A9 /* KumoneIOSPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = KumoneIOSPackage; path = KumoneIOSPackage; sourceTree = SOURCE_ROOT; };
+		66554F47F0D6FC82F2EFDB2A /* KumoneIOS.xctestplan */ = {isa = PBXFileReference; path = KumoneIOS.xctestplan; sourceTree = "<group>"; };
 		6D28AAA402747474C3A1B8AD /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		74C59F0F113B18EBEA9C55B6 /* Tests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Tests.xcconfig; sourceTree = "<group>"; };
 		7A9033A23C5610F19ABA3774 /* KumoneIOSUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KumoneIOSUITests.swift; sourceTree = "<group>"; };
@@ -62,7 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				4E1CC50B92220A5917A760E8 /* Config */,
-				07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */,
+				D2EA317EE0F2CE5733D0B170 /* kumone */,
 				9C2BFF3109E01BC79A4469A4 /* KumoneIOS */,
 				CEC97C7667B5C3BA415E1C82 /* KumoneIOSUITests */,
 				06B27D73B868029A6CD07927 /* Packages */,
@@ -74,7 +75,7 @@
 			isa = PBXGroup;
 			children = (
 				25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */,
-				0646F456C7BF38C0A8ED880E /* KumoneIOS.xctest */,
+				0646F456C7BF38C0A8ED880E /* KumoneIOSUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -84,9 +85,18 @@
 			children = (
 				6D28AAA402747474C3A1B8AD /* Debug.xcconfig */,
 				2199D32FC69383EC32B19794 /* Release.xcconfig */,
+				2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */,
 				74C59F0F113B18EBEA9C55B6 /* Tests.xcconfig */,
 			);
 			path = Config;
+			sourceTree = "<group>";
+		};
+		7BB1794256A15BBEBBB7BE10 /* Kumone */ = {
+			isa = PBXGroup;
+			children = (
+				DDAFAA75263467EB705B997E /* Resources */,
+			);
+			path = Kumone;
 			sourceTree = "<group>";
 		};
 		9C2BFF3109E01BC79A4469A4 /* KumoneIOS */ = {
@@ -99,12 +109,37 @@
 			path = KumoneIOS;
 			sourceTree = "<group>";
 		};
+		BB752168EC2AF235DFAEE044 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				7BB1794256A15BBEBBB7BE10 /* Kumone */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
 		CEC97C7667B5C3BA415E1C82 /* KumoneIOSUITests */ = {
 			isa = PBXGroup;
 			children = (
 				7A9033A23C5610F19ABA3774 /* KumoneIOSUITests.swift */,
 			);
 			path = KumoneIOSUITests;
+			sourceTree = "<group>";
+		};
+		D2EA317EE0F2CE5733D0B170 /* kumone */ = {
+			isa = PBXGroup;
+			children = (
+				BB752168EC2AF235DFAEE044 /* Sources */,
+			);
+			name = kumone;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		DDAFAA75263467EB705B997E /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -145,7 +180,7 @@
 			packageProductDependencies = (
 			);
 			productName = KumoneIOSUITests;
-			productReference = 0646F456C7BF38C0A8ED880E /* KumoneIOS.xctest */;
+			productReference = 0646F456C7BF38C0A8ED880E /* KumoneIOSUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -158,6 +193,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					481C5C62EB4A6DB3CC0FDC39 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					7F3FA2EAD87A1580A6CD3880 = {
@@ -318,7 +354,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = 9ZGVJ862WJ;
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -390,13 +425,81 @@
 			};
 			name = Debug;
 		};
+		D121FCC44F8E4713B02915BB /* TestFlight */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 74C59F0F113B18EBEA9C55B6 /* Tests.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+			};
+			name = TestFlight;
+		};
+		E057F4A3A7C3BD6443490379 /* TestFlight */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = TestFlight;
+		};
 		F8905A572F11E767B9F22E0E /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 2199D32FC69383EC32B19794 /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = M2DXV97G43;
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -406,6 +509,21 @@
 			};
 			name = Release;
 		};
+		F8AB272DA228CF124688D9AB /* TestFlight */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_PREVIEWS = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+			};
+			name = TestFlight;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -414,6 +532,7 @@
 			buildConfigurations = (
 				C5D7D4A994E33FBBC157799C /* Debug */,
 				F8905A572F11E767B9F22E0E /* Release */,
+				F8AB272DA228CF124688D9AB /* TestFlight */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -423,6 +542,7 @@
 			buildConfigurations = (
 				4D26825A4F27432C1574AD3E /* Debug */,
 				ADAED3F2C674B14B62DE526C /* Release */,
+				D121FCC44F8E4713B02915BB /* TestFlight */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -432,6 +552,7 @@
 			buildConfigurations = (
 				CEDC431136741B112A47F211 /* Debug */,
 				B397BC88E3CFDE6D275528E9 /* Release */,
+				E057F4A3A7C3BD6443490379 /* TestFlight */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

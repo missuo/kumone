@@ -9,7 +9,7 @@
 # XcodeGen; it is only needed after editing project.yml, never for CarPlay.
 
 .DEFAULT_GOAL := help
-.PHONY: help configure configure-carplay project build test app ios-test ios-uitest clean
+.PHONY: help configure configure-carplay project build test app ios-test ios-uitest testflight clean
 
 help: ## Show this help
 	@echo "Kumone make targets:"
@@ -48,6 +48,11 @@ ios-uitest: ## Run the iOS UI tests on a simulator
 		-workspace ios/KumoneIOS.xcworkspace \
 		-scheme KumoneIOS \
 		-destination '$(IOS_DESTINATION)'
+
+TESTFLIGHT_FLAGS := $(if $(filter 1,$(CARPLAY)),--carplay) $(if $(filter 1,$(UPLOAD)),--upload)
+
+testflight: ## Archive the iOS app for TestFlight (CARPLAY=1 adds CarPlay, UPLOAD=1 uploads; needs KUMONE_TEAM_ID)
+	@Scripts/testflight.sh $(TESTFLIGHT_FLAGS)
 
 clean: ## Remove build artifacts and generated CarPlay overlays
 	@swift package clean || true

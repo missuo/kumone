@@ -5,9 +5,16 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+  # Release plus App Store Connect signing, no sideload updater, CarPlay when
+  # configured. Selected with `-configuration TestFlight` by Scripts/testflight.sh.
+  TestFlight: release
 configFiles:
   Debug: Config/Debug.xcconfig
   Release: Config/Release.xcconfig
+  TestFlight: Config/TestFlight.xcconfig
 packages:
   KumoneIOSPackage:
     path: KumoneIOSPackage
@@ -22,6 +29,7 @@ targets:
     configFiles:
       Debug: Config/Debug.xcconfig
       Release: Config/Release.xcconfig
+      TestFlight: Config/TestFlight.xcconfig
     dependencies:
       - package: KumoneIOSPackage
         product: KumoneIOSFeature
@@ -40,6 +48,7 @@ targets:
     configFiles:
       Debug: Config/Tests.xcconfig
       Release: Config/Tests.xcconfig
+      TestFlight: Config/Tests.xcconfig
     dependencies:
       - target: KumoneIOS
 schemes:
