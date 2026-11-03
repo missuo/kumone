@@ -18,8 +18,12 @@ final class SearchViewModel: ObservableObject {
     @Published var artists: [ArtistSummary] = []
     @Published var albums: [AlbumSummary] = []
     @Published var playlists: [PlaylistSummary] = []
-    @Published var isLoading = false
     @Published var loadedTabs: Set<Tab> = []
+    @Published private var loadingTabs: Set<Tab> = []
+    /// Bumped on every query change so responses to an older query are dropped.
+    private var generation = 0
+
+    var isLoading: Bool { !loadingTabs.isEmpty }
 
     init(query: String) {
         self.query = query
@@ -28,7 +32,9 @@ final class SearchViewModel: ObservableObject {
     func setQuery(_ newQuery: String) {
         guard newQuery != query else { return }
         query = newQuery
+        generation &+= 1
         loadedTabs.removeAll()
+        loadingTabs.removeAll()
         songs = []
         artists = []
         albums = []
@@ -39,28 +45,47 @@ final class SearchViewModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !loadedTabs.contains(tab) else { return }
-        isLoading = true
-        defer { isLoading = false }
+        let requestGeneration = generation
         loadedTabs.insert(tab)
+        loadingTabs.insert(tab)
+        defer {
+            if generation == requestGeneration { loadingTabs.remove(tab) }
+        }
 
+        // A failed request leaves the tab unloaded so submitting again retries
+        // instead of keeping an empty result for this query.
         switch tab {
         case .all:
             async let songsTask = try? NeteaseAPI.search(trimmed, type: .songs, limit: 12)
             async let artistsTask = try? NeteaseAPI.search(trimmed, type: .artists, limit: 10)
             async let albumsTask = try? NeteaseAPI.search(trimmed, type: .albums, limit: 10)
             async let playlistsTask = try? NeteaseAPI.search(trimmed, type: .playlists, limit: 10)
-            songs = (await songsTask)?.songs ?? []
-            artists = (await artistsTask)?.artists ?? []
-            albums = (await albumsTask)?.albums ?? []
-            playlists = (await playlistsTask)?.playlists ?? []
+            let (songResult, artistResult, albumResult, playlistResult) =
+                await (songsTask, artistsTask, albumsTask, playlistsTask)
+            guard generation == requestGeneration else { return }
+            songs = songResult?.songs ?? []
+            artists = artistResult?.artists ?? []
+            albums = albumResult?.albums ?? []
+            playlists = playlistResult?.playlists ?? []
+            if songResult == nil || artistResult == nil || albumResult == nil || playlistResult == nil {
+                loadedTabs.remove(tab)
+            }
         case .songs:
-            songs = (try? await NeteaseAPI.search(trimmed, type: .songs, limit: 100))?.songs ?? songs
+            let result = try? await NeteaseAPI.search(trimmed, type: .songs, limit: 100)
+            guard generation == requestGeneration else { return }
+            if let result { songs = result.songs ?? songs } else { loadedTabs.remove(tab) }
         case .artists:
-            artists = (try? await NeteaseAPI.search(trimmed, type: .artists, limit: 50))?.artists ?? artists
+            let result = try? await NeteaseAPI.search(trimmed, type: .artists, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { artists = result.artists ?? artists } else { loadedTabs.remove(tab) }
         case .albums:
-            albums = (try? await NeteaseAPI.search(trimmed, type: .albums, limit: 50))?.albums ?? albums
+            let result = try? await NeteaseAPI.search(trimmed, type: .albums, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { albums = result.albums ?? albums } else { loadedTabs.remove(tab) }
         case .playlists:
-            playlists = (try? await NeteaseAPI.search(trimmed, type: .playlists, limit: 50))?.playlists ?? playlists
+            let result = try? await NeteaseAPI.search(trimmed, type: .playlists, limit: 50)
+            guard generation == requestGeneration else { return }
+            if let result { playlists = result.playlists ?? playlists } else { loadedTabs.remove(tab) }
         }
     }
 }
