@@ -1,0 +1,65 @@
+name: Build cache
+
+# Keeps the release build's SwiftPM cache warm on main, where every tag can
+# restore it (a cache saved on a tag is visible to that tag only). The key
+# covers the compiler, the dependencies and the build script, so a change to
+# any of them builds a new entry; otherwise a run only restores the existing
+# one, which keeps GitHub from evicting it after seven idle days.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Package.swift
+      - Package.resolved
+      - Scripts/build-app.sh
+      - Scripts/fetch-mlx-metallib.sh
+      - .github/workflows/build-cache.yml
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same key as release.yml.
+      - name: Compute build cache key
+        id: cachekey
+        run: |
+          SWIFT_ID="$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)"
+          echo "prefix=spm-release-$RUNNER_OS-$SWIFT_ID-" >> "$GITHUB_OUTPUT"
+          echo "key=spm-release-$RUNNER_OS-$SWIFT_ID-${{ hashFiles('Package.resolved', 'Package.swift', 'Scripts/build-app.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore build cache
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .build
+          key: ${{ steps.cachekey.outputs.key }}
+          restore-keys: ${{ steps.cachekey.outputs.prefix }}
+
+      # The exact invocation release.yml uses, so the compiled objects match
+      # its flags. Skipped when this exact key is already cached.
+      - name: Build app (universal, unsigned)
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: |
+          ARCHES="arm64 x86_64" FETCH_MLX_METALLIB=1 \
+            Scripts/build-app.sh release
+
+      - name: Save build cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: ${{ steps.cachekey.outputs.key }}

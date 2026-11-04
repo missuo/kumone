@@ -13,12 +13,31 @@ env:
   SIGN_IDENTITY: "Developer ID Application: MOE AI LLC (NCFNX3LJ83)"
 
 jobs:
-  release:
+  macos:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history: build number = commit count
+
+      # Compiled dependencies (mlx-swift's C++ above all) from the cache that
+      # build-cache.yml keeps warm on main: a tag can only restore caches saved
+      # on its own ref or the default branch. The key carries the compiler, so
+      # a runner image with a new Xcode starts clean instead of linking
+      # objects it cannot use. A miss only costs the old cold build.
+      - name: Compute build cache key
+        id: cachekey
+        run: |
+          SWIFT_ID="$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)"
+          echo "prefix=spm-release-$RUNNER_OS-$SWIFT_ID-" >> "$GITHUB_OUTPUT"
+          echo "key=spm-release-$RUNNER_OS-$SWIFT_ID-${{ hashFiles('Package.resolved', 'Package.swift', 'Scripts/build-app.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .build
+          key: ${{ steps.cachekey.outputs.key }}
+          restore-keys: ${{ steps.cachekey.outputs.prefix }}
 
       - name: Derive version
         run: |
@@ -117,8 +136,31 @@ jobs:
           rm -f "dist/$APP_NAME-$VERSION.html"
           cat dist/appcast.xml
 
+      - name: Hand the macOS build to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dist
+          path: |
+            dist/${{ env.APP_NAME }}-${{ env.VERSION }}.zip
+            dist/appcast.xml
+          if-no-files-found: error
+
+  ios:
+    # Runs beside the macOS job instead of after it.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: build number = commit count
+
+      - name: Derive version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
       - name: Build unsigned iOS IPA
         run: |
+          mkdir -p dist
           xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
             -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/ios-dd" \
@@ -130,6 +172,29 @@ jobs:
           cp -R "$APP" "$RUNNER_TEMP/payload/Payload/"
           (cd "$RUNNER_TEMP/payload" && zip -qry "$GITHUB_WORKSPACE/dist/$APP_NAME-iOS-$VERSION.ipa" Payload)
           ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-dist
+          path: dist/${{ env.APP_NAME }}-iOS-${{ env.VERSION }}.ipa
+          if-no-files-found: error
+
+  publish:
+    needs: [macos, ios]
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version and release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          Scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Generate AltStore source
         run: |
