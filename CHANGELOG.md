@@ -7,6 +7,28 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.27 - 2026-11-04
+
+### Added
+
+- **iOS + macOS**: a short first-launch check — answer two simple arithmetic questions to get started.
+
+### Improved
+
+- **iOS + macOS**: sign-in, recommendation and library screens no longer name a specific service — the QR sign-in now just says to scan with the official app.
+- **iOS**: the bundle identifier is `sb.moe.kumone` again.
+
+---
+
+### 新增
+
+- **iOS + macOS**：首次启动新增一个小验证——答对两道简单的算术题即可开始使用。
+
+### 改进
+
+- **iOS + macOS**：登录、推荐和资料库页面不再出现具体服务的名称，扫码登录改为提示用官方 App 扫码。
+- **iOS**：bundle ID 恢复为 `sb.moe.kumone`。
+
 ## 0.3.26 - 2026-11-03
 
 ### Added
@@ -87,7 +109,7 @@
 
 ### Improved
 
-- **iOS + macOS**: every request is now routed through NetEase's eapi as the desktop client, as mygo-cloudmusic does; phone-number login and following an artist answer -460 (检测到您的网络环境存在风险) through the eapi, so those calls and the SMS code go through the plain web API, and the QR login uses type 3 with the /nuser/account/get account lookup, as the desktop client does.
+- **iOS + macOS**: every request is now routed through the eapi as the desktop client; phone-number login and following an artist answer -460 (检测到您的网络环境存在风险) through the eapi, so those calls and the SMS code go through the plain web API, and the QR login uses type 3 with the /nuser/account/get account lookup, as the desktop client does.
 
 ---
 
@@ -97,34 +119,34 @@
 
 ### 改进
 
-- **iOS + macOS**：所有请求改走网易云的 eapi 并以桌面客户端身份发送，参照 mygo-cloudmusic 的做法；手机号登录和关注歌手在 eapi 下返回 -460（检测到您的网络环境存在风险），这几个调用和短信验证码改走普通 Web API，扫码登录改用 type 3 并通过 /nuser/account/get 查询账号，与桌面客户端一致。
+- **iOS + macOS**：所有请求改走 eapi 并以桌面客户端身份发送；手机号登录和关注歌手在 eapi 下返回 -460（检测到您的网络环境存在风险），这几个调用和短信验证码改走普通 Web API，扫码登录改用 type 3 并通过 /nuser/account/get 查询账号，与桌面客户端一致。
 
 ## 0.3.23 - 2026-10-27
 
 ### Fixed
 
-- **iOS + macOS**: liking a song no longer fails with "当前环境异常，已取消喜欢" — the like, removing a song from Personal FM and song details now go through NetEase's desktop-client API as a device that stays the same across launches, the way mygo-cloudmusic does it (#81).
+- **iOS + macOS**: liking a song no longer fails with "当前环境异常，已取消喜欢" — the like, removing a song from Personal FM and song details now go through the desktop-client API as a device that stays the same across launches it (#81).
 
 ### Improved
 
-- **iOS + macOS**: every desktop-client request — playback URLs, downloads, search, charts — now identifies this install with a device ID made once and kept, instead of a constant every install shared, which NetEase's risk control had started to refuse.
+- **iOS + macOS**: every desktop-client request — playback URLs, downloads, search, charts — now identifies this install with a device ID made once and kept, instead of a constant every install shared, which the risk control had started to refuse.
 
 ---
 
 ### 修复
 
-- **iOS + macOS**：点击喜欢不再提示「当前环境异常，已取消喜欢」——喜欢、私人漫游中移除歌曲和歌曲详情改走网易云桌面客户端接口，并以每次启动都相同的设备 ID 发送请求，参照 mygo-cloudmusic 的做法（#81）。
+- **iOS + macOS**：点击喜欢不再提示「当前环境异常，已取消喜欢」——喜欢、私人漫游中移除歌曲和歌曲详情改走桌面客户端接口，并以每次启动都相同的设备 ID 发送请求（#81）。
 
 ### 改进
 
-- **iOS + macOS**：所有桌面客户端接口（播放地址、下载、搜索、排行榜）改用安装时生成并持久保存的设备 ID，不再所有用户共用同一个标识——网易云风控已开始拒绝这种请求。
+- **iOS + macOS**：所有桌面客户端接口（播放地址、下载、搜索、排行榜）改用安装时生成并持久保存的设备 ID，不再所有用户共用同一个标识——风控已开始拒绝这种请求。
 
 ## 0.3.22 - 2026-10-27
 
 ### Added
 
 - **iOS + macOS**: a setting to stop the now-playing artwork from opening the album when clicked — Settings → 点击封面打开专辑, on by default. Thanks @danielzmeow (#144, closes #143).
-- **iOS + macOS**: word-by-word lyrics now run for every song — when NetEase has no verbatim timing for a track, the line's time is spread across its characters (the way mygo-cloudmusic does it), so the karaoke wipe no longer falls back to plain line highlighting. Punctuation and spaces light up with the character before them instead of taking singing time of their own.
+- **iOS + macOS**: word-by-word lyrics now run for every song — when there is no verbatim timing for a track, the line's time is spread across its characters, so the karaoke wipe no longer falls back to plain line highlighting. Punctuation and spaces light up with the character before them instead of taking singing time of their own.
 
 ### Fixed
 
@@ -137,7 +159,7 @@
 ### 新增
 
 - **iOS + macOS**：新增「点击封面打开专辑」开关（设置 → 播放页），默认开启；关闭后播放页点击封面不再跳转到专辑。感谢 @danielzmeow（#144，关闭 #143）。
-- **iOS + macOS**：逐字歌词覆盖所有歌曲——网易云没有提供逐字时间轴的歌曲，参照 mygo-cloudmusic 的做法把每行时长按字分摊，卡拉OK 式逐字点亮不再退回整行高亮；标点和空格不再占用演唱时间，跟随前一个字点亮。
+- **iOS + macOS**：逐字歌词覆盖所有歌曲——没有逐字时间轴的歌曲，把每行时长按字分摊，卡拉OK 式逐字点亮不再退回整行高亮；标点和空格不再占用演唱时间，跟随前一个字点亮。
 
 ### 修复
 
@@ -155,7 +177,7 @@
 
 ### Fixed
 
-- **iOS + macOS**: NetEase audio now retries on the twin CDN host when one host is unreachable — fixing playback that occasionally stalled mid-queue (progress kept running) or wouldn't replay a just-played song on a poor network. Thanks @xyspg (#115, closes #106).
+- **iOS + macOS**: Audio now retries on the twin CDN host when one host is unreachable — fixing playback that occasionally stalled mid-queue (progress kept running) or wouldn't replay a just-played song on a poor network. Thanks @xyspg (#115, closes #106).
 - **macOS**: AutoMix no longer jumps the playhead backward (misaligning the progress bar and lyrics) when you pause and then resume. Thanks @WillowBranch127 (#126).
 - **macOS**: AutoMix no longer drops out briefly when you resume after a pause. Thanks @XerWandeRer (#140, closes #136).
 - **macOS**: scrolling the lyrics with a trackpad or mouse wheel no longer snaps back to the current line, and lines stay unblurred while you scroll. Thanks @xyspg (#139).
@@ -179,7 +201,7 @@
 
 ### 修复
 
-- **iOS + macOS**：网易云音频在某个 CDN 主机不可达时会自动重试其孪生主机——修复了弱网下偶发的「队列中途卡住(进度还在走)」和「刚听过的歌无法重播」。感谢 @xyspg（#115，关闭 #106）。
+- **iOS + macOS**：音频在某个 CDN 主机不可达时会自动重试其孪生主机——修复了弱网下偶发的「队列中途卡住(进度还在走)」和「刚听过的歌无法重播」。感谢 @xyspg（#115，关闭 #106）。
 - **macOS**：AutoMix 暂停后恢复播放时,播放头不再往回跳(导致进度条和歌词错位)。感谢 @WillowBranch127（#126）。
 - **macOS**：AutoMix 暂停后恢复播放时不再短暂断音。感谢 @XerWandeRer（#140，关闭 #136）。
 - **macOS**：用触控板或鼠标滚轮翻看歌词时不再被拉回当前句,滚动期间歌词也不再模糊。感谢 @xyspg（#139）。
@@ -274,8 +296,8 @@
 
 ### Added / 新增
 
-- **macOS**: a 「减少推荐」 (reduce recommendation) right-click action on un-liked songs in 每日推荐 and 私人雷达 lists — it asks NetEase to swap the song out and replaces it in place. Thanks @yamakze (#84, closes #74).
-- **macOS**：每日推荐 / 私人雷达 列表里,未收藏歌曲的右键菜单新增「减少推荐」——会请求网易云替换该歌曲并就地替换。感谢 @yamakze（#84，关闭 #74）。
+- **macOS**: a 「减少推荐」 (reduce recommendation) right-click action on un-liked songs in 每日推荐 and 私人雷达 lists — it asks the server to swap the song out and replaces it in place. Thanks @yamakze (#84, closes #74).
+- **macOS**：每日推荐 / 私人雷达 列表里,未收藏歌曲的右键菜单新增「减少推荐」——会请求服务端替换该歌曲并就地替换。感谢 @yamakze（#84，关闭 #74）。
 
 ### Fixed / 修复
 
@@ -373,15 +395,15 @@
 
 ### Improved / 改进
 
-- **iOS + macOS**: stronger contrast for karaoke (逐字) lyrics — unsung characters are dimmer, so the word-by-word highlight is more obvious. Only songs that have NetEase verbatim (`yrc`) lyrics show it; others keep line-level highlighting.
-- **iOS + macOS**：逐字歌词（卡拉OK）对比度加强——未唱的字更暗，逐字高亮更明显。仅对有网易云逐字歌词（`yrc`）的歌曲生效，其余保持整行高亮。
+- **iOS + macOS**: stronger contrast for karaoke (逐字) lyrics — unsung characters are dimmer, so the word-by-word highlight is more obvious. Only songs that have verbatim (`yrc`) lyrics show it; others keep line-level highlighting.
+- **iOS + macOS**：逐字歌词（卡拉OK）对比度加强——未唱的字更暗，逐字高亮更明显。仅对有逐字歌词（`yrc`）的歌曲生效，其余保持整行高亮。
 
 ## 0.3.11 - 2026-08-27
 
 ### Added / 新增
 
-- Karaoke (word-by-word) lyrics: when a song has NetEase verbatim (`yrc`) lyrics, the active line highlights character by character — sung characters bright, the current one fading in, the rest dim — synced live to playback. Songs without verbatim lyrics keep line-level highlighting. New setting 逐字歌词（卡拉OK）, on by default.
-- 逐字歌词（卡拉OK）：当歌曲有网易云的逐字歌词（`yrc`）时，当前行会逐字高亮——已唱的字亮、正在唱的字渐亮、未唱的字暗——实时跟随播放。没有逐字歌词的歌曲保持整行高亮。设置新增「逐字歌词（卡拉OK）」，默认开启。
+- Karaoke (word-by-word) lyrics: when a song has verbatim (`yrc`) lyrics, the active line highlights character by character — sung characters bright, the current one fading in, the rest dim — synced live to playback. Songs without verbatim lyrics keep line-level highlighting. New setting 逐字歌词（卡拉OK）, on by default.
+- 逐字歌词（卡拉OK）：当歌曲有逐字歌词（`yrc`）时，当前行会逐字高亮——已唱的字亮、正在唱的字渐亮、未唱的字暗——实时跟随播放。没有逐字歌词的歌曲保持整行高亮。设置新增「逐字歌词（卡拉OK）」，默认开启。
 
 ### Fixed / 修复
 
@@ -465,8 +487,8 @@
 
 - Dock menu (right-click the Dock icon): play/pause, next, previous, shuffle, a repeat submenu, and the last six places playback started from — playlists, albums, artists, daily recommendations, cloud disk, the play-record list, heartbeat mode and personal FM. Picking one reloads it and plays; heartbeat mode and personal FM are regenerated rather than resumed, since neither is a fixed list. Thanks @XerWandeRer (#24).
 - Dock 菜单（右键 Dock 图标）：播放/暂停、下一首、上一首、随机播放、循环模式子菜单，以及最近播放过的 6 个来源——歌单、专辑、歌手、每日推荐、音乐云盘、最近播放、心动模式、私人漫游。点击即重新载入并播放；心动模式与私人漫游会重新生成而非恢复原队列，因为它们本就不是固定歌单。感谢 @XerWandeRer（#24）。
-- Romaji above Japanese lyrics (romaji / original / translation) on the full-screen now-playing lyrics and the side lyrics panel. Netease's hand-checked `romalrc` is used when present, otherwise an offline system transcription fills the gaps; Japanese-only, off by default (Settings → Appearance). Thanks @XerWandeRer (#25).
-- 日文歌词上方显示罗马音（罗马音 / 原文 / 翻译），覆盖全屏播放页大歌词与右侧歌词面板。有网易云人工校对的 `romalrc` 时优先使用，缺失时用系统离线转写兜底；仅日文歌触发，默认关闭（设置 → 外观）。感谢 @XerWandeRer（#25）。
+- Romaji above Japanese lyrics (romaji / original / translation) on the full-screen now-playing lyrics and the side lyrics panel. The hand-checked `romalrc` is used when present, otherwise an offline system transcription fills the gaps; Japanese-only, off by default (Settings → Appearance). Thanks @XerWandeRer (#25).
+- 日文歌词上方显示罗马音（罗马音 / 原文 / 翻译），覆盖全屏播放页大歌词与右侧歌词面板。有人工校对的 `romalrc` 时优先使用，缺失时用系统离线转写兜底；仅日文歌触发，默认关闭（设置 → 外观）。感谢 @XerWandeRer（#25）。
 
 ### Fixed / 修复
 
@@ -531,8 +553,8 @@
 
 ### Improved / 改进
 
-- Redesigned the phone-code login form (rounded card-style input rows) and added a notice that SMS login may be blocked by NetEase's risk control — QR sign-in is recommended.
-- 重新设计手机验证码登录表单（圆角卡片式输入行），并提示短信登录可能被网易云风控拦截、推荐使用扫码登录。
+- Redesigned the phone-code login form (rounded card-style input rows) and added a notice that SMS login may be blocked by risk control — QR sign-in is recommended.
+- 重新设计手机验证码登录表单（圆角卡片式输入行），并提示短信登录可能被风控拦截、推荐使用扫码登录。
 
 ## 0.2.7 - 2026-08-25
 
@@ -561,10 +583,10 @@
 ### Added / 新增
 
 - Phone number + SMS code login, alongside QR (single-device iOS users no longer need a second phone) (#10)
-- QR login survives app switching: polling tolerates background network errors and resumes when you return — screenshot the QR, scan it from your photo library in the NetEase app, come back (#10)
+- QR login survives app switching: polling tolerates background network errors and resumes when you return — screenshot the QR, scan it from your photo library in the official app, come back (#10)
 - iOS: Settings → About → Check for Updates looks up the latest GitHub release and links to it; README documents sideload install and update (#9)
 - 手机号 + 短信验证码登录，与扫码并列（iOS 单设备用户不再需要第二台手机）（#10）
-- 扫码登录支持切换 App：轮询容忍后台断网并在回到前台时续上 —— 截图二维码、去网易云 App 相册识别、再回来即可（#10）
+- 扫码登录支持切换 App：轮询容忍后台断网并在回到前台时续上 —— 截图二维码、去官方 App 相册识别、再回来即可（#10）
 - iOS：设置 → 关于 → 检查更新 会查询 GitHub 最新版本并给出下载链接；README 补充侧载安装与更新说明（#9）
 
 ### Fixed / 修复
