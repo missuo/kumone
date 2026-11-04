@@ -7,7 +7,7 @@
 // Project Identity
 // ==========================================
 PRODUCT_NAME = KumoneIOS
-PRODUCT_BUNDLE_IDENTIFIER = sb.moe.kumone-ios
+PRODUCT_BUNDLE_IDENTIFIER = sb.moe.kumone
 // PRODUCT_DISPLAY_NAME is not a real build setting; the Home Screen
 // name comes from CFBundleDisplayName.
 INFOPLIST_KEY_CFBundleDisplayName = Kumone
