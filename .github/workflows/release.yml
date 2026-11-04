@@ -184,11 +184,15 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: build number = commit count
 
       - name: Derive version and release notes
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # altstore-source.sh checks the IPA's CFBundleVersion against this.
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
           Scripts/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
 
       - uses: actions/download-artifact@v4
