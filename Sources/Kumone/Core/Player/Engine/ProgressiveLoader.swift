@@ -164,7 +164,7 @@ final class ProgressiveLoader: NSObject, @unchecked Sendable {
 
     init(remoteURL: URL, formatHint: String?, partURL: URL,
          output: AVAudioFormat, queue: DispatchQueue) {
-        self.remoteURL = NeteaseCDNHost.preferred(for: remoteURL)
+        self.remoteURL = CDNHost.preferred(for: remoteURL)
         self.partURL = partURL
         self.outputFormat = output
         self.callbackQueue = queue
@@ -654,7 +654,7 @@ extension ProgressiveLoader: URLSessionDataDelegate {
             return
         }
         receivedResponse = true
-        NeteaseCDNHost.markReachable(remoteURL)
+        CDNHost.markReachable(remoteURL)
         if let http = response as? HTTPURLResponse {
             guard http.statusCode == 200 || http.statusCode == 206 else {
                 completionHandler(.cancel)
@@ -726,7 +726,7 @@ extension ProgressiveLoader: URLSessionDataDelegate {
     /// failure is reported even when the twin was already tried, so later
     /// songs do not pay for this host again.
     private func retryOnTwinHost(after error: Error) -> Bool {
-        guard let twin = NeteaseCDNHost.failover(from: remoteURL, after: error),
+        guard let twin = CDNHost.failover(from: remoteURL, after: error),
               !triedTwinHost else { return false }
         triedTwinHost = true
         remoteURL = twin

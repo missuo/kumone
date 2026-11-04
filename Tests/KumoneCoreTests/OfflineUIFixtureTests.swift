@@ -3,19 +3,19 @@ import Testing
 @testable import KumoneCore
 
 /// Creates synthetic data for a separately bundled debug app. No real login
-/// or library is read, and the fixture app disables all NetEase API requests.
+/// or library is read, and the fixture app disables all API requests.
 @Suite("Offline UI fixtures")
 struct OfflineUIFixtureTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["KUMONE_UI_FIXTURE_ROOT"] != nil))
     func writeFixture() async throws {
         let root = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["KUMONE_UI_FIXTURE_ROOT"]))
-        let client = NeteaseClient(cookieDirectory: root)
+        let client = MusicClient(cookieDirectory: root)
         client.setCookies(["MUSIC_U": "synthetic-offline-ui-session"])
         let profile = try JSONDecoder().decode(UserProfile.self, from: Data("{\"userId\":12345,\"nickname\":\"离线体验测试\",\"vipType\":11}".utf8))
         try AccountSnapshotStorage(url: root.appendingPathComponent("account-snapshot.json")).save(
             .init(authenticationFingerprint: try #require(client.authenticationFingerprint), profile: profile,
                   likedTrackIDs: [1], playlists: [], savedAt: Date()))
-        let scope = "netease:12345"
+        let scope = Upstream.accountScope(userID: 12345)
         let store = OfflineStore(directory: root.appendingPathComponent("Offline"), minimumFreeBytes: 0)
         let metadata = OfflineMetadataStore(directory: root.appendingPathComponent("Offline/metadata"))
         func track(_ id: Int, _ name: String) throws -> Track {
@@ -31,7 +31,7 @@ struct OfflineUIFixtureTests {
             var job = DownloadJob(scope: scope, track: track, quality: "exhigh", owner: "playlist:987", allowsMetered: false)
             if index == 0 {
                 let fixture = try OfflineAudioFixture()
-                let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: track.id, source: "netease", quality: "exhigh", format: .mp3,
+                let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: track.id, source: Upstream.tag, quality: "exhigh", format: .mp3,
                     contentMD5: fixture.descriptor.identity.contentMD5), byteCount: fixture.descriptor.byteCount, duration: 3)
                 let input = root.appendingPathComponent("fixture-\(track.id).mp3")
                 try fixture.data.write(to: input)

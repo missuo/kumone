@@ -1,7 +1,7 @@
 #if os(macOS)
 import Foundation
 
-/// Persists Netease's timed lyrics as a plain `.lrc` next to the cached audio.
+/// Persists the service's timed lyrics as a plain `.lrc` next to the cached audio.
 ///
 /// `Audition.VocalExchange.compile` decides where the vocal changes hands by
 /// asking `Audition.Lyrics.load(for:)` where the outgoing line ends — and that
@@ -16,7 +16,7 @@ import Foundation
 /// filtering has already rewritten the lines).
 enum LyricsSidecar {
 
-    /// Netease's stand-in body for a track with no words at all.
+    /// The service's stand-in body for a track with no words at all.
     private static let instrumentalMarker = "纯音乐，请欣赏"
 
     /// Write `lrc` as `<audio>.lrc`, unless there is nothing worth writing.
@@ -69,7 +69,7 @@ enum LyricsSidecar {
         // re-cached.)
         guard !Task.isCancelled, !FileManager.default.fileExists(
             atPath: Audition.Lyrics.sidecarURL(for: audio).path) else { return }
-        guard let response = try? await NeteaseAPI.lyric(id: trackID) else { return }
+        guard let response = try? await MusicAPI.lyric(id: trackID) else { return }
         guard !Task.isCancelled else { return }
         write(response.lrc?.lyric, for: audio)
     }

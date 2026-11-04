@@ -26,7 +26,7 @@ package "SyncRepository actor isolation" {
 }
 
 database "Keychain\npersistent deviceID\nlogin key (not synced)" as Keychain
-database "Local auth file\nwritten atomically by NeteaseClient" as AuthFile
+database "Local auth file\nwritten atomically by MusicClient" as AuthFile
 database "UserDefaults\ntoggles / bookmark / identity token\nlogical clock / local preference restore" as Defaults
 folder "Authorized folder or iCloud container\nKumone/Devices/<deviceID>/\nKumone/login-key.json" as Files
 component "File system / File Provider\nNSFilePresenter notifications" as Provider
@@ -58,7 +58,7 @@ Provider --> Repo : folder observation
 Repo ..> Service : path notification → domain refresh request
 Files .. Provider : asynchronous system propagation
 Service --> Keychain : load device identity
-Account --> AuthFile : commit authentication via NeteaseClient
+Account --> AuthFile : commit authentication via MusicClient
 Service --> Defaults
 Pref --> Defaults
 Clock --> Defaults

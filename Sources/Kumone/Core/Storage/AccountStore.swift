@@ -13,17 +13,17 @@ final class AccountStore: ObservableObject {
     @Published var likedArtists: [ArtistSummary] = []
     @Published var isBootstrapped = false
 
-    var isLoggedIn: Bool { NeteaseClient.shared.isLoggedIn && profile != nil }
-    var hasAuthCookie: Bool { NeteaseClient.shared.isLoggedIn }
+    var isLoggedIn: Bool { MusicClient.shared.isLoggedIn && profile != nil }
+    var hasAuthCookie: Bool { MusicClient.shared.isLoggedIn }
     var authenticatedAccountID: Int? {
-        guard isLoggedIn, profileBinding == NeteaseClient.shared.authenticationFingerprint else { return nil }
+        guard isLoggedIn, profileBinding == MusicClient.shared.authenticationFingerprint else { return nil }
         return profile?.userId
     }
     var vipType: Int { profile?.vipType ?? 0 }
     var offlineScope: String? {
         guard hasAuthCookie else { return "guest" }
-        guard profileBinding == NeteaseClient.shared.authenticationFingerprint else { return nil }
-        return profile.map { "netease:\($0.userId)" }
+        guard profileBinding == MusicClient.shared.authenticationFingerprint else { return nil }
+        return profile.map { Upstream.accountScope(userID: $0.userId) }
     }
     private var profileBinding: String?
     private var bootstrapGeneration = 0
@@ -46,7 +46,7 @@ final class AccountStore: ObservableObject {
     }
 
     private init() {
-        if let snapshot = AccountSnapshotStorage.shared.load(fingerprint: NeteaseClient.shared.authenticationFingerprint) {
+        if let snapshot = AccountSnapshotStorage.shared.load(fingerprint: MusicClient.shared.authenticationFingerprint) {
             profile = snapshot.profile
             likedTrackIDs = snapshot.likedTrackIDs
             userPlaylists = snapshot.playlists
@@ -61,13 +61,13 @@ final class AccountStore: ObservableObject {
         let generation = bootstrapGeneration
         defer { if generation == bootstrapGeneration { isBootstrapped = true } }
         guard hasAuthCookie else { applyProfile(nil, binding: nil); return }
-        if profileBinding != NeteaseClient.shared.authenticationFingerprint { applyProfile(nil, binding: nil) }
+        if profileBinding != MusicClient.shared.authenticationFingerprint { applyProfile(nil, binding: nil) }
         await refreshCookieIfNeeded()
-        guard generation == bootstrapGeneration, let binding = NeteaseClient.shared.authenticationFingerprint else { return }
+        guard generation == bootstrapGeneration, let binding = MusicClient.shared.authenticationFingerprint else { return }
         if profileBinding != binding { applyProfile(nil, binding: nil) }
         do {
-            let fetched = try await NeteaseAPI.userAccount()
-            guard generation == bootstrapGeneration, binding == NeteaseClient.shared.authenticationFingerprint else { return }
+            let fetched = try await MusicAPI.userAccount()
+            guard generation == bootstrapGeneration, binding == MusicClient.shared.authenticationFingerprint else { return }
             applyProfile(fetched, binding: binding)
             saveSnapshot()
         } catch {
@@ -78,10 +78,10 @@ final class AccountStore: ObservableObject {
 
     func refreshLibrary() async {
         guard let uid = profile?.userId else { return }
-        async let playlists = try? NeteaseAPI.userPlaylists(uid: uid)
-        async let liked = try? NeteaseAPI.likedTrackIDs(uid: uid)
+        async let playlists = try? MusicAPI.userPlaylists(uid: uid)
+        async let liked = try? MusicAPI.likedTrackIDs(uid: uid)
         let (fetchedPlaylists, fetchedLiked) = await (playlists, liked)
-        guard profile?.userId == uid, profileBinding == NeteaseClient.shared.authenticationFingerprint else { return }
+        guard profile?.userId == uid, profileBinding == MusicClient.shared.authenticationFingerprint else { return }
         userPlaylists = fetchedPlaylists ?? userPlaylists
         if let ids = fetchedLiked { likedTrackIDs = Set(ids) }
         saveSnapshot()
@@ -124,8 +124,8 @@ final class AccountStore: ObservableObject {
 
     func refreshSublists() async {
         let scope = offlineScope
-        async let albums = try? NeteaseAPI.likedAlbums()
-        async let artists = try? NeteaseAPI.likedArtists()
+        async let albums = try? MusicAPI.likedAlbums()
+        async let artists = try? MusicAPI.likedArtists()
         let (fetchedAlbums, fetchedArtists) = await (albums, artists)
         guard scope == offlineScope else { return }
         likedAlbums = fetchedAlbums ?? likedAlbums
@@ -146,7 +146,7 @@ final class AccountStore: ObservableObject {
         // Optimistic update
         if like { likedTrackIDs.insert(trackID) } else { likedTrackIDs.remove(trackID) }
         do {
-            try await NeteaseAPI.likeTrack(id: trackID, like: like)
+            try await MusicAPI.likeTrack(id: trackID, like: like)
         } catch {
             guard scope == offlineScope else { return }
             if like { likedTrackIDs.remove(trackID) } else { likedTrackIDs.insert(trackID) }
@@ -160,13 +160,13 @@ final class AccountStore: ObservableObject {
     /// Revoke by default. A login another device still offers is kept alive
     /// for it; sync still withdraws this device's record after sign-out.
     func logout() async throws {
-        let cookies = NeteaseClient.shared.authenticationCookies()
+        let cookies = MusicClient.shared.authenticationCookies()
         let revokeSession = SyncService.shared.shouldRevokeLoginSession(accountID: authenticatedAccountID)
-        try NeteaseClient.shared.clearAuthCookies()
+        try MusicClient.shared.clearAuthCookies()
         bootstrapGeneration += 1
         AccountSnapshotStorage.shared.clear()
         applyProfile(nil, binding: nil)
-        if revokeSession { try await NeteaseAPI.logout(detachedCookies: cookies) }
+        if revokeSession { try await MusicAPI.logout(detachedCookies: cookies) }
     }
 
     /// Verify a received session in isolation. A failed or superseded import must
@@ -175,18 +175,18 @@ final class AccountStore: ObservableObject {
         guard accountID > 0, cookies["MUSIC_U"]?.isEmpty == false else { throw SyncError.invalidRecord }
         guard authorization() else { throw CancellationError() }
         let generation = bootstrapGeneration
-        let binding = NeteaseClient.shared.authenticationFingerprint
-        let candidate = NeteaseClient(configuration: .ephemeral, persistsCookies: false)
+        let binding = MusicClient.shared.authenticationFingerprint
+        let candidate = MusicClient(configuration: .ephemeral, persistsCookies: false)
         candidate.setCookies(cookies)
-        guard let verified = try await NeteaseAPI.userAccount(using: candidate),
-              verified.userId == accountID else { throw NeteaseAPIError.needLogin }
+        guard let verified = try await MusicAPI.userAccount(using: candidate),
+              verified.userId == accountID else { throw MusicAPIError.needLogin }
         guard authorization(), generation == bootstrapGeneration,
-              binding == NeteaseClient.shared.authenticationFingerprint else { throw CancellationError() }
-        try NeteaseClient.shared.replaceAuthentication(with: candidate.authenticationCookies())
+              binding == MusicClient.shared.authenticationFingerprint else { throw CancellationError() }
+        try MusicClient.shared.replaceAuthentication(with: candidate.authenticationCookies())
         bootstrapGeneration += 1
         PlayerService.shared.suspendForAccountChange()
         UserDefaults.standard.removeObject(forKey: "auth.lastCookieRefresh")
-        applyProfile(verified, binding: NeteaseClient.shared.authenticationFingerprint)
+        applyProfile(verified, binding: MusicClient.shared.authenticationFingerprint)
         saveSnapshot()
     }
 
@@ -206,7 +206,7 @@ final class AccountStore: ObservableObject {
     }
 
     private func saveSnapshot() {
-        guard let profile, let binding = profileBinding, binding == NeteaseClient.shared.authenticationFingerprint else { return }
+        guard let profile, let binding = profileBinding, binding == MusicClient.shared.authenticationFingerprint else { return }
         try? AccountSnapshotStorage.shared.save(.init(authenticationFingerprint: binding, profile: profile,
                                                       likedTrackIDs: likedTrackIDs, playlists: userPlaylists, savedAt: Date()))
     }
@@ -217,7 +217,7 @@ final class AccountStore: ObservableObject {
         let today = Calendar.current.startOfDay(for: .now).timeIntervalSince1970
         guard UserDefaults.standard.double(forKey: key) < today else { return }
         UserDefaults.standard.set(today, forKey: key)
-        await NeteaseAPI.refreshLogin()
+        await MusicAPI.refreshLogin()
     }
 }
 

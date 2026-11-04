@@ -228,7 +228,7 @@ import Foundation
         #expect(lines.first?.text == "当他能顺利赶到")
     }
 
-    /// Netease `.lrc` files bury a rolling credit list at the *end*, on real
+    /// Upstream `.lrc` files bury a rolling credit list at the *end*, on real
     /// timestamps — right where the bundle quotes the outgoing track's last
     /// sung lines, so dropping them matters more than dropping the header.
     @Test func creditsAndMetadataAreNotLyrics() {

@@ -98,7 +98,7 @@ final class LoginSync {
         let outgoingLogin: SyncedLogin?
         if isLoginSyncEnabled, let key, let profile = accountStore.profile,
            accountStore.authenticatedAccountID == profile.userId {
-            let cookies = NeteaseClient.shared.authenticationCookies()
+            let cookies = MusicClient.shared.authenticationCookies()
             // Sealing is randomized; compare what the previous offer carries.
             if let previous = previousLocalRecord?.payload, previous.keyID == key.id,
                previous.accountID == profile.userId, previous.nickname == profile.nickname,

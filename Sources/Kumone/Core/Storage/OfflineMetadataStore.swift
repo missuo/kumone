@@ -54,7 +54,7 @@ actor OfflineMetadataStore {
     func fetchDisplayData(track: Track, scope: String) async {
         guard !Task.isCancelled else { return }
         do { try save(track: track, scope: scope) } catch { return }
-        async let response = try? NeteaseAPI.lyric(id: track.id)
+        async let response = try? MusicAPI.lyric(id: track.id)
         async let cover = fetchArtwork(track: track)
         if let response = await response { try? save(lyrics: response, trackID: track.id, scope: scope) }
         if let (url, data) = await cover { try? saveArtwork(data, url: url, scope: scope) }

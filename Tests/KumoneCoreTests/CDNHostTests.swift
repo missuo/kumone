@@ -6,8 +6,8 @@ import os
 
 /// Serialized, and each test starts from `reset()`: the host table is
 /// process-wide.
-@Suite("NeteaseCDNHost", .serialized)
-struct NeteaseCDNHostTests {
+@Suite("CDNHost", .serialized)
+struct CDNHostTests {
 
     private static let path = "/20260924/abcdef/obj/wo3DlMOGwrbDjj7DisKw/12345/6789/abcd/e1f2.mp3?vuutv=xyz"
 
@@ -18,105 +18,106 @@ struct NeteaseCDNHostTests {
     private let dns = URLError(.cannotFindHost)
 
     init() {
-        NeteaseCDNHost.reset()
+        TestUpstream.configure()
+        CDNHost.reset()
     }
 
     @Test func swapsBetweenTwinHostsKeepingPathAndQuery() {
-        #expect(NeteaseCDNHost.alternate(for: url("m801.music.126.net")) == url("m801c.music.126.net"))
-        #expect(NeteaseCDNHost.alternate(for: url("m801c.music.126.net")) == url("m801.music.126.net"))
-        #expect(NeteaseCDNHost.alternate(for: url("m7.music.126.net", scheme: "http"))
-                == url("m7c.music.126.net", scheme: "http"))
+        #expect(CDNHost.alternate(for: url("m801\(TestUpstream.cdnSuffix)")) == url("m801c\(TestUpstream.cdnSuffix)"))
+        #expect(CDNHost.alternate(for: url("m801c\(TestUpstream.cdnSuffix)")) == url("m801\(TestUpstream.cdnSuffix)"))
+        #expect(CDNHost.alternate(for: url("m7\(TestUpstream.cdnSuffix)", scheme: "http"))
+                == url("m7c\(TestUpstream.cdnSuffix)", scheme: "http"))
     }
 
     @Test func leavesOtherHostsAlone() {
-        for host in ["music.126.net", "p1.music.126.net", "m.music.126.net", "mc.music.126.net",
-                     "m801x.music.126.net", "m801.music.163.com", "example.com"] {
-            #expect(NeteaseCDNHost.alternate(for: url(host)) == nil, "\(host)")
+        for host in [String(TestUpstream.cdnSuffix.dropFirst()), "p1\(TestUpstream.cdnSuffix)", "m\(TestUpstream.cdnSuffix)", "mc\(TestUpstream.cdnSuffix)",
+                     "m801x\(TestUpstream.cdnSuffix)", "m801.example.com", "example.com"] {
+            #expect(CDNHost.alternate(for: url(host)) == nil, "\(host)")
         }
     }
 
     @Test func onlyConnectionFailuresCountAsUnreachable() {
-        #expect(NeteaseCDNHost.isHostUnreachable(URLError(.cannotFindHost)))
-        #expect(NeteaseCDNHost.isHostUnreachable(URLError(.dnsLookupFailed)))
-        #expect(NeteaseCDNHost.isHostUnreachable(URLError(.cannotConnectToHost)))
-        #expect(NeteaseCDNHost.isHostUnreachable(URLError(.timedOut)))
+        #expect(CDNHost.isHostUnreachable(URLError(.cannotFindHost)))
+        #expect(CDNHost.isHostUnreachable(URLError(.dnsLookupFailed)))
+        #expect(CDNHost.isHostUnreachable(URLError(.cannotConnectToHost)))
+        #expect(CDNHost.isHostUnreachable(URLError(.timedOut)))
         // What a hijacking resolver produces.
-        #expect(NeteaseCDNHost.isHostUnreachable(URLError(.serverCertificateUntrusted)))
+        #expect(CDNHost.isHostUnreachable(URLError(.serverCertificateUntrusted)))
         // What the URLSession delegate actually hands over: a bridged NSError.
-        #expect(NeteaseCDNHost.isHostUnreachable(
+        #expect(CDNHost.isHostUnreachable(
             NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost)))
         // What AVPlayerItem.error looks like: AVFoundation -11800 over the
         // CFNetwork failure.
         let cfNetwork = NSError(domain: kCFErrorDomainCFNetwork as String, code: -1003)
         let wrapped = NSError(domain: AVFoundationErrorDomain, code: -11800,
                               userInfo: [NSUnderlyingErrorKey: cfNetwork])
-        #expect(NeteaseCDNHost.isHostUnreachable(wrapped))
+        #expect(CDNHost.isHostUnreachable(wrapped))
         // A getaddrinfo failure (kCFHostErrorUnknown).
-        #expect(NeteaseCDNHost.isHostUnreachable(
+        #expect(CDNHost.isHostUnreachable(
             NSError(domain: kCFErrorDomainCFNetwork as String, code: 2)))
         // Several attempts, one of which is the DNS failure.
         let several = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown, userInfo: [
             NSMultipleUnderlyingErrorsKey: [NSError(domain: NSPOSIXErrorDomain, code: 50),
                                             NSError(domain: NSURLErrorDomain, code: NSURLErrorDNSLookupFailed)],
         ])
-        #expect(NeteaseCDNHost.isHostUnreachable(several))
+        #expect(CDNHost.isHostUnreachable(several))
 
-        #expect(!NeteaseCDNHost.isHostUnreachable(NSError(domain: AVFoundationErrorDomain, code: -11800)))
-        #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.secureConnectionFailed)))
-        #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.networkConnectionLost)))
-        #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.cancelled)))
-        #expect(!NeteaseCDNHost.isHostUnreachable(URLError(.badServerResponse)))
-        #expect(!NeteaseCDNHost.isHostUnreachable(CocoaError(.fileNoSuchFile)))
+        #expect(!CDNHost.isHostUnreachable(NSError(domain: AVFoundationErrorDomain, code: -11800)))
+        #expect(!CDNHost.isHostUnreachable(URLError(.secureConnectionFailed)))
+        #expect(!CDNHost.isHostUnreachable(URLError(.networkConnectionLost)))
+        #expect(!CDNHost.isHostUnreachable(URLError(.cancelled)))
+        #expect(!CDNHost.isHostUnreachable(URLError(.badServerResponse)))
+        #expect(!CDNHost.isHostUnreachable(CocoaError(.fileNoSuchFile)))
     }
 
     @Test func failoverReturnsTheTwinOnlyForHostFailures() {
-        let bad = url("m801.music.126.net")
-        #expect(NeteaseCDNHost.failover(from: bad, after: URLError(.badServerResponse)) == nil)
-        #expect(NeteaseCDNHost.preferred(for: bad) == bad)
-        #expect(NeteaseCDNHost.failover(from: url("example.com"), after: dns) == nil)
-        #expect(NeteaseCDNHost.failover(from: bad, after: dns) == url("m801c.music.126.net"))
+        let bad = url("m801\(TestUpstream.cdnSuffix)")
+        #expect(CDNHost.failover(from: bad, after: URLError(.badServerResponse)) == nil)
+        #expect(CDNHost.preferred(for: bad) == bad)
+        #expect(CDNHost.failover(from: url("example.com"), after: dns) == nil)
+        #expect(CDNHost.failover(from: bad, after: dns) == url("m801c\(TestUpstream.cdnSuffix)"))
     }
 
     @Test func prefersTwinWhileHostIsMarkedUnreachable() {
         let now: TimeInterval = 1000
-        let bad = url("m801.music.126.net")
-        #expect(NeteaseCDNHost.preferred(for: bad, now: now) == bad)
-        _ = NeteaseCDNHost.failover(from: bad, after: dns, now: now)
-        #expect(NeteaseCDNHost.preferred(for: bad, now: now) == url("m801c.music.126.net"))
-        #expect(NeteaseCDNHost.preferred(for: bad, now: now + NeteaseCDNHost.unreachableTTL + 1) == bad)
+        let bad = url("m801\(TestUpstream.cdnSuffix)")
+        #expect(CDNHost.preferred(for: bad, now: now) == bad)
+        _ = CDNHost.failover(from: bad, after: dns, now: now)
+        #expect(CDNHost.preferred(for: bad, now: now) == url("m801c\(TestUpstream.cdnSuffix)"))
+        #expect(CDNHost.preferred(for: bad, now: now + CDNHost.unreachableTTL + 1) == bad)
     }
 
     @Test func answeringClearsTheMark() {
-        let bad = url("m801.music.126.net")
-        _ = NeteaseCDNHost.failover(from: bad, after: dns, now: 1000)
-        NeteaseCDNHost.markReachable(bad, now: 1001)
-        #expect(NeteaseCDNHost.preferred(for: bad, now: 1002) == bad)
+        let bad = url("m801\(TestUpstream.cdnSuffix)")
+        _ = CDNHost.failover(from: bad, after: dns, now: 1000)
+        CDNHost.markReachable(bad, now: 1001)
+        #expect(CDNHost.preferred(for: bad, now: 1002) == bad)
     }
 
     /// The dead host failed, the twin worked for a while, then hiccuped once.
     /// Requests must stay on the twin, not go back to the dead host.
     @Test func bothMarkedPrefersTheOneThatAnsweredLast() {
-        let dead = url("m801.music.126.net"), twin = url("m801c.music.126.net")
-        #expect(NeteaseCDNHost.failover(from: dead, after: dns, now: 1000) == twin)
-        NeteaseCDNHost.markReachable(twin, now: 1001)
+        let dead = url("m801\(TestUpstream.cdnSuffix)"), twin = url("m801c\(TestUpstream.cdnSuffix)")
+        #expect(CDNHost.failover(from: dead, after: dns, now: 1000) == twin)
+        CDNHost.markReachable(twin, now: 1001)
         // The twin's own twin (the dead host) failed recently: no bounce back.
-        #expect(NeteaseCDNHost.failover(from: twin, after: URLError(.timedOut), now: 1100) == nil)
-        #expect(NeteaseCDNHost.preferred(for: dead, now: 1101) == twin)
-        #expect(NeteaseCDNHost.preferred(for: twin, now: 1101) == twin)
+        #expect(CDNHost.failover(from: twin, after: URLError(.timedOut), now: 1100) == nil)
+        #expect(CDNHost.preferred(for: dead, now: 1101) == twin)
+        #expect(CDNHost.preferred(for: twin, now: 1101) == twin)
     }
 
     @Test func bothMarkedWithNoHistoryStaysPut() {
-        let host = url("m801.music.126.net"), twin = url("m801c.music.126.net")
-        _ = NeteaseCDNHost.failover(from: host, after: dns, now: 1000)
-        _ = NeteaseCDNHost.failover(from: twin, after: dns, now: 1000)
-        #expect(NeteaseCDNHost.preferred(for: host, now: 1000) == host)
+        let host = url("m801\(TestUpstream.cdnSuffix)"), twin = url("m801c\(TestUpstream.cdnSuffix)")
+        _ = CDNHost.failover(from: host, after: dns, now: 1000)
+        _ = CDNHost.failover(from: twin, after: dns, now: 1000)
+        #expect(CDNHost.preferred(for: host, now: 1000) == host)
     }
 
     // MARK: - CachingAudioResourceLoader
 
     @Test @MainActor func prefetchRetriesDNSFailureAndNextSongStartsOnTwin() async throws {
-        let dead = url("m9401.music.126.net")
-        let twin = try #require(NeteaseCDNHost.alternate(for: dead))
+        let dead = url("m9401\(TestUpstream.cdnSuffix)")
+        let twin = try #require(CDNHost.alternate(for: dead))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let cache = AudioCache(cacheDirectory: directory)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -150,35 +151,35 @@ struct NeteaseCDNHostTests {
     }
 
     @Test func backgroundDownloadReportsDNSButNotTimeoutAfterResponse() {
-        let dead = url("m9402.music.126.net")
-        let twin = NeteaseCDNHost.alternate(for: dead)!
+        let dead = url("m9402\(TestUpstream.cdnSuffix)")
+        let twin = CDNHost.alternate(for: dead)!
         let stream = AsyncStream<DownloadTransportEvent>.makeStream()
         defer { stream.continuation.finish() }
         let delegate = DownloadSessionDelegate(inbox: FileManager.default.temporaryDirectory, continuation: stream.continuation)
         let task = CDNDownloadTask(url: dead)
         task.taskDescription = "\(UUID()).\(UUID())"
         delegate.urlSession(.shared, task: task, didCompleteWithError: URLError(.cannotFindHost))
-        #expect(NeteaseCDNHost.preferred(for: dead) == twin)
+        #expect(CDNHost.preferred(for: dead) == twin)
         task.receivedResponse = HTTPURLResponse(url: dead, statusCode: 200, httpVersion: nil, headerFields: nil)
         delegate.urlSession(.shared, task: task, didCompleteWithError: URLError(.timedOut))
-        #expect(NeteaseCDNHost.preferred(for: dead) == dead)
+        #expect(CDNHost.preferred(for: dead) == dead)
     }
 
     /// The iOS path end to end: AVFoundation asks the caching loader for
     /// byte ranges, the first host fails DNS, and the asset still loads, from
     /// the twin.
     @Test func cachingLoaderRetriesRangesOnTheTwin() async throws {
-        let dead = URL(string: "https://m9301.music.126.net/x/song.caf")!
+        let dead = URL(string: "https://m9301\(TestUpstream.cdnSuffix)/x/song.caf")!
         CDNStub.configure(body: try Data(contentsOf: Fixtures.sixSecondCAF), deadHosts: [dead.host!])
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CDNStub.self]
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NeteaseCDNHostTests-\(UUID().uuidString)")
+            .appendingPathComponent("CDNHostTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let loader = try CachingAudioResourceLoader(
             remoteURL: dead, trackID: 9301, requestedQuality: "exhigh", servedQuality: "exhigh",
-            source: .netease, maximumCacheSizeMB: 100,
+            source: .origin, maximumCacheSizeMB: 100,
             cache: AudioCache(cacheDirectory: directory), sessionConfiguration: configuration)
         defer { loader.cancel() }
         let asset = AVURLAsset(url: loader.assetURL)
@@ -187,9 +188,9 @@ struct NeteaseCDNHostTests {
         let duration = try await asset.load(.duration)
         #expect(abs(duration.seconds - 6) < 0.1)
         let hosts = CDNStub.requestedHosts()
-        #expect(hosts.first == "m9301.music.126.net")
-        #expect(hosts.contains("m9301c.music.126.net"))
-        #expect(NeteaseCDNHost.preferred(for: dead) == URL(string: "https://m9301c.music.126.net/x/song.caf")!)
+        #expect(hosts.first == "m9301\(TestUpstream.cdnSuffix)")
+        #expect(hosts.contains("m9301c\(TestUpstream.cdnSuffix)"))
+        #expect(CDNHost.preferred(for: dead) == URL(string: "https://m9301c\(TestUpstream.cdnSuffix)/x/song.caf")!)
     }
 }
 

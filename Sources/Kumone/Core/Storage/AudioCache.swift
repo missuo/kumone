@@ -1,7 +1,8 @@
 import Foundation
 
 enum AudioCacheSource: Codable, Equatable, Sendable {
-    case netease
+    /// The service's own file.
+    case origin
     case unblock(String)
 
     var requiresUnblockEnabled: Bool {
@@ -9,6 +10,43 @@ enum AudioCacheSource: Codable, Equatable, Sendable {
             return true
         }
         return false
+    }
+
+    // Coded by hand in the same shape as the synthesized coding,
+    // `{"<tag>":{}}` and `{"unblock":{"_0":"<source>"}}`, so existing caches read.
+    private struct Key: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ string: String) { stringValue = string }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+        static let origin = Key(Upstream.tag)
+        static let unblock = Key("unblock")
+        static let payload = Key("_0")
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Key.self)
+        if container.contains(.origin) {
+            self = .origin
+        } else if container.contains(.unblock) {
+            let nested = try container.nestedContainer(keyedBy: Key.self, forKey: .unblock)
+            self = .unblock(try nested.decode(String.self, forKey: .payload))
+        } else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Unknown audio cache source"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Key.self)
+        switch self {
+        case .origin:
+            _ = container.nestedContainer(keyedBy: Key.self, forKey: .origin)
+        case .unblock(let source):
+            var nested = container.nestedContainer(keyedBy: Key.self, forKey: .unblock)
+            try nested.encode(source, forKey: .payload)
+        }
     }
 }
 

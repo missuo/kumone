@@ -56,7 +56,7 @@ enum SyncError: LocalizedError {
         case .identityChanged: return String(localized: "iCloud 账号已更改")
         case .invalidRecord: return String(localized: "同步数据损坏")
         case .newerVersion: return String(localized: "同步数据需要更新版本的 Kumone")
-        case .accountMismatch: return String(localized: "接续需要登录同一网易云账号")
+        case .accountMismatch: return String(localized: "接续需要登录同一账号")
         case .loginLocked: return String(localized: "需要输入同步密码")
         case .wrongPassphrase: return String(localized: "同步密码不正确")
         case .weakPassphrase: return String(localized: "同步密码至少需要 8 个字符")

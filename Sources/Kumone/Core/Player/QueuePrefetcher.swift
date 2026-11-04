@@ -149,7 +149,7 @@ final class QueuePrefetcher {
     /// the cache would not keep it: too large for the limit, cleared meanwhile,
     /// or of a type it cannot name.
     private func store(_ source: QueuePrefetchSource, track: Track, quality: String, limitMB: Int, ticket: Int) async throws -> Int64? {
-        var urlRequest = URLRequest(url: NeteaseCDNHost.preferred(for: source.url))
+        var urlRequest = URLRequest(url: CDNHost.preferred(for: source.url))
         urlRequest.allowsExpensiveNetworkAccess = false
         urlRequest.allowsConstrainedNetworkAccess = false
         let (temporary, response) = try await downloadWithFailover(urlRequest, ticket: ticket)
@@ -166,7 +166,7 @@ final class QueuePrefetcher {
         guard let fileExtension = source.fileExtension.flatMap({ Self.sanitized($0) })
             ?? CachingAudioResourceLoader.fileExtension(for: source.url, contentType: contentType) else { return nil }
         let session = try await cache.beginWrite(trackID: track.id, requestedQuality: quality, servedQuality: source.servedQuality,
-                                                 source: .netease, fileExtension: fileExtension, maximumSizeMB: limitMB)
+                                                 source: .origin, fileExtension: fileExtension, maximumSizeMB: limitMB)
         do {
             try fileManager.removeItem(at: session.partialFileURL)
             try fileManager.moveItem(at: temporary, to: session.partialFileURL)
@@ -188,7 +188,7 @@ final class QueuePrefetcher {
     private func downloadWithFailover(_ request: URLRequest, ticket: Int, canRetry: Bool = true) async throws -> (URL, URLResponse) {
         do {
             let result = try await download(request)
-            if let url = result.1.url { NeteaseCDNHost.markReachable(url) }
+            if let url = result.1.url { CDNHost.markReachable(url) }
             return result
         } catch {
             // The async download API does not expose the response on failure.
@@ -196,7 +196,7 @@ final class QueuePrefetcher {
             // failures here rather than poisoning a host that already answered.
             guard isCurrent(ticket), (error as NSError).code != NSURLErrorTimedOut,
                   let url = request.url,
-                  let twin = NeteaseCDNHost.failover(from: url, after: error), canRetry else { throw error }
+                  let twin = CDNHost.failover(from: url, after: error), canRetry else { throw error }
             var retry = request
             retry.url = twin
             return try await downloadWithFailover(retry, ticket: ticket, canRetry: false)
@@ -209,10 +209,10 @@ final class QueuePrefetcher {
         return CachingAudioResourceLoader.resourceContentType(for: value) == nil ? nil : value
     }
 
-    /// NetEase's own file at the chosen quality. Trials and songs it refuses
+    /// The service's own file at the chosen quality. Trials and songs it refuses
     /// are left to playback, which knows how to fall back.
     static func resolveSongURL(track: Track, quality: String) async throws -> QueuePrefetchSource? {
-        guard let data = try await NeteaseAPI.songURL(ids: [track.id], level: quality).first,
+        guard let data = try await MusicAPI.songURL(ids: [track.id], level: quality).first,
               data.freeTrialInfo == nil, let string = data.url,
               let url = URL(string: string.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
         return .init(url: url, servedQuality: data.level, byteCount: Int64(max(data.size, 0)), fileExtension: data.type)
@@ -221,7 +221,7 @@ final class QueuePrefetcher {
     /// The words and artwork a cached song shows offline, like a download.
     static func keepPlaybackData(track: Track, scope: String?) async {
         guard let scope else { return }
-        let lyrics = try? await NeteaseAPI.lyric(id: track.id)
+        let lyrics = try? await MusicAPI.lyric(id: track.id)
         guard !Task.isCancelled else { return }
         await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: lyrics, scope: scope)
     }

@@ -36,6 +36,12 @@ public struct IOSMainWindow: View {
     public init() {}
 
     public var body: some View {
+        UpstreamGate { gatedBody }
+            .tint(Theme.accent)
+            .preferredColorScheme(settings.appearance.colorScheme)
+    }
+
+    private var gatedBody: some View {
         presentationRoot
             .modifier(OfflinePlaybackAlert(player: player, onDownloads: { openDestination(.downloaded) }, enabled: !player.showNowPlaying))
             .modifier(MeteredDownloadAlert(enabled: !player.showNowPlaying))
@@ -652,7 +658,7 @@ struct IOSLibraryView: View {
                                 .font(.system(size: 32))
                                 .foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("登录网易云音乐")
+                                Text("登录账号")
                                     .font(.headline)
                                     .foregroundStyle(.primary)
                                 Text("同步我喜欢的音乐、歌单与每日推荐")
@@ -786,7 +792,7 @@ struct IOSLibraryView: View {
                 guard !name.isEmpty else { return }
                 Task {
                     do {
-                        try await NeteaseAPI.createPlaylist(name: name, isPrivate: false)
+                        try await MusicAPI.createPlaylist(name: name, isPrivate: false)
                         await account.refreshLibrary()
                         ToastCenter.shared.show(String(localized: "歌单已创建"))
                     } catch {

@@ -14,7 +14,7 @@ public struct VinylRecordView: View {
 
     public var body: some View {
         let discDiameter = size
-        let labelDiameter = discDiameter * 0.64 // Authentic NetEase / vintage vinyl ratio
+        let labelDiameter = discDiameter * 0.64 // Vintage vinyl label ratio
         let spindleHoleDiameter = max(7, discDiameter * 0.032)
 
         return ZStack {

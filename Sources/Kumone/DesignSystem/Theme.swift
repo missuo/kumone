@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Design tokens: color, radius, spacing, layout metrics.
 enum Theme {
-    /// NetEase red, tuned slightly warmer for macOS.
+    /// Accent red, tuned slightly warmer for macOS.
     static let accent = Color(red: 0.925, green: 0.286, blue: 0.286) // #EC4949
     static let accentDeep = Color(red: 0.788, green: 0.161, blue: 0.161) // #C92929
 

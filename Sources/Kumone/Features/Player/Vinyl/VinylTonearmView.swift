@@ -1,7 +1,7 @@
 import QuartzCore
 import SwiftUI
 
-/// Vector mechanical tonearm (唱臂与唱针) matching vintage / NetEase turntable styling.
+/// Vector mechanical tonearm (唱臂与唱针) matching vintage turntable styling.
 /// Features metallic pivot base, curved tonearm tube, counterweight, headshell, cartridge, stylus tip,
 /// and smooth engaging/disengaging rotation animation.
 public struct VinylTonearmView: View {

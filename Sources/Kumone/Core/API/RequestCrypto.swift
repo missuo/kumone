@@ -2,9 +2,9 @@ import Foundation
 import CommonCrypto
 import CryptoKit
 
-/// NetEase Cloud Music request encryption (eapi): AES-128-ECB over
+/// Request encryption (eapi): AES-128-ECB over
 /// "url + payload + md5 digest" with a fixed key, hex output.
-enum NeteaseCrypto {
+enum RequestCrypto {
     private static let eapiKey = "e82ckenh8dichen8"
 
     /// Encrypts a JSON payload for an `/eapi/...` endpoint.

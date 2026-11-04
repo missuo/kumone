@@ -1,8 +1,8 @@
 import Foundation
 
-/// Typed NetEase Cloud Music API surface, mapped to real eapi and web API endpoints.
-enum NeteaseAPI {
-    private static var client: NeteaseClient { .shared }
+/// Typed API surface, mapped to eapi and web API endpoints.
+enum MusicAPI {
+    private static var client: MusicClient { .shared }
 
     private static func eapi<T: Decodable>(
         _ type: T.Type, _ path: String, _ payload: [String: Any] = [:]
@@ -26,8 +26,8 @@ enum NeteaseAPI {
         try await eapi(QRKeyResponse.self, "/login/qrcode/unikey", ["type": 3]).unikey
     }
 
-    static func qrLoginURL(unikey: String) -> String {
-        "https://music.163.com/login?codekey=\(unikey)"
+    static func qrLoginURL(unikey: String) -> String? {
+        Upstream.webURL("/login?codekey=\(unikey)")?.absoluteString
     }
 
     struct QRCheckResponse: Decodable {
@@ -56,7 +56,7 @@ enum NeteaseAPI {
 
     /// Phone-number login with an SMS code (upstream: `/api/w/login/cellphone`).
     /// Auth cookies arrive via Set-Cookie. Through the web API: through the
-    /// eapi, NetEase refuses it with -460 before it checks the code.
+    /// eapi, the service refuses it with -460 before it checks the code.
     static func loginCellphone(phone: String, captcha: String, countryCode: String = "86") async throws {
         let data = try await client.api("/w/login/cellphone",
                                         ["type": "1", "https": "true",
@@ -64,14 +64,14 @@ enum NeteaseAPI {
                                          "captcha": captcha, "remember": "true"])
         _ = try client.decoded(CodeOnly.self, from: data)
         guard client.isLoggedIn else {
-            throw NeteaseAPIError.business(code: -1, message: String(localized: "登录失败，请重试"))
+            throw MusicAPIError.business(code: -1, message: String(localized: "登录失败，请重试"))
         }
     }
 
     /// An isolated client keeps a late logout response away from a newer login.
     static func logout(
         detachedCookies: [String: String],
-        using client: NeteaseClient = NeteaseClient(configuration: .ephemeral, persistsCookies: false)
+        using client: MusicClient = MusicClient(configuration: .ephemeral, persistsCookies: false)
     ) async throws {
         client.setCookies(detachedCookies)
         let data = try await client.eapi("/logout", absorbResponseCookies: false)
@@ -87,7 +87,7 @@ enum NeteaseAPI {
         let profile: UserProfile?
     }
 
-    static func userAccount(using client: NeteaseClient = .shared) async throws -> UserProfile? {
+    static func userAccount(using client: MusicClient = .shared) async throws -> UserProfile? {
         let data = try await client.eapi("/nuser/account/get")
         return try client.decoded(AccountResponse.self, from: data).profile
     }
@@ -112,7 +112,7 @@ enum NeteaseAPI {
         try await eapi(LikelistResponse.self, "/song/like/get", ["uid": uid]).ids
     }
 
-    /// Through the eapi as the desktop client, as mygo-cloudmusic likes a
+    /// Through the eapi as the desktop client likes a
     /// song: the web API answers "当前环境异常，已取消喜欢" to a client its
     /// risk control does not recognize, and the heart goes back.
     static func likeTrack(id: Int, like: Bool) async throws {
@@ -178,7 +178,7 @@ enum NeteaseAPI {
     }
 
     /// `startplay` weblog — writes the song into the 最近播放 (recent-plays)
-    /// list. NetEase needs this *and* the `play` weblog; sending only `play`
+    /// list. The service needs this *and* the `play` weblog; sending only `play`
     /// (as before) bumped the listening ranking but never wrote 最近播放 (#33).
     static func scrobbleStart(trackID: Int, sourceID: Int) async {
         await sendWeblog([[
@@ -309,7 +309,7 @@ enum NeteaseAPI {
         let privileges: [TrackPrivilege]?
     }
 
-    /// Through the eapi, as mygo-cloudmusic reads song details: the web
+    /// Through the eapi, as the desktop client reads song details: the web
     /// API's privileges call some VIP songs taken down (`st` -100) for
     /// subscribers, whom the eapi streams them to.
     static func songDetails(ids: [Int]) async throws -> SongDetailResponse {
@@ -386,7 +386,7 @@ enum NeteaseAPI {
                                           ["op": op, "pid": playlistID, "trackIds": doubled, "imme": "true"])
                 return
             }
-            throw NeteaseAPIError.business(code: code, message: obj["message"] as? String)
+            throw MusicAPIError.business(code: code, message: obj["message"] as? String)
         }
     }
 
@@ -424,12 +424,12 @@ enum NeteaseAPI {
     /// An injectable client lets the compatibility probe use an isolated cookie
     /// jar without reading or changing the listener's current login.
     static func songDownloadResource(track: Track, level: String, accountScope: String,
-                                     client: NeteaseClient = .shared) async throws -> OfflineAudioResource {
+                                     client: MusicClient = .shared) async throws -> OfflineAudioResource {
         let data = try await songDownloadURL(id: track.id, level: level, client: client)
         return try downloadResource(data: data, track: track, accountScope: accountScope)
     }
 
-    static func songDownloadURL(id: Int, level: String, client: NeteaseClient = .shared) async throws -> SongURLData {
+    static func songDownloadURL(id: Int, level: String, client: MusicClient = .shared) async throws -> SongURLData {
         struct Response: Decodable { let data: SongURLData? }
         let body = try await client.eapi("/song/enhance/download/url/v1",
                                          ["id": id, "level": level, "immerseType": "c51"])
@@ -456,7 +456,7 @@ enum NeteaseAPI {
         }
         let duration = track.duration > 0 ? track.duration : responseDuration
         guard duration > 0 else { throw OfflineAudioError.unavailable }
-        let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id, source: "netease",
+        let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id, source: Upstream.tag,
                                             quality: quality, format: format, contentMD5: md5)
         let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: Int64(data.size), duration: duration)
         try descriptor.validate()

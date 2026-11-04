@@ -1424,7 +1424,7 @@ struct LyricMainText: View {
             guard !chars.isEmpty else { continue }
             let letters = chars.indices.filter { chars[$0].isLetter || chars[$0].isNumber }
             let slots = letters.isEmpty ? Array(chars.indices) : letters
-            // A token NetEase timed at nothing still ramps, over 50 ms.
+            // A token the service timed at nothing still ramps, over 50 ms.
             let per = max(word.duration, 0.05) / Double(slots.count)
             var lit: [Int: Double] = [:]
             for (slot, index) in slots.enumerated() {
@@ -1708,7 +1708,7 @@ private struct CompactTrackHeader: View {
 
                         Button {
                             Platform.copyToPasteboard(
-                                string: "https://music.163.com/#/song?id=\(track.id)"
+                                string: Upstream.songPageURL(id: track.id)?.absoluteString ?? ""
                             )
                             ToastCenter.shared.show(String(localized: "链接已复制"))
                         } label: {
@@ -2520,7 +2520,7 @@ private struct MinimalTrackInfoRow: View {
 
             Button {
                 Platform.copyToPasteboard(
-                    string: "https://music.163.com/#/song?id=\(track.id)"
+                    string: Upstream.songPageURL(id: track.id)?.absoluteString ?? ""
                 )
                 ToastCenter.shared.show(String(localized: "链接已复制"))
             } label: {

@@ -35,12 +35,12 @@ struct AccountIsolationTests {
     func serverLogoutUsesAnIsolatedSessionAndSurfacesFailures(code: Int) async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeferredAPIProtocol.self]
-        let logoutClient = NeteaseClient(configuration: configuration, persistsCookies: false)
-        let liveClient = NeteaseClient(configuration: .ephemeral, persistsCookies: false)
+        let logoutClient = MusicClient(configuration: configuration, persistsCookies: false)
+        let liveClient = MusicClient(configuration: .ephemeral, persistsCookies: false)
         liveClient.setCookies(["MUSIC_U": "synthetic-old"])
         let cookies = liveClient.authenticationCookies()
         try liveClient.clearAuthCookies()
-        let logout = Task { try await NeteaseAPI.logout(detachedCookies: cookies, using: logoutClient) }
+        let logout = Task { try await MusicAPI.logout(detachedCookies: cookies, using: logoutClient) }
         for _ in 0..<200 where DeferredAPIProtocol.state.get("/eapi/logout") == nil {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -50,7 +50,7 @@ struct AccountIsolationTests {
         liveClient.setCookies(["MUSIC_U": "synthetic-new"])
         pending.finish(code: code)
         if code == 200 { try await logout.value }
-        else { await #expect(throws: NeteaseAPIError.self) { try await logout.value } }
+        else { await #expect(throws: MusicAPIError.self) { try await logout.value } }
         let keptNewSession = liveClient.cookie(named: "MUSIC_U") == "synthetic-new"
         let ignoredResponseCookie = logoutClient.cookie(named: "MUSIC_U") == "synthetic-old"
         #expect(keptNewSession && ignoredResponseCookie)
@@ -59,13 +59,13 @@ struct AccountIsolationTests {
     @Test func concurrentCookieWritesPersistTheLatestCompleteSnapshot() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let client = NeteaseClient(cookieDirectory: root)
+        let client = MusicClient(cookieDirectory: root)
         DispatchQueue.concurrentPerform(iterations: 100) { index in
             client.setCookies(["fixture-\(index)": String(index)])
         }
         client.setCookies(["MUSIC_U": "synthetic-session"])
         try client.clearAuthCookies()
-        let reopened = NeteaseClient(cookieDirectory: root)
+        let reopened = MusicClient(cookieDirectory: root)
         #expect(!reopened.isLoggedIn && reopened.authenticationFingerprint == nil)
         for index in 0..<100 { #expect(reopened.cookie(named: "fixture-\(index)") == String(index)) }
     }
@@ -75,7 +75,7 @@ struct AccountIsolationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeferredAPIProtocol.self]
-        let client = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let client = MusicClient(cookieDirectory: root, configuration: configuration)
         client.setCookies(["MUSIC_U": "synthetic-before"])
         let before = client.authenticationFingerprint
         let refreshing = Task { try await client.eapi("/login/token/refresh") }
@@ -92,7 +92,7 @@ struct AccountIsolationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeferredAPIProtocol.self]
-        let client = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let client = MusicClient(cookieDirectory: root, configuration: configuration)
         let request = Task { try await client.eapi("/test-only") }
         for _ in 0..<200 where DeferredAPIProtocol.state.get() == nil { try await Task.sleep(for: .milliseconds(5)) }
         let pending = try #require(DeferredAPIProtocol.state.get())
@@ -116,7 +116,7 @@ struct AccountIsolationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeferredAPIProtocol.self]
-        let client = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let client = MusicClient(cookieDirectory: root, configuration: configuration)
         client.setCookies(["MUSIC_U": "synthetic-session-a"])
         let request = Task { try await client.eapi(path) }
         for _ in 0..<200 where DeferredAPIProtocol.state.get() == nil { try await Task.sleep(for: .milliseconds(5)) }
@@ -125,7 +125,7 @@ struct AccountIsolationTests {
         if switchAccount { client.setCookies(["MUSIC_U": "synthetic-session-b"]) }
         pending.finish()
         await #expect(throws: CancellationError.self) { _ = try await request.value }
-        let reloaded = NeteaseClient(cookieDirectory: root)
+        let reloaded = MusicClient(cookieDirectory: root)
         // Check a Boolean so assertion diagnostics never echo cookie material.
         let expected = switchAccount ? "synthetic-session-b" : nil
         let unchanged = reloaded.cookie(named: "MUSIC_U") == expected
@@ -137,7 +137,7 @@ struct AccountIsolationTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeferredAPIProtocol.self]
-        let client = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let client = MusicClient(cookieDirectory: root, configuration: configuration)
         client.setCookies(["MUSIC_U": "synthetic-before"])
         let binding = try #require(client.authenticationFingerprint)
         let profile = try JSONDecoder().decode(UserProfile.self, from: Data("{\"userId\":1,\"nickname\":\"Fixture\"}".utf8))
@@ -158,7 +158,7 @@ struct AccountIsolationTests {
         _ = try await older.value
         let keptRenewedToken = client.cookie(named: "MUSIC_U") == "synthetic-renewed"
         #expect(keptRenewedToken)
-        let reopened = NeteaseClient(cookieDirectory: root, configuration: configuration)
+        let reopened = MusicClient(cookieDirectory: root, configuration: configuration)
         #expect(reopened.authenticationFingerprint == binding)
         #expect(snapshot.load(fingerprint: reopened.authenticationFingerprint)?.profile.userId == 1)
         let afterRestart = Task { try await reopened.eapi("/test-only") }

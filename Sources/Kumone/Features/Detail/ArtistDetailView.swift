@@ -124,18 +124,18 @@ struct ArtistDetailView: View {
         isLoading = true
         errorMessage = nil
         do {
-            let response = try await NeteaseAPI.artist(id: artistID)
+            let response = try await MusicAPI.artist(id: artistID)
             artist = response.artist
             hotSongs = response.hotSongs
             isFollowed = response.artist.followed
             isLoading = false
 
-            if let result = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 60) {
+            if let result = try? await MusicAPI.artistAlbums(id: artistID, limit: 60) {
                 albums = result.hotAlbums.filter { $0.size > 1 }
                 epsAndSingles = result.hotAlbums.filter { $0.size <= 1 }
             }
             if account.isLoggedIn {
-                similar = (try? await NeteaseAPI.similarArtists(id: artistID)) ?? []
+                similar = (try? await MusicAPI.similarArtists(id: artistID)) ?? []
             }
         } catch {
             isLoading = false
@@ -279,7 +279,7 @@ struct ArtistDetailView: View {
     private func toggleFollow() {
         Task {
             do {
-                try await NeteaseAPI.subscribeArtist(id: artistID, subscribe: !isFollowed)
+                try await MusicAPI.subscribeArtist(id: artistID, subscribe: !isFollowed)
                 isFollowed.toggle()
                 ToastCenter.shared.show(isFollowed ? String(localized: "已关注歌手") : String(localized: "已取消关注"))
             } catch {

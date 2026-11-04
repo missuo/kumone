@@ -60,7 +60,7 @@ extension Audition {
             return minutes * 60 + seconds
         }
 
-        /// "作词 : X" / "厂牌 : Y" credit lines. A Netease-sourced `.lrc` opens
+        /// "作词 : X" / "厂牌 : Y" credit lines. An upstream `.lrc` opens
         /// with a block of these and often closes with a whole rolling credit
         /// list on real timestamps — which is exactly the window the bundle
         /// quotes, so they have to go.

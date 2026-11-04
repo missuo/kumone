@@ -1,6 +1,6 @@
 import Foundation
 
-/// One timed word (or short run) inside a lyric line: NetEase's own verbatim
+/// One timed word (or short run) inside a lyric line: the service's own verbatim
 /// (`yrc`) timing, or — when the song only has line (`lrc`) timing — a share
 /// of the line spread across its characters, see `LyricsParser.spreadWords`.
 struct LyricWord: Hashable {
@@ -86,7 +86,7 @@ enum LyricsParser {
         return result.sorted { $0.0 < $1.0 }
     }
 
-    /// Parses NetEase verbatim `yrc` lyrics: each content line is
+    /// Parses the service's verbatim `yrc` lyrics: each content line is
     /// `[lineStartMs,lineDurMs](wStartMs,wDurMs,0)word(...)word…`. JSON metadata
     /// (credits) lines at the top don't match the `[num,num]` head and are
     /// skipped. A blank token — the gap between two words — rides on the word
@@ -200,7 +200,7 @@ enum LyricsParser {
         merge(response.yromalrc?.lyric ?? response.romalrc?.lyric, into: \.romaji)
 
         // Readings are only meaningful for Japanese lyrics: fill the romaji
-        // gaps Netease left, annotate the kanji, and drop stray annotations on
+        // gaps the service left, annotate the kanji, and drop stray annotations on
         // everything else. Both are done here rather than in the view so a line
         // is analysed once per track instead of once per frame.
         if RomajiTranscriber.isJapanese(lines.map(\.text)) {

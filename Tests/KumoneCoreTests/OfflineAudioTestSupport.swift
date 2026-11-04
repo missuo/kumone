@@ -11,7 +11,7 @@ struct OfflineAudioFixture {
         let url = Bundle.module.url(forResource: "offline", withExtension: format.rawValue, subdirectory: "Fixtures")!
         data = try Data(contentsOf: url)
         let md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: 1, source: "netease",
+        descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: 1, source: Upstream.tag,
                                                             quality: "exhigh", format: format, contentMD5: md5),
                                              byteCount: Int64(data.count), duration: 3)
     }

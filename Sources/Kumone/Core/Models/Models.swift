@@ -45,7 +45,7 @@ struct PlaylistCreator: Codable, Hashable {
 }
 
 /// A playlist as it appears in grids and sidebars. Tolerates the several cover
-/// field names and numeric types NetEase uses across endpoints.
+/// field names and numeric types the service uses across endpoints.
 struct PlaylistSummary: Codable, Hashable, Identifiable {
     let id: Int
     let name: String
@@ -475,7 +475,7 @@ enum Formatters {
 }
 
 extension String {
-    /// NetEase image CDN resize convention: `<picUrl>?param=<W>y<H>`.
+    /// Image CDN resize convention: `<picUrl>?param=<W>y<H>`.
     /// Also upgrades `http:` to `https:`.
     func resizedImageURL(_ size: Int) -> URL? {
         guard var components = URLComponents(string: self) else { return nil }

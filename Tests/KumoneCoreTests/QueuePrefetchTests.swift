@@ -63,7 +63,7 @@ struct PlaybackQueuePlanTests {
         let fixture = try OfflineAudioFixture(), store = fixture.store()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         func descriptor(_ id: Int, scope: String = "a") -> OfflineAudioDescriptor {
-            .init(identity: .init(accountScope: scope, trackID: id, source: "netease", quality: "exhigh", format: .mp3,
+            .init(identity: .init(accountScope: scope, trackID: id, source: Upstream.tag, quality: "exhigh", format: .mp3,
                                  contentMD5: fixture.descriptor.identity.contentMD5), byteCount: fixture.descriptor.byteCount, duration: 3)
         }
         try await store.importFixture(fixture.data, descriptor: descriptor(4, scope: "b"))

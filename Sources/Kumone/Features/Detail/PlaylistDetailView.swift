@@ -559,7 +559,7 @@ struct PlaylistDetailView: View {
         Task {
             guard let seed = playable.randomElement() else { return }
             do {
-                let tracks = try await NeteaseAPI.intelligenceList(songID: seed.id, playlistID: playlistID)
+                let tracks = try await MusicAPI.intelligenceList(songID: seed.id, playlistID: playlistID)
                 guard !tracks.isEmpty else {
                     ToastCenter.shared.show(String(localized: "心动模式暂时不可用"))
                     return
@@ -575,7 +575,7 @@ struct PlaylistDetailView: View {
     private func toggleSubscribe(_ detail: PlaylistDetail) {
         Task {
             do {
-                try await NeteaseAPI.subscribePlaylist(id: detail.id, subscribe: !detail.subscribed)
+                try await MusicAPI.subscribePlaylist(id: detail.id, subscribe: !detail.subscribed)
                 model.detail?.subscribed.toggle()
                 await account.refreshLibrary()
             } catch {

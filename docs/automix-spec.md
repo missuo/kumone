@@ -69,7 +69,7 @@ final class PlaybackEngine {          // 内部专用串行队列，非 MainActo
 ### AudioCache
 
 - 目录：`~/Library/Caches/Kumone/Audio/`（可被系统清理，符合"缓存"语义）。
-- Key：`trackID + servedLevel + 音源标识（netease / unblock:源名）`。**不缓存 URL**（NetEase 直链有时效），每次未命中都重新 resolve 后立刻下载。
+- Key：`trackID + servedLevel + 音源标识（官方源 / unblock:源名）`。**不缓存 URL**（官方直链有时效），每次未命中都重新 resolve 后立刻下载。
 - 写入：`.part` 临时文件 → 完成后原子 rename；同 key 并发请求合并为一次下载。
 - LRU：按 mtime 淘汰，上限默认 2 GB，设置页可调（512 MB / 2 GB / 8 GB / 不限）。
 - Sidecar：`<key>.lrc` 存逐行歌词（`Audition.Lyrics` 读），随音频一起淘汰。分析结果**不再**放这里，见下。
@@ -224,7 +224,7 @@ struct BeatMatchedPlan {
 
 - **渐进解码复杂度**（M1 最大风险）：AudioFileStream 对 mp3/aac 成熟，FLAC 需走 `AudioFileStreamOpen` 的 FLAC 支持（macOS 15 可用）；若某格式流式解码不稳，兜底为"该格式等缓存完成再播 + 播放前提示缓冲中"。
 - **Swift 6 并发**：引擎与分析器不进 MainActor，deck 状态由引擎内部串行队列守护，对外只暴露 `Sendable` 值和 AsyncStream；language mode v5 下先以 `@unchecked Sendable` + 断言过渡。
-- **NetEase URL 时效**：resolve 与下载原子化在同一 pipeline task 内，URL 永不落盘。
+- **官方 URL 时效**：resolve 与下载原子化在同一 pipeline task 内，URL 永不落盘。
 - **分析准确度**：自研 beat tracking 对无鼓点/自由节拍曲目会低置信，退化链保证听感底线——置信度阈值宁高勿低。
 - **许可证**：全部自研 + 系统框架，无新第三方依赖，LGPL-3.0-only 不受影响。
 - **AirPlay 输出延迟**：AirPlay 设备的输出缓冲很大（典型 ~2 秒），而位置计算读的是 player node 时钟（在该缓冲上游）。过渡点在流里的位置仍然正确，但**用户感知到的 seam 时刻会整体偏移一个 AirPlay 延迟**，调试面板倒计时会提前归零。v1 不补偿，详见 `docs/automix-airplay.md`。

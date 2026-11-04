@@ -41,7 +41,7 @@ struct LoginSheet: View {
     var body: some View {
         VStack(spacing: 20) {
             VStack(spacing: 6) {
-                Text("登录网易云音乐")
+                Text("登录账号")
                     .font(.title3.weight(.semibold))
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases) { mode in
@@ -85,7 +85,7 @@ struct LoginSheet: View {
             pollTask?.cancel()
             cooldownTask?.cancel()
         }
-        // Coming back from the NetEase app (single-device flow): if polling
+        // Coming back from the official app (single-device flow): if polling
         // died while we were in the background, pick it up again.
         .onChange(of: scenePhase) { _ in
             guard scenePhase == .active, mode == .qr else { return }
@@ -101,7 +101,7 @@ struct LoginSheet: View {
 
     private var qrSection: some View {
         VStack(spacing: 20) {
-            Text("使用网易云音乐 App 扫码登录")
+            Text("使用官方 App 扫码登录")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
 
@@ -159,7 +159,7 @@ struct LoginSheet: View {
                 case .loading:
                     Text("正在获取二维码…")
                 case .waiting:
-                    Text("打开网易云音乐 App，扫一扫登录")
+                    Text("打开官方 App，扫一扫登录")
                 case .scanned:
                     Text("等待手机确认…")
                 case .expired:
@@ -174,7 +174,7 @@ struct LoginSheet: View {
             .foregroundStyle(.secondary)
 
             #if os(iOS)
-            Text("只有一台设备？截图二维码，到网易云音乐 App 的扫一扫里选择相册识别，然后回到这里即可")
+            Text("只有一台设备？截图二维码，到官方 App 的扫一扫里选择相册识别，然后回到这里即可")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -208,18 +208,19 @@ struct LoginSheet: View {
                 if let existingKey {
                     key = existingKey
                 } else {
-                    key = try await NeteaseAPI.qrKey()
+                    key = try await MusicAPI.qrKey()
                     unikey = key
-                    qrImage = Self.generateQR(from: NeteaseAPI.qrLoginURL(unikey: key))
+                    guard let loginURL = MusicAPI.qrLoginURL(unikey: key) else { throw MusicAPIError.notConfigured }
+                    qrImage = Self.generateQR(from: loginURL)
                     phase = .waiting
                 }
 
                 var consecutiveErrors = 0
                 while !Task.isCancelled {
                     try await Task.sleep(for: .seconds(1.2))
-                    let check: NeteaseAPI.QRCheckResponse
+                    let check: MusicAPI.QRCheckResponse
                     do {
-                        check = try await NeteaseAPI.qrCheck(unikey: key)
+                        check = try await MusicAPI.qrCheck(unikey: key)
                         consecutiveErrors = 0
                     } catch {
                         consecutiveErrors += 1
@@ -260,7 +261,7 @@ struct LoginSheet: View {
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
-                Text("可能被网易云风控拦截而不可用，推荐使用扫码登录")
+                Text("可能被风控拦截而不可用，推荐使用扫码登录")
                     .font(.system(size: 11.5))
                     .multilineTextAlignment(.leading)
             }
@@ -351,7 +352,7 @@ struct LoginSheet: View {
         Task {
             defer { smsSending = false }
             do {
-                try await NeteaseAPI.sendSMSCode(phone: phone)
+                try await MusicAPI.sendSMSCode(phone: phone)
                 smsMessage = String(localized: "验证码已发送")
                 smsCooldown = 60
                 cooldownTask?.cancel()
@@ -373,7 +374,7 @@ struct LoginSheet: View {
         Task {
             defer { smsLoggingIn = false }
             do {
-                try await NeteaseAPI.loginCellphone(phone: phone, captcha: code)
+                try await MusicAPI.loginCellphone(phone: phone, captcha: code)
                 pollTask?.cancel()
                 await account.bootstrap()
                 ToastCenter.shared.show(String(localized: "欢迎回来，\(account.profile?.nickname ?? "")"))

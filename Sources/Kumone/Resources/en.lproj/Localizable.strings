@@ -14,7 +14,7 @@
 "收藏的歌单" = "Saved Playlists";
 "黑胶 VIP" = "VIP";
 "退出登录" = "Sign Out";
-"登录网易云音乐" = "Sign in to NetEase Cloud Music";
+"登录账号" = "Sign In";
 "登录" = "Sign In";
 
 /* Playback menu & player bar */
@@ -152,7 +152,7 @@
 "不喜欢，换一首" = "Trash and skip";
 "根据你的口味漫游好音乐" = "Roam great music picked for your taste";
 "登录后开启私人漫游" = "Sign in to start Personal FM";
-"网易云会根据你的听歌口味推荐音乐" = "NetEase recommends music based on your listening taste";
+"根据你的听歌口味推荐音乐" = "Recommendations based on your listening taste";
 
 /* Daily recs */
 "暂无每日推荐" = "No daily recommendations yet";
@@ -178,7 +178,7 @@
 "暂无播放记录" = "No listening history yet";
 "%lld 次" = "%lld plays";
 "云盘还没有歌曲" = "No songs in your cloud disk";
-"在网易云音乐客户端上传的歌曲会出现在这里" = "Songs uploaded from the NetEase Cloud Music client appear here";
+"在官方客户端上传的歌曲会出现在这里" = "Songs uploaded from the official client appear here";
 "已使用 %@ GB / %@ GB" = "%@ GB used of %@ GB";
 
 /* Lyrics panel */
@@ -190,13 +190,13 @@
 "暂无歌词" = "No lyrics";
 
 /* Login */
-"使用网易云音乐 App 扫码登录" = "Scan with the NetEase Cloud Music app to sign in";
+"使用官方 App 扫码登录" = "Scan with the official app to sign in";
 "二维码已失效" = "QR code expired";
 "刷新" = "Refresh";
 "已扫码" = "Scanned";
 "%@，请在手机上确认" = "%@, confirm on your phone";
 "正在获取二维码…" = "Fetching QR code…";
-"打开网易云音乐 App，扫一扫登录" = "Open the NetEase Cloud Music app and scan to sign in";
+"打开官方 App，扫一扫登录" = "Open the official app and scan to sign in";
 "等待手机确认…" = "Waiting for confirmation…";
 "二维码已失效，请刷新" = "QR code expired — refresh to retry";
 "登录成功！" = "Signed in!";
@@ -237,7 +237,7 @@
 "关闭" = "Off";
 "罗马音" = "Romaji";
 "汉字读音" = "Furigana";
-"罗马音在歌词上方另起一行，汉字读音把假名标在汉字正上方；缺少官方罗马音时自动生成读音" = "Romaji goes on its own line above the lyric; furigana sits directly over the kanji. Readings are generated on device when NetEase ships no official romaji";
+"罗马音在歌词上方另起一行，汉字读音把假名标在汉字正上方；缺少官方罗马音时自动生成读音" = "Romaji goes on its own line above the lyric; furigana sits directly over the kanji. Readings are generated on device when no official romaji is provided";
 "桌面歌词" = "Desktop Lyrics";
 "主界面环境色" = "Main Window Ambient Color";
 "背景色强度" = "Background Color Intensity";
@@ -258,7 +258,6 @@
 "关闭后启动不再自动弹出更新提示，仍可手动检查更新" = "When disabled, update prompts won't appear on launch. You can still check for updates manually";
 "装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）" = "With TrollStore installed, updates can be installed directly in the app. Otherwise, download the IPA and reinstall with a sideloading tool (your sign-in and settings are preserved)";
 "关于" = "About";
-"网易云音乐第三方客户端 · 数据来自网易云音乐" = "Third-party NetEase Cloud Music client · Data from NetEase Cloud Music";
 "计算中…" = "Calculating…";
 "0 字节" = "Zero bytes";
 "缓存已清除" = "Cache cleared";
@@ -304,7 +303,7 @@
 "获取验证码" = "Send Code";
 "验证码已发送" = "Code sent";
 "登录失败，请重试" = "Sign-in failed — please try again";
-"只有一台设备？截图二维码，到网易云音乐 App 的扫一扫里选择相册识别，然后回到这里即可" = "Only one device? Screenshot the QR code, pick it from your photo library in the NetEase Cloud Music app’s scanner, then come back here";
+"只有一台设备？截图二维码，到官方 App 的扫一扫里选择相册识别，然后回到这里即可" = "Only one device? Screenshot the QR code, pick it from your photo library in the official app’s scanner, then come back here";
 
 /* iOS updates */
 "检查更新" = "Check for Updates";
@@ -327,7 +326,7 @@
 "完成" = "Done";
 "检测到 TrollStore：可在应用内下载并自动安装新版本" = "TrollStore detected: new versions download and install in-app";
 "未检测到 TrollStore：检查更新会打开发布页，需用侧载工具重新安装（登录状态与设置保留）" = "No TrollStore: Check for Updates opens the release page; reinstall with your sideloading tool (sign-in and settings are kept)";
-"可能被网易云风控拦截而不可用，推荐使用扫码登录" = "May be blocked by NetEase risk control and unavailable — QR sign-in is recommended";
+"可能被风控拦截而不可用，推荐使用扫码登录" = "May be blocked by risk control and unavailable — QR sign-in is recommended";
 
 /* Output device menu (macOS) */
 "系统默认" = "System Default";
@@ -542,10 +541,16 @@
 "等待 iCloud 下载" = "Waiting for iCloud download";
 "同步数据损坏" = "Sync data is damaged";
 "同步数据需要更新版本的 Kumone" = "Sync data requires a newer version of Kumone";
-"接续需要登录同一网易云账号" = "Sign in to the same NetEase account to continue playback";
+"接续需要登录同一账号" = "Sign in to the same account to continue playback";
 "iCloud 账号已更改" = "iCloud account changed";
 "在菜单栏显示" = "Show in Menu Bar";
 "暂无播放" = "Nothing Playing";
 "打开 Kumone" = "Open Kumone";
 "设置…" = "Settings…";
 "退出 Kumone" = "Quit Kumone";
+
+"开始之前" = "Before You Start";
+"先做两道算术题，答对才能开始使用。" = "Two sums first. Get both right to start.";
+"开始使用" = "Get Started";
+"请先完成首次使用的设置" = "Finish first-launch setup first";
+"请先登录账号" = "Sign in first";

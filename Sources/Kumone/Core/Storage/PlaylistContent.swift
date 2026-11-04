@@ -22,16 +22,16 @@ final class PlaylistContent: ObservableObject {
     private var recommendationReplacements: [Int: Track] = [:]
     private var removedTrackIDs: Set<Int> = []
     private var loadGeneration = 0
-    private let detailLoader: (Int) async throws -> NeteaseAPI.PlaylistDetailResponse
-    private let tracksLoader: ([Int]) async throws -> NeteaseAPI.SongDetailResponse
+    private let detailLoader: (Int) async throws -> MusicAPI.PlaylistDetailResponse
+    private let tracksLoader: ([Int]) async throws -> MusicAPI.SongDetailResponse
     private let snapshots: PlaylistSnapshotStore?
     private let accountScope: @MainActor () -> String?
 
     init(playlistID: Int,
          snapshots: PlaylistSnapshotStore? = .shared,
          accountScope: @escaping @MainActor () -> String? = { AccountStore.shared.offlineScope },
-         detailLoader: @escaping (Int) async throws -> NeteaseAPI.PlaylistDetailResponse = { try await NeteaseAPI.playlistDetail(id: $0) },
-         tracksLoader: @escaping ([Int]) async throws -> NeteaseAPI.SongDetailResponse = { try await NeteaseAPI.songDetails(ids: $0) }) {
+         detailLoader: @escaping (Int) async throws -> MusicAPI.PlaylistDetailResponse = { try await MusicAPI.playlistDetail(id: $0) },
+         tracksLoader: @escaping ([Int]) async throws -> MusicAPI.SongDetailResponse = { try await MusicAPI.songDetails(ids: $0) }) {
         self.playlistID = playlistID
         self.detailLoader = detailLoader
         self.tracksLoader = tracksLoader

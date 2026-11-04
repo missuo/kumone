@@ -14,7 +14,7 @@ actor EngineAudioCache {
     struct Key: Hashable, Sendable {
         let trackID: Int
         let level: String          // served quality level, e.g. "exhigh"
-        let source: String         // "netease" or "unblock:<source>"
+        let source: String         // `Upstream.tag` or "unblock:<source>"
         let fileExtension: String  // "mp3"/"flac"/"m4a", inferred by the caller
     }
 
@@ -209,21 +209,21 @@ actor EngineAudioCache {
 
     /// Downloads `remote`, starting on its CDN twin when its host failed
     /// recently, and retrying once on the twin when the host cannot be
-    /// reached (see `NeteaseCDNHost`).
+    /// reached (see `CDNHost`).
     private static func fetch(_ remote: URL) async throws -> (URL, URLResponse) {
-        let first = NeteaseCDNHost.preferred(for: remote)
+        let first = CDNHost.preferred(for: remote)
         do {
             let result = try await URLSession.shared.download(from: first)
-            NeteaseCDNHost.markReachable(first)
+            CDNHost.markReachable(first)
             return result
         } catch {
-            guard let twin = NeteaseCDNHost.failover(from: first, after: error) else { throw error }
+            guard let twin = CDNHost.failover(from: first, after: error) else { throw error }
             do {
                 let result = try await URLSession.shared.download(from: twin)
-                NeteaseCDNHost.markReachable(twin)
+                CDNHost.markReachable(twin)
                 return result
             } catch {
-                _ = NeteaseCDNHost.failover(from: twin, after: error)
+                _ = CDNHost.failover(from: twin, after: error)
                 throw error
             }
         }

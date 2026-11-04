@@ -2,7 +2,7 @@ import Foundation
 
 /// Romaji support for Japanese lyrics.
 ///
-/// Netease ships a hand-checked `romalrc` for popular tracks only, so anything
+/// The service ships a hand-checked `romalrc` for popular tracks only, so anything
 /// off the beaten path falls back to the system tokenizer's Latin
 /// transcription — offline, dependency-free, and good enough for singing along
 /// (personal names and unusual readings can still be wrong).

@@ -93,7 +93,7 @@ struct RecentsView: View {
             return
         }
         isLoading = records.isEmpty
-        records = (try? await NeteaseAPI.playRecords(uid: uid, week: week)) ?? []
+        records = (try? await MusicAPI.playRecords(uid: uid, week: week)) ?? []
         isLoading = false
     }
 }
@@ -139,7 +139,7 @@ struct CloudView: View {
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else if items.isEmpty {
                     EmptyStateView(icon: "icloud", title: "云盘还没有歌曲",
-                                   subtitle: "在网易云音乐客户端上传的歌曲会出现在这里")
+                                   subtitle: "在官方客户端上传的歌曲会出现在这里")
                         .frame(minHeight: 300)
                 }
             }
@@ -163,7 +163,7 @@ struct CloudView: View {
 
     private func load() async {
         isLoading = items.isEmpty
-        if let response = try? await NeteaseAPI.cloudSongs() {
+        if let response = try? await MusicAPI.cloudSongs() {
             items = response.data ?? []
             if let size = response.size, let max = response.maxSize, max > 0 {
                 let used = String(format: "%.1f", Double(size) / 1_073_741_824)

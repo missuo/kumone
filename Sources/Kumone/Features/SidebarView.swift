@@ -97,7 +97,7 @@ struct SidebarView: View {
                 guard !name.isEmpty else { return }
                 Task {
                     do {
-                        try await NeteaseAPI.createPlaylist(name: name, isPrivate: false)
+                        try await MusicAPI.createPlaylist(name: name, isPrivate: false)
                         await account.refreshLibrary()
                         ToastCenter.shared.show(String(localized: "歌单已创建"))
                     } catch {
@@ -125,7 +125,7 @@ struct SidebarView: View {
         .contextMenu {
             Button("播放") {
                 Task {
-                    if let detail = try? await NeteaseAPI.playlistDetail(id: playlist.id) {
+                    if let detail = try? await MusicAPI.playlistDetail(id: playlist.id) {
                         await playPlaylist(detail)
                     }
                 }
@@ -134,14 +134,14 @@ struct SidebarView: View {
             if playlist.creator?.userId == account.profile?.userId {
                 Button("删除歌单", role: .destructive) {
                     Task {
-                        try? await NeteaseAPI.deletePlaylist(id: playlist.id)
+                        try? await MusicAPI.deletePlaylist(id: playlist.id)
                         await account.refreshLibrary()
                     }
                 }
             } else {
                 Button("取消收藏") {
                     Task {
-                        try? await NeteaseAPI.subscribePlaylist(id: playlist.id, subscribe: false)
+                        try? await MusicAPI.subscribePlaylist(id: playlist.id, subscribe: false)
                         await account.refreshLibrary()
                     }
                 }
@@ -149,11 +149,11 @@ struct SidebarView: View {
         }
     }
 
-    private func playPlaylist(_ detail: NeteaseAPI.PlaylistDetailResponse) async {
+    private func playPlaylist(_ detail: MusicAPI.PlaylistDetailResponse) async {
         var tracks = detail.playlist.tracks
         if tracks.count < detail.playlist.trackCount {
             let ids = detail.playlist.trackIds.map(\.id)
-            if let full = try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(1000))) {
+            if let full = try? await MusicAPI.songDetails(ids: Array(ids.prefix(1000))) {
                 tracks = full.songs
             }
         }
@@ -232,7 +232,7 @@ struct SidebarView: View {
                         Image(systemName: "person.crop.circle")
                             .font(.system(size: 18))
                             .foregroundStyle(.secondary)
-                        Text("登录网易云音乐")
+                        Text("登录账号")
                             .font(.system(size: 12.5, weight: .medium))
                         Spacer()
                     }

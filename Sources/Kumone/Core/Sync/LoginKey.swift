@@ -5,7 +5,7 @@ import Security
 
 /// The folder holds only a salt and a verifier. The key is derived from the
 /// user's sync passphrase and kept in each device's own Keychain, so reading
-/// the sync folder alone never yields a usable NetEase session.
+/// the sync folder alone never yields a usable session.
 struct LoginKeyFile: Codable, Equatable {
     let schemaVersion: Int
     let id: UUID

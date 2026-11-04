@@ -51,13 +51,13 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: root) }
 
         await store.storeAnalysis(makeAnalysis(bpm: 128), forTrackID: 42,
-                                  level: "standard", source: "netease")
+                                  level: "standard", source: Upstream.tag)
 
         // By ID, and by a playback key whose level and container are nothing
         // like the ones the analysis was computed from.
         #expect(await store.loadAnalysis(forTrackID: 42)?.bpm == 128)
         let key = EngineAudioCache.Key(trackID: 42, level: "hires",
-                                 source: "netease", fileExtension: "flac")
+                                 source: Upstream.tag, fileExtension: "flac")
         #expect(await store.loadAnalysis(for: key)?.bpm == 128)
         #expect(await store.loadAnalysis(forTrackID: 43) == nil)
 
@@ -72,7 +72,7 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: root) }
 
         await store.storeAnalysis(makeAnalysis(version: TrackAnalysis.currentVersion - 1),
-                                  forTrackID: 7, level: "exhigh", source: "netease")
+                                  forTrackID: 7, level: "exhigh", source: Upstream.tag)
 
         #expect(await store.loadAnalysis(forTrackID: 7) == nil)
         #expect(await store.analyses(forTrackIDs: [7]).isEmpty)
@@ -80,7 +80,7 @@ import Foundation
         // And it is not a tombstone: a current-version analysis overwrites it,
         // even from cheaper audio than the stale record claimed.
         await store.storeAnalysis(makeAnalysis(bpm: 90), forTrackID: 7,
-                                  level: "standard", source: "netease")
+                                  level: "standard", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 7)?.bpm == 90)
     }
 
@@ -93,27 +93,27 @@ import Foundation
 
         // Upgrade: a playback-quality analysis replaces the scoring one.
         await store.storeAnalysis(makeAnalysis(bpm: 100), forTrackID: 1,
-                                  level: "standard", source: "netease")
+                                  level: "standard", source: Upstream.tag)
         await store.storeAnalysis(makeAnalysis(bpm: 200), forTrackID: 1,
-                                  level: "lossless", source: "netease")
+                                  level: "lossless", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 1)?.bpm == 200)
 
         // Downgrade: the scoring pass arriving second changes nothing.
         await store.storeAnalysis(makeAnalysis(bpm: 100), forTrackID: 1,
-                                  level: "standard", source: "netease")
+                                  level: "standard", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 1)?.bpm == 200)
 
         // Same level re-analyzed: the newer result lands (no reason to keep
         // the old bytes, and this is how a re-analysis at the same quality
         // takes effect).
         await store.storeAnalysis(makeAnalysis(bpm: 150), forTrackID: 1,
-                                  level: "lossless", source: "netease")
+                                  level: "lossless", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 1)?.bpm == 150)
 
         // An unknown level sorts above every known one rather than being
         // silently preferred against.
         await store.storeAnalysis(makeAnalysis(bpm: 175), forTrackID: 1,
-                                  level: "jymaster", source: "netease")
+                                  level: "jymaster", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 1)?.bpm == 175)
     }
 
@@ -125,14 +125,14 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: root) }
 
         await store.storeAnalysis(makeAnalysis(), forTrackID: 3,
-                                  level: "exhigh", source: "netease")
+                                  level: "exhigh", source: Upstream.tag)
         #expect(await store.totalUsageBytes() > 0)
 
         await store.clear()
         #expect(await store.loadAnalysis(forTrackID: 3) == nil)
 
         await store.storeAnalysis(makeAnalysis(bpm: 95), forTrackID: 3,
-                                  level: "standard", source: "netease")
+                                  level: "standard", source: Upstream.tag)
         #expect(await store.loadAnalysis(forTrackID: 3)?.bpm == 95)
     }
 }
