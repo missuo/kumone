@@ -34,6 +34,8 @@ private final class CookieLoginProtocol: URLProtocol, @unchecked Sendable {
 
 @Suite("Cookie login", .serialized)
 struct CookieLoginTests {
+    init() { TestUpstream.configure() }
+
     private func candidate(directory: URL? = nil) -> MusicClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CookieLoginProtocol.self]
