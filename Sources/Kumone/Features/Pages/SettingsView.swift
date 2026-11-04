@@ -200,35 +200,38 @@ struct SettingsView: View {
                     Text("关闭后启动不再自动弹出更新提示，仍可手动检查更新")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    #if os(iOS)
+                    if DistributionChannel.current == .sideload {
+                        Button {
+                            IOSUpdater.shared.check(interactive: true)
+                        } label: {
+                            Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    #endif
                 }
             }
 
-            Section("关于") {
-                LabeledContent("Kumone", value: appVersion)
-                #if os(iOS)
-                switch DistributionChannel.current {
-                case .sideload:
-                    Button {
-                        IOSUpdater.shared.check(interactive: true)
-                    } label: {
-                        Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
-                        .font(.caption)
+            Section {
+                VStack(spacing: 2) {
+                    Text("Kumone")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
-                case .testFlight:
-                    Text("TestFlight 版本，新版本会通过 TestFlight App 推送")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .appStore:
-                    Text("通过 App Store 更新")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(appVersionAndBuild)
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
                 }
-                #endif
-                Text("网易云音乐第三方客户端 · 数据来自网易云音乐")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
+                .padding(.bottom, 32)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(appVersionAccessibilityLabel)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
         }
         .formStyle(.grouped)
@@ -274,6 +277,23 @@ struct SettingsView: View {
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    private var appBuild: String? {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+    }
+
+    /// "0.1.0 (2)": version, then build in brackets, both read from the bundle.
+    private var appVersionAndBuild: String {
+        guard let build = appBuild, !build.isEmpty else { return appVersion }
+        return "\(appVersion) (\(build))"
+    }
+
+    private var appVersionAccessibilityLabel: String {
+        if let build = appBuild, !build.isEmpty {
+            return "Kumone, version \(appVersion), build \(build)"
+        }
+        return "Kumone, version \(appVersion)"
     }
 
 }
