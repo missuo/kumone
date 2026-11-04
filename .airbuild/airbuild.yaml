@@ -1,0 +1,21 @@
+version: 3
+build:
+  script: |
+    command -v xcodegen >/dev/null || brew install xcodegen
+    # The Swift package is identified by its folder name (kumone); the checkout is named project.
+    REAL="$PWD"
+    LINK="$(dirname "$REAL")/kumone"
+    rm -rf "$LINK"; mkdir "$LINK"; tar -C "$REAL" --exclude=.airbuild --exclude=.git -cf - . | tar -C "$LINK" -xf -
+    # CarPlay audio is approved for sb.moe.kumone-ios: generate the CarPlay entitlement + scene overlay.
+    (cd "$LINK" && Scripts/configure-ios.sh --carplay)
+    cd "$LINK/ios" && xcodegen generate
+    rm -rf -- "$REAL/.airbuild/artifacts/Kumone.xcarchive"
+    airbuild-xcode archive \
+      -project "$LINK/ios/KumoneIOS.xcodeproj" \
+      -scheme KumoneIOS \
+      -archivePath "$REAL/.airbuild/artifacts/Kumone.xcarchive" \
+      -configuration TestFlight -skipPackagePluginValidation
+  artifact:
+    path: .airbuild/artifacts/Kumone.xcarchive
+signing:
+  bundles: [sb.moe.kumone-ios]
