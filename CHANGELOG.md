@@ -7,6 +7,20 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.28 - 2026-11-04
+
+### Improved
+
+- **macOS**: the bundle identifier is now `sb.moe.kumone`. After updating, settings and caches start fresh, the first-launch check appears once more, the iCloud sync passphrase has to be entered again and system permissions (such as notifications) need granting again; sign-in and offline downloads carry over.
+- **iOS**: the bundle identifier is now `sb.moe.kumone-ios`. AltStore and other sideloading tools install it as a separate app; once it is set up, the old one can be deleted.
+
+---
+
+### 改进
+
+- **macOS**：bundle ID 改为 `sb.moe.kumone`。更新后设置和缓存会重置，需要再做一次首次启动验证、重新输入 iCloud 同步口令，并重新授予通知等系统权限；登录状态和离线下载保留。
+- **iOS**：bundle ID 改为 `sb.moe.kumone-ios`。AltStore 等侧载工具会把它装成一个新的 App，设置好之后可以删除旧版。
+
 ## 0.3.27 - 2026-11-04
 
 ### Added
