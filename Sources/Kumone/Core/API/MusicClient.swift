@@ -35,7 +35,7 @@ final class MusicClient: @unchecked Sendable {
         return MusicClient()
     }()
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "api")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "api")
     private static let webUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 

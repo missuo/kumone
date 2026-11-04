@@ -13,7 +13,7 @@ actor SyncRepository {
     private var connectionID: UUID?
     private var conflicts: [String: [NSFileVersion]] = [:]
     private var presenter: SyncDirectoryPresenter?
-    private let log = Logger(subsystem: "im.missuo.kumone", category: "sync-repository")
+    private let log = Logger(subsystem: "sb.moe.kumone", category: "sync-repository")
     private struct FileStamp: Equatable {
         let identity: any NSObjectProtocol
         let generation: any NSObjectProtocol

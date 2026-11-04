@@ -238,10 +238,10 @@ final class CachingAudioResourceLoader: NSObject {
         self.assetURL = assetURL
 
         let delegateQueue = OperationQueue()
-        delegateQueue.name = "im.missuo.Kumone.CachingAudioResourceLoader"
+        delegateQueue.name = "sb.moe.kumone.CachingAudioResourceLoader"
         delegateQueue.maxConcurrentOperationCount = 1
         self.delegateQueue = delegateQueue
-        resourceLoaderQueue = DispatchQueue(label: "im.missuo.Kumone.CachingAudioResourceLoader.Asset")
+        resourceLoaderQueue = DispatchQueue(label: "sb.moe.kumone.CachingAudioResourceLoader.Asset")
 
         super.init()
 

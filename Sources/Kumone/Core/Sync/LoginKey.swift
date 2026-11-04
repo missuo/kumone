@@ -107,7 +107,7 @@ struct LoginKeyStore {
     let save: (SymmetricKey, UUID) throws -> Void
 
     static var keychain: Self {
-        let service = "im.missuo.kumone.sync-login-key"
+        let service = "sb.moe.kumone.sync-login-key"
         return Self(
             load: { id in
                 let query: [String: Any] = [

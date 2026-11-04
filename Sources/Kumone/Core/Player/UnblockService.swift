@@ -4,7 +4,7 @@ import os.log
 /// Resolves gray tracks from the direct pyncmd source, then built-in search
 /// providers when pyncmd cannot serve the original song ID.
 enum UnblockService {
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "audio-source")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "audio-source")
     private static let httpClient = AudioSourceClient.shared
     private static let fallbackProviders: [any AudioSourceProvider] = [
         KugouAudioSourceProvider(),

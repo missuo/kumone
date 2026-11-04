@@ -13,7 +13,7 @@ final class StemMetalResources: @unchecked Sendable {
     let archive: URL?
     private let directory: URL
     private let version: String?
-    private let queue = DispatchQueue(label: "im.missuo.kumone.stem-resources", qos: .utility)
+    private let queue = DispatchQueue(label: "sb.moe.kumone.stem-resources", qos: .utility)
     private var loadedBundle: Bundle?
 
     init(archive: URL?, directory: URL, version: String?) {

@@ -11,7 +11,7 @@ cd "$ROOT"
 
 CONF="${1:-debug}"
 APP_NAME="Kumone"
-BUNDLE_ID="im.missuo.Kumone"
+BUNDLE_ID="sb.moe.kumone"
 # Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"

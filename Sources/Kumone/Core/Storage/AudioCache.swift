@@ -129,7 +129,7 @@ actor AudioCache {
         self.fileManager = fileManager
         self.cacheDirectory = cacheDirectory ?? fileManager.urls(
             for: .cachesDirectory, in: .userDomainMask
-        )[0].appendingPathComponent("im.missuo.Kumone/audio", isDirectory: true)
+        )[0].appendingPathComponent("sb.moe.kumone/audio", isDirectory: true)
         partialDirectory = self.cacheDirectory.appendingPathComponent("partial", isDirectory: true)
     }
 

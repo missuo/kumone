@@ -630,8 +630,8 @@
 
 ### Improved / 改进
 
-- The iOS bundle identifier is now `sb.moe.kumone`, distinct from the macOS app (`im.missuo.Kumone` stays unchanged so Sparkle updates keep working)
-- iOS 的 bundle ID 改为 `sb.moe.kumone`，与 macOS 区分（macOS 保持 `im.missuo.Kumone` 不变，确保 Sparkle 升级不受影响）
+- The iOS bundle identifier is now `sb.moe.kumone`, distinct from the macOS app (whose identifier stays unchanged so Sparkle updates keep working)
+- iOS 的 bundle ID 改为 `sb.moe.kumone`，与 macOS 区分（macOS 的 bundle ID 保持不变，确保 Sparkle 升级不受影响）
 
 ## 0.2.1 - 2026-08-22
 

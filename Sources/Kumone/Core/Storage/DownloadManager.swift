@@ -1056,7 +1056,7 @@ final class DownloadManager: ObservableObject {
             let value = DownloadNetworkState(connected: path.status == .satisfied, expensive: path.isExpensive, constrained: path.isConstrained)
             Task { @MainActor in self?.setNetwork(value) }
         }
-        monitor.start(queue: DispatchQueue(label: "im.missuo.Kumone.download-network"))
+        monitor.start(queue: DispatchQueue(label: "sb.moe.kumone.download-network"))
         self.monitor = monitor
     }
 

@@ -118,7 +118,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
 
 @MainActor
 final class BackgroundDownloadTransport: DownloadTransport {
-    nonisolated static let identifier = "im.missuo.Kumone.offline-downloads.v1"
+    nonisolated static let identifier = "sb.moe.kumone.offline-downloads.v1"
     let events: AsyncStream<DownloadTransportEvent>
     let inbox: URL
     private let session: URLSession

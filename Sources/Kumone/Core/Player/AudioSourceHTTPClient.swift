@@ -20,7 +20,7 @@ enum AudioSourceError: LocalizedError {
 struct AudioSourceClient {
     static let shared = AudioSourceClient()
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "audio-source")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "audio-source")
     private let session: URLSession
 
     init(session: URLSession? = nil) {

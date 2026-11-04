@@ -18,7 +18,7 @@ import os
 /// answered. ``preferred(for:now:)`` then steers new requests.
 enum CDNHost {
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "audio-source")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "audio-source")
 
     /// How long a host that failed to connect is skipped in favour of its
     /// twin. Short enough that moving to a network where it works again

@@ -16,7 +16,7 @@ enum KumonePaths {
         if isOfflineUITest { return applicationSupport.appendingPathComponent("images", isDirectory: true) }
         #endif
         return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("im.missuo.Kumone/images", isDirectory: true)
+            .appendingPathComponent("sb.moe.kumone/images", isDirectory: true)
     }
 
     static var isOfflineUITest: Bool {
@@ -30,7 +30,7 @@ enum KumonePaths {
 
     static var networkCache: URL {
         if isOfflineUITest { return applicationSupport.appendingPathComponent("network-cache") }
-        let identifier = Bundle.main.bundleIdentifier ?? "im.missuo.Kumone"
+        let identifier = Bundle.main.bundleIdentifier ?? "sb.moe.kumone"
         return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(identifier, isDirectory: true)
     }
