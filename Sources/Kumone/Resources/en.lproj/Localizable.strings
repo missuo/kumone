@@ -549,3 +549,10 @@
 "打开 Kumone" = "Open Kumone";
 "设置…" = "Settings…";
 "退出 Kumone" = "Quit Kumone";
+
+/* Cookie login */
+"Cookie 登录" = "Cookie Login";
+"Cookie 内容" = "Cookie contents";
+"在浏览器登录网易云音乐后，粘贴包含 MUSIC_U 的 Cookie；可同时包含 __csrf。请勿分享 Cookie。" = "Sign in to NetEase Cloud Music in a browser, then paste a Cookie containing MUSIC_U and optionally __csrf. Keep your Cookie private.";
+"请输入有效的 Cookie，包含非空的 MUSIC_U，可选 __csrf" = "Enter a valid Cookie with a nonempty MUSIC_U and optionally __csrf.";
+"Cookie 登录验证失败，请检查 Cookie 或稍后重试" = "Cookie login could not be verified. Check your Cookie or try again later.";

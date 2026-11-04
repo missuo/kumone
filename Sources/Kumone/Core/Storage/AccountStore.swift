@@ -173,6 +173,7 @@ final class AccountStore: ObservableObject {
     /// leave the current device's cookies, profile and library intact.
     func importLogin(accountID: Int, cookies: [String: String], authorization: () -> Bool) async throws {
         guard accountID > 0, cookies["MUSIC_U"]?.isEmpty == false else { throw SyncError.invalidRecord }
+        try Task.checkCancellation()
         guard authorization() else { throw CancellationError() }
         let generation = bootstrapGeneration
         let binding = NeteaseClient.shared.authenticationFingerprint
@@ -180,13 +181,29 @@ final class AccountStore: ObservableObject {
         candidate.setCookies(cookies)
         guard let verified = try await NeteaseAPI.userAccount(using: candidate),
               verified.userId == accountID else { throw NeteaseAPIError.needLogin }
+        try installLogin(.init(profile: verified, cookies: candidate.authenticationCookies()),
+                         generation: generation, binding: binding, authorization: authorization)
+    }
+
+    func importCookieLogin(_ header: String, authorization: () -> Bool) async throws {
+        try Task.checkCancellation()
+        guard authorization() else { throw CancellationError() }
+        let generation = bootstrapGeneration
+        let binding = NeteaseClient.shared.authenticationFingerprint
+        let verified = try await NeteaseAPI.loginWithCookie(header)
+        try installLogin(verified, generation: generation, binding: binding, authorization: authorization)
+    }
+
+    private func installLogin(_ verified: NeteaseAPI.VerifiedLogin, generation: Int, binding: String?,
+                              authorization: () -> Bool) throws {
+        try Task.checkCancellation()
         guard authorization(), generation == bootstrapGeneration,
               binding == NeteaseClient.shared.authenticationFingerprint else { throw CancellationError() }
-        try NeteaseClient.shared.replaceAuthentication(with: candidate.authenticationCookies())
+        try NeteaseClient.shared.replaceAuthentication(with: verified.cookies)
         bootstrapGeneration += 1
         PlayerService.shared.suspendForAccountChange()
         UserDefaults.standard.removeObject(forKey: "auth.lastCookieRefresh")
-        applyProfile(verified, binding: NeteaseClient.shared.authenticationFingerprint)
+        applyProfile(verified.profile, binding: NeteaseClient.shared.authenticationFingerprint)
         saveSnapshot()
     }
 
