@@ -8,7 +8,7 @@ struct StorageUsageTests {
 
     private func addDownload(_ store: OfflineStore, id: Int, scope: String = "account-a") async throws -> OfflineAudioDescriptor {
         let fixture = try OfflineAudioFixture()
-        let identity = OfflineAudioIdentity(accountScope: scope, trackID: id, source: "netease", quality: "exhigh", format: .mp3,
+        let identity = OfflineAudioIdentity(accountScope: scope, trackID: id, source: Upstream.tag, quality: "exhigh", format: .mp3,
                                             contentMD5: fixture.descriptor.identity.contentMD5)
         let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: fixture.descriptor.byteCount, duration: 3)
         try await store.importFixture(fixture.data, descriptor: descriptor)

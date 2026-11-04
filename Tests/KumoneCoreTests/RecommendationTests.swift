@@ -6,7 +6,7 @@ import Testing
 struct RecommendationTests {
     @Test func decodesReplacementTrack() throws {
         let response = try JSONDecoder().decode(
-            NeteaseAPI.RecommendDislikeResponse.self,
+            MusicAPI.RecommendDislikeResponse.self,
             from: Data("""
             {"data":{"id":2,"name":"Replacement","ar":[],"al":{"id":1,"name":"Album"},"dt":1}}
             """.utf8)
@@ -19,7 +19,7 @@ struct RecommendationTests {
     @Test func rejectsIncompleteReplacementTrack() {
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(
-                NeteaseAPI.RecommendDislikeResponse.self,
+                MusicAPI.RecommendDislikeResponse.self,
                 from: Data("""
                 {"data":{"id":0,"name":" ","ar":[],"al":{"id":1,"name":"Album"},"dt":1}}
                 """.utf8)

@@ -2,11 +2,13 @@ import Foundation
 import CryptoKit
 import os.log
 
-enum NeteaseAPIError: LocalizedError {
+enum MusicAPIError: LocalizedError {
     case http(Int)
     case business(code: Int, message: String?)
     case needLogin
     case decoding(String)
+    /// The first-launch questions have not been answered, so there is no host.
+    case notConfigured
 
     var errorDescription: String? {
         switch self {
@@ -14,36 +16,37 @@ enum NeteaseAPIError: LocalizedError {
         case .business(let code, let message): return message ?? String(localized: "接口错误 (\(code))")
         case .needLogin: return String(localized: "需要登录")
         case .decoding: return String(localized: "数据加载失败，请稍后重试")
+        case .notConfigured: return String(localized: "请先完成首次使用的设置")
         }
     }
 }
 
-/// Transport layer for NetEase Cloud Music. Owns the cookie jar and performs
-/// eapi encrypted requests, and the few plain web API ones eapi refuses.
-final class NeteaseClient: @unchecked Sendable {
-    static let shared: NeteaseClient = {
+/// Transport layer. Owns the cookie jar and performs eapi encrypted requests,
+/// and the few plain web API ones eapi refuses. Hosts come from ``Upstream``.
+final class MusicClient: @unchecked Sendable {
+    static let shared: MusicClient = {
         #if DEBUG
         if KumonePaths.isOfflineUITest {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [OfflineUITestProtocol.self]
-            return NeteaseClient(configuration: configuration)
+            return MusicClient(configuration: configuration)
         }
         #endif
-        return NeteaseClient()
+        return MusicClient()
     }()
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "api")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "api")
     private static let webUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
-    // The desktop client the eapi requests speak as, as mygo-cloudmusic's do.
-    private static let eapiUserAgent = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
+    // The desktop client the eapi requests speak as.
+    private static let eapiUserAgent = "\(Upstream.clientName) 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
     private static let eapiAppVersion = "3.1.17.204416"
     private static let eapiOSVersion = "Microsoft-Windows-10-Professional-build-19045-64bit"
-    private static let eapiChannel = "netease"
+    private static let eapiChannel = Upstream.tag
 
     /// The device ID the eapi header carries, made once and kept beside the
-    /// cookies: NetEase trusts a device it has seen before, and a constant
+    /// cookies: the service trusts a device it has seen before, and a constant
     /// every install shares looks like no device at all. It is no secret, so
     /// it stays out of the keychain.
     static let deviceID: String = loadDeviceID(in: KumonePaths.applicationSupport)
@@ -150,7 +153,7 @@ final class NeteaseClient: @unchecked Sendable {
     /// Commit a verified sign-in durably before changing the live cookie jar.
     /// Disk failures leave the current authentication untouched.
     func replaceAuthentication(with authentication: [String: String]) throws {
-        guard let token = authentication["MUSIC_U"], !token.isEmpty else { throw NeteaseAPIError.needLogin }
+        guard let token = authentication["MUSIC_U"], !token.isEmpty else { throw MusicAPIError.needLogin }
         cookieWriteLock.lock(); defer { cookieWriteLock.unlock() }
         cookieLock.lock()
         var snapshot = cookies
@@ -229,31 +232,38 @@ final class NeteaseClient: @unchecked Sendable {
 
     // MARK: - Requests
 
-    /// POST to `https://music.163.com/api<path>` with a plain form, as a
-    /// browser. Only for what NetEase's risk control refuses through the eapi
+    /// POST to `https://<web host>/api<path>` with a plain form, as a
+    /// browser. Only for what the risk control refuses through the eapi
     /// with -460, 检测到您的网络环境存在风险: the phone-number login and
-    /// following an artist, as mygo-cloudmusic found for the latter.
+    /// following an artist.
     func api(_ path: String, _ form: [String: String] = [:]) async throws -> Data {
         let authentication = authenticationState
-        var request = URLRequest(url: URL(string: "https://music.163.com/api\(path)")!)
+        guard let host = Upstream.webHost, let url = URL(string: "https://\(host)/api\(path)") else {
+            throw MusicAPIError.notConfigured
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        request.setValue("https://\(host)/", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(cookieHeader(extra: [:]), forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
         return try await perform(request, authentication: authentication)
     }
 
-    /// POST to `https://interface.music.163.com/eapi<path>` with eapi encryption.
+    /// POST to `https://<interface host>/eapi<path>` with eapi encryption.
     /// The digest is computed over the corresponding `/api<path>` path.
     /// Sent as the desktop client from this install's device, header and
-    /// cookie alike, as mygo-cloudmusic sends it: NetEase's risk control
+    /// cookie alike: the risk control
     /// refuses some writes from a client it does not recognize, so requests
     /// go this way unless they are refused through it.
     func eapi(_ path: String, _ payload: [String: Any] = [:],
               cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true) async throws -> Data {
         let authentication = authenticationState
+        guard let webHost = Upstream.webHost, let interfaceHost = Upstream.interfaceHost,
+              let url = URL(string: "https://\(interfaceHost)/eapi\(path)") else {
+            throw MusicAPIError.notConfigured
+        }
         let apiPath = "/api" + path
         var body = payload
         let now = Date().timeIntervalSince1970
@@ -275,13 +285,12 @@ final class NeteaseClient: @unchecked Sendable {
         body["header"] = header
         body["e_r"] = false
         let json = try JSONSerialization.data(withJSONObject: body)
-        let form = NeteaseCrypto.eapi(apiPath: apiPath, payload: json)
+        let form = RequestCrypto.eapi(apiPath: apiPath, payload: json)
 
-        let url = URL(string: "https://interface.music.163.com/eapi\(path)")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(Self.eapiUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
+        request.setValue("https://\(webHost)", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(cookieHeader(extra: header, overrides: cookieOverrides), forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
@@ -296,7 +305,7 @@ final class NeteaseClient: @unchecked Sendable {
         guard anonymous || isCurrent(authentication) else { throw CancellationError() }
         let (data, response) = try await session.data(for: request)
         guard anonymous || isCurrent(authentication) else { throw CancellationError() }
-        guard let http = response as? HTTPURLResponse else { throw NeteaseAPIError.http(-1) }
+        guard let http = response as? HTTPURLResponse else { throw MusicAPIError.http(-1) }
         let refreshSucceeded = request.url?.path == "/eapi/login/token/refresh"
             && (200..<300).contains(http.statusCode)
             && (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["code"] as? Int == 200
@@ -308,7 +317,7 @@ final class NeteaseClient: @unchecked Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             Self.log.error("HTTP \(http.statusCode) for \(request.url?.path ?? "?")")
-            throw NeteaseAPIError.http(http.statusCode)
+            throw MusicAPIError.http(http.statusCode)
         }
         return data
     }
@@ -317,15 +326,15 @@ final class NeteaseClient: @unchecked Sendable {
     func decoded<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let code = obj["code"] as? Int, code != 200 {
-            if code == 301 { throw NeteaseAPIError.needLogin }
+            if code == 301 { throw MusicAPIError.needLogin }
             let message = (obj["message"] as? String) ?? (obj["msg"] as? String)
-            throw NeteaseAPIError.business(code: code, message: message)
+            throw MusicAPIError.business(code: code, message: message)
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             Self.log.error("Decoding \(String(describing: T.self)) failed: \(error)")
-            throw NeteaseAPIError.decoding(String(describing: error))
+            throw MusicAPIError.decoding(String(describing: error))
         }
     }
 

@@ -592,7 +592,7 @@ final class PlayerService: ObservableObject {
         guard isFMMode, let track = currentTrack else { return }
         Task {
             await fmAdvance()
-            try? await NeteaseAPI.fmTrash(id: track.id)
+            try? await MusicAPI.fmTrash(id: track.id)
         }
     }
 
@@ -603,7 +603,7 @@ final class PlayerService: ObservableObject {
         }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
-                if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
+                if let tracks = try? await MusicAPI.personalFM(), !tracks.isEmpty {
                     fmUpcoming = tracks
                     break
                 }
@@ -619,7 +619,7 @@ final class PlayerService: ObservableObject {
         pendingAutoAdvance = true
         startPlaying(track)
         if fmUpcoming.count < 1 {
-            if let more = try? await NeteaseAPI.personalFM() {
+            if let more = try? await MusicAPI.personalFM() {
                 fmUpcoming.append(contentsOf: more)
             }
         }
@@ -798,9 +798,9 @@ final class PlayerService: ObservableObject {
 
         var data: SongURLData?
         do {
-            data = try await NeteaseAPI.songURL(ids: [track.id], level: quality).first
+            data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
             if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+                data = try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
             }
         } catch {
             guard generation == resolveGeneration else { return }
@@ -827,7 +827,7 @@ final class PlayerService: ObservableObject {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
 
-        // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
+        // The service refused — try third-party sources (unblock-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
             if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
@@ -922,15 +922,15 @@ final class PlayerService: ObservableObject {
         generation: Int,
         resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
-        // Skip a CDN host that just failed to connect (see NeteaseCDNHost).
-        let remote = NeteaseCDNHost.preferred(for: url)
+        // Skip a CDN host that just failed to connect (see CDNHost).
+        let remote = CDNHost.preferred(for: url)
 
         var asset = AVURLAsset(url: remote)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
             let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
             guard generation == resolveGeneration else { return .superseded }
-            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .netease
+            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .origin
             do {
                 let loader = try CachingAudioResourceLoader(
                     remoteURL: remote,
@@ -1160,7 +1160,7 @@ final class PlayerService: ObservableObject {
         consecutiveFailures = 0
     }
 
-    /// A NetEase stream or a cached file failed. The song gets one reload,
+    /// An upstream stream or a cached file failed. The song gets one reload,
     /// resuming where it stopped: on the CDN twin when the host could not be
     /// reached (the caching loader already swaps hosts itself, so this covers
     /// streams that bypass it), otherwise from a freshly resolved URL, since a
@@ -1203,7 +1203,7 @@ final class PlayerService: ObservableObject {
         }
         itemRetryGeneration = generation
         let twin = remoteURL.flatMap { url in
-            error.flatMap { NeteaseCDNHost.failover(from: url, after: $0) }
+            error.flatMap { CDNHost.failover(from: url, after: $0) }
         }
         // No network at all: the downloaded copy is the only way on.
         if twin == nil, connectivity, usesOfflineQueue {
@@ -1268,7 +1268,7 @@ final class PlayerService: ObservableObject {
             updateLyricsCursor(at: progress)
         }
         guard !usesOfflineQueue else { return }
-        let response = try? await NeteaseAPI.lyric(id: track.id)
+        let response = try? await MusicAPI.lyric(id: track.id)
         guard generation == resolveGeneration, let response else { return }
         lyrics = LyricsParser.parse(response)
         updateLyricsCursor(at: progress)
@@ -1501,7 +1501,7 @@ final class PlayerService: ObservableObject {
         let trackID = track.id
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleStart(trackID: trackID, sourceID: sourceID)
+            await MusicAPI.scrobbleStart(trackID: trackID, sourceID: sourceID)
         }
     }
 
@@ -1511,7 +1511,7 @@ final class PlayerService: ObservableObject {
         let seconds = completed ? Int(duration) : Int(progress)
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
+            await MusicAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
         }
     }
 
@@ -1559,31 +1559,31 @@ final class PlayerService: ObservableObject {
         case .fm:
             return nil
         case .album:
-            return (try await NeteaseAPI.album(id: context.id).songs, .album(context.id))
+            return (try await MusicAPI.album(id: context.id).songs, .album(context.id))
         case .artist:
-            return (try await NeteaseAPI.artist(id: context.id).hotSongs, .artist(context.id))
+            return (try await MusicAPI.artist(id: context.id).hotSongs, .artist(context.id))
         case .daily:
-            return (try await NeteaseAPI.dailyRecommendSongs(), .daily)
+            return (try await MusicAPI.dailyRecommendSongs(), .daily)
         case .cloud:
-            let songs = try await NeteaseAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
+            let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
             guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await NeteaseAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,
                   let seed = AccountStore.shared.likedTrackIDs.randomElement() else { return nil }
-            let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: liked.id)
+            let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: liked.id)
             return (tracks, .playlist(liked.id))
         case .playlist:
-            let response = try await NeteaseAPI.playlistDetail(id: context.id)
+            let response = try await MusicAPI.playlistDetail(id: context.id)
             var tracks = response.playlist.tracks
             // /v6/playlist/detail only carries the first page of tracks.
             let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
             for chunk in stride(from: 0, to: remaining.count, by: 500)
                 .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
+                guard let more = try? await MusicAPI.songDetails(ids: chunk) else { break }
                 tracks += more.songs
             }
             return (tracks, .playlist(context.id))

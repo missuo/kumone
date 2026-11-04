@@ -14,7 +14,7 @@ struct SyncedLogin: Codable, Equatable {
         guard accountID > 0, !sealedCookies.isEmpty else { throw SyncError.invalidRecord }
     }
 
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "login-sync")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "login-sync")
 
     /// With `keyID`, offers sealed under any other key are left out: they can
     /// never be opened here.

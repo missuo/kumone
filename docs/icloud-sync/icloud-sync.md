@@ -167,7 +167,7 @@ Sync folder (iCloud Drive / user-authorized folder)
     - Lightweight checkpoint (`playback.json`): account, current track, progress in seconds, current index and the `queueRevision` reference. Routine progress updates only write this file.
 - **On-demand continue**: refreshing the list reads only other devices' `playback.json`, never the full queues. The matching `queueRevision.json` is fetched only after the user taps Continue, and handed to the player after the account and cursor are checked.
 - **7-day orphan queue cleanup (GC)**: checked on the first write after a connection is activated and every 24 hours after that. Queues referenced by the current pointer or a conflict version, and queues modified within 7 days, are kept; unreferenced queues older than 7 days are deleted. Cleanup failures are logged and never block publishing.
-- **Account consistency**: playback is published only while the current NetEase account matches the session's account; otherwise nothing is published and a tombstone withdraws the old data.
+- **Account consistency**: playback is published only while the current account matches the session's account; otherwise nothing is published and a tombstone withdraws the old data.
 
 ---
 
@@ -192,8 +192,8 @@ Sync folder (iCloud Drive / user-authorized folder)
 
 - **Encryption boundary**: cookies are sealed with AES-GCM before they reach the sync folder, with the account ID and key ID bound as additional authenticated data. The key is derived from the user's sync passphrase with PBKDF2-SHA256 (600,000 rounds). `login-key.json` in the folder holds only the salt and a verifier; the derived key lives only in each device's local Keychain and is never synced through iCloud Keychain. Read access to the sync folder alone yields no usable session, but a weak passphrase can still be guessed offline, so at least 8 characters are required.
 - **Unlocking and resetting**: the first device to turn on login sync sets the sync passphrase; every other device enters it once, when turning on login sync or when first signing in from an offer. A forgotten passphrase can only be reset: a new key replaces `login-key.json`, offers sealed under the old key are no longer listed, other devices must enter the new passphrase, and devices that have not unlocked withdraw their own offers. Login sync is off by default and must be turned on explicitly.
-- **Independent verification**: after the user chooses another device's account, the session is verified online through a separate temporary `NeteaseClient`; it is saved and applied, and the library refreshed, only after verification succeeds.
-- **Sign-out**: the NetEase server session is revoked by default. It is kept only while sync and login sync are both on and **another device** still offers the same account, so a device still using the session is not signed out; the last device to sign out revokes it. This device's offer is withdrawn with a tombstone; if sync is unavailable, the withdrawal happens after reconnecting.
+- **Independent verification**: after the user chooses another device's account, the session is verified online through a separate temporary `MusicClient`; it is saved and applied, and the library refreshed, only after verification succeeds.
+- **Sign-out**: the server session is revoked by default. It is kept only while sync and login sync are both on and **another device** still offers the same account, so a device still using the session is not signed out; the last device to sign out revokes it. This device's offer is withdrawn with a tombstone; if sync is unavailable, the withdrawal happens after reconnecting.
 - **Damaged files**: a damaged `login.json` from one device is logged and skipped, and does not hide other devices' offers.
 
 ---
@@ -237,7 +237,7 @@ Sync folder (iCloud Drive / user-authorized folder)
 | **Settings shows "Sync folder unavailable"** | The sync folder was deleted externally, or an external drive was removed | Catches `SyncError.unavailable`, disconnects, clears remote state and keeps the bookmark | Reconnect the drive, or tap "Reconnect" in Settings and pick the folder again. |
 | **Continue says "Waiting for iCloud download"** | The checkpoint has arrived but the queue snapshot it references has not downloaded yet | Blocks the continue, keeps local playback and asks the user to wait | Tap Continue again once the system has downloaded the file. |
 | **"Sync password required" or an offer is missing** | The folder's passphrase was set or reset on another device and this device has not entered it | Hides offers sealed under other keys and withdraws this device's own offer | Enter the sync passphrase in Settings, or reset it if it is forgotten. |
-| **A remote device cannot continue after switching accounts** | The two devices are signed in to different NetEase accounts | The continue list is filtered by the current account; mismatched records are hidden | Sign both devices in to the same NetEase account. |
+| **A remote device cannot continue after switching accounts** | The two devices are signed in to different accounts | The continue list is filtered by the current account; mismatched records are hidden | Sign both devices in to the same account. |
 | **Old queue snapshots take up space** | A device was offline for a long time and never ran cleanup | Unreferenced queues older than 7 days are removed on the first write after reconnecting, or every 24 h | Stay connected and keep playing; the system reclaims them on schedule. |
 
 > [!TIP]

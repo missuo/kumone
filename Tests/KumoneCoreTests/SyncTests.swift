@@ -907,8 +907,8 @@ struct SyncTests {
         _ = try await repository.connect(to: root, connectionID: connection)
         let mac = UUID()
         let phone = UUID()
-        let macClient = NeteaseClient(cookieDirectory: root.appendingPathComponent("mac"))
-        let phoneClient = NeteaseClient(cookieDirectory: root.appendingPathComponent("phone"))
+        let macClient = MusicClient(cookieDirectory: root.appendingPathComponent("mac"))
+        let phoneClient = MusicClient(cookieDirectory: root.appendingPathComponent("phone"))
         macClient.setCookies(["MUSIC_U": "synthetic-shared-session"])
         let login = SyncedLogin(accountID: 42, nickname: "Fixture", cookies: macClient.authenticationCookies())
         try await repository.write(SyncRecord(revision: .init(counter: 1, deviceID: mac), deviceName: "Mac",
@@ -931,7 +931,7 @@ struct SyncTests {
         let returnLogin = try #require(accounts.first?.payload)
         try macClient.replaceAuthentication(with: returnLogin.cookies)
         #expect(macClient.isLoggedIn)
-        #expect(NeteaseClient(cookieDirectory: root.appendingPathComponent("phone")).isLoggedIn)
+        #expect(MusicClient(cookieDirectory: root.appendingPathComponent("phone")).isLoggedIn)
         await repository.disconnect(connectionID: connection)
     }
 
@@ -1004,7 +1004,7 @@ struct SyncTests {
     @Test func validationClientCannotPersistReceivedCredentials() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-auth-sync-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let client = NeteaseClient(cookieDirectory: directory, configuration: .ephemeral, persistsCookies: false)
+        let client = MusicClient(cookieDirectory: directory, configuration: .ephemeral, persistsCookies: false)
         client.setCookies(["MUSIC_U": "synthetic-received-session"])
         #expect(client.isLoggedIn)
         #expect(!FileManager.default.fileExists(atPath: directory.path))
@@ -1031,7 +1031,7 @@ struct SyncTests {
     }
 
     @Test func authenticationReplacementPreservesDeviceCookiesAndDropsOldCSRF() throws {
-        let client = NeteaseClient(configuration: .ephemeral, persistsCookies: false)
+        let client = MusicClient(configuration: .ephemeral, persistsCookies: false)
         client.setCookies(["MUSIC_U": "synthetic-old", "__csrf": "synthetic-old-csrf", "device": "local-device"])
         let before = client.authenticationFingerprint
         try client.replaceAuthentication(with: ["MUSIC_U": "synthetic-new"])
@@ -1045,7 +1045,7 @@ struct SyncTests {
     func failedAuthenticationPersistenceLeavesTheLiveLoginIntact(signingOut: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-sync-auth-failure-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        let client = NeteaseClient(cookieDirectory: root)
+        let client = MusicClient(cookieDirectory: root)
         client.setCookies(["MUSIC_U": "synthetic-current"])
         let binding = client.authenticationFingerprint
         let file = root.appendingPathComponent("cookies.json")

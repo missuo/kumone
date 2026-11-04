@@ -11,10 +11,10 @@ import Testing
 
 @Suite("Playlist loading and downloads", .timeLimit(.minutes(1)))
 @MainActor struct PlaylistLoadingTests {
-    private func response(ids: [Int], loaded: [Int]) throws -> NeteaseAPI.PlaylistDetailResponse {
+    private func response(ids: [Int], loaded: [Int]) throws -> MusicAPI.PlaylistDetailResponse {
         let json: [String: Any] = ["playlist": ["id": 1, "name": "Fixture", "trackCount": ids.count,
             "trackIds": ids.map { ["id": $0] }, "tracks": loaded.map { ["id": $0, "name": "Track \($0)", "dt": 3000] }]]
-        return try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
+        return try JSONDecoder().decode(MusicAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
     @Test func freshBackgroundSnapshotSkipsTheNetworkButForegroundStillRefreshes() async throws {
@@ -72,7 +72,7 @@ import Testing
         var json: [String: Any] = ["id": 1, "name": "Fixture", "trackCount": 2,
                                   "tracks": [["id": 7, "name": "First"], ["id": 3, "name": "Second"]]]
         if emptyIDs { json["trackIds"] = [] }
-        let response = try JSONDecoder().decode(NeteaseAPI.PlaylistDetailResponse.self,
+        let response = try JSONDecoder().decode(MusicAPI.PlaylistDetailResponse.self,
             from: JSONSerialization.data(withJSONObject: ["playlist": json]))
         let snapshots = PlaylistSnapshotStore(directory: root)
         let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in response })
@@ -91,7 +91,7 @@ import Testing
         var detail = complete.playlist
         detail.trackIds = []
         detail.tracks = Array(complete.playlist.tracks.prefix(1))
-        let partial = NeteaseAPI.PlaylistDetailResponse(playlist: detail, privileges: [])
+        let partial = MusicAPI.PlaylistDetailResponse(playlist: detail, privileges: [])
         let online = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in complete })
         await online.load()
         let model = PlaylistContent(playlistID: 1, snapshots: snapshots, accountScope: { "a" }, detailLoader: { _ in partial })

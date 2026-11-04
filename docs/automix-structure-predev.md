@@ -12,7 +12,7 @@
 **方案**:两条正交的信号补进来,都作用在选点层,不动引擎:
 
 1. **结构分段**(纯 vDSP,零新依赖):在现有单趟 STFT 之上做 beat 同步的自相似矩阵 + novelty 检测,把歌切成 intro/verse/chorus/bridge/outro 段落,副歌靠"重复次数 × 能量 × 人声密度"识别。出点从"能量跳变打分的小节线"升级为"末段副歌唱完的那一刻";入点从"第一处响的 downbeat"升级为"第一个核心段落的起点"。
-2. **歌词桥接**(几乎零工作量,单独可先落地):app 已经从 NeteaseAPI 拿到逐行时间戳歌词,但从未落盘——`VocalExchange.compile` 只认音频旁的 `.lrc` sidecar,所以 **app 里的 vocalExchange 今天几乎必然降级到 vocalTrough**。预取时把歌词写成 `.lrc` sidecar,交接点立刻从"人声波谷"变成"这句唱完"。
+2. **歌词桥接**(几乎零工作量,单独可先落地):app 已经从 MusicAPI 拿到逐行时间戳歌词,但从未落盘——`VocalExchange.compile` 只认音频旁的 `.lrc` sidecar,所以 **app 里的 vocalExchange 今天几乎必然降级到 vocalTrough**。预取时把歌词写成 `.lrc` sidecar,交接点立刻从"人声波谷"变成"这句唱完"。
 
 **不做的事**:不改引擎、不加实时 DSP、不动 stems 链路。结构分段置信度不足时逐字段回退到现有能量启发式——回退路径与今天 byte 级一致。
 
@@ -53,7 +53,7 @@
 
 调参台语料的音频旁都有 `.lrc`,所以离线试听里 `vocalExchange` 的交接点是"歌词行结束"。但 app 路径:
 
-- `PlayerService.loadLyrics` 从 NeteaseAPI 拉歌词进内存(`ParsedLyrics`),**从不落盘**;
+- `PlayerService.loadLyrics` 从 MusicAPI 拉歌词进内存(`ParsedLyrics`),**从不落盘**;
 - `Audition.VocalExchange.compile`(`TransitionSegmentRenderer` 调它)只认 `Lyrics.load(for: outgoingURL)`——预取缓存目录里的音频旁边没有 `.lrc`;
 - 结果:app 里的 vocalExchange 交接点退化到 `vocalTrough`(人声包络最安静的秒),整个 S2 调出来的"这句唱完再交接"在产品里没生效过。
 
@@ -102,7 +102,7 @@ var structureConfidence: Double
 
 1. `PlayerService` 预取流水线在音频落盘后,把已拉到的 `ParsedLyrics` 序列化成标准 `.lrc` 写到音频旁(复用语料约定,`Lyrics.sidecarURL`);当前曲目的歌词同样回写,保证"出歌"侧可用;
 2. `VocalExchange.compile` 与 `Audition.Lyrics` 零改动——app 与调参台从此走同一条歌词路径;
-3. 缓存清理沿用音频缓存的生命周期(歌词与音频同目录同名,删音频顺手删);netease 歌词接口拿不到或纯音乐时不写文件,行为同今天。
+3. 缓存清理沿用音频缓存的生命周期(歌词与音频同目录同名,删音频顺手删);歌词接口拿不到或纯音乐时不写文件,行为同今天。
 
 **歌词衍生信号**(给 2.3 用,均从 `.lrc` 现算,不进 `TrackAnalysis`):
 
@@ -153,7 +153,7 @@ P1 与 P2 无依赖可并行;P1 极小,建议最先合。
 1. **分段错误比没有分段更糟**(切在错标的"副歌结束"上)。对策:`structureConfidence` 门 + P2 先行人工验收 + 每个新行为独立 Config 开关,盲听不过就单项关回。
 2. **analysis 版本 bump 的重算成本**。全库 sidecar 作废,预取路径每首 +1–2 s 后台分析。可接受;但要和其它待 bump 的分析改动(若有)攒同一次 bump。
 3. **4/4 与 downbeat 相位仍是地基**。分段吸附 downbeat,相位错则边界整体偏一拍——但这与现状同罪,不新增风险;novelty 边界本身不依赖相位,错位可被 2.1 的验证抓到。
-4. **NeteaseAPI 歌词质量参差**(逐行时间戳偏移、纯音乐误标)。行为守则:歌词只用于"吸附"与"守门",从不单独产生候选点;时间戳可疑(乱序、越界)整份丢弃。
+4. **MusicAPI 歌词质量参差**(逐行时间戳偏移、纯音乐误标)。行为守则:歌词只用于"吸附"与"守门",从不单独产生候选点;时间戳可疑(乱序、越界)整份丢弃。
 
 ---
 

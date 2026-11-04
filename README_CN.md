@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> 本仓库与网易云音乐没有任何关系，也不包含任何网易云音乐的域名和 API 地址。
+
 <div align="right">
 
 [English](README.md) | **简体中文**
@@ -10,9 +13,9 @@
 
 # Kumone
 
-**雲の音 — 原生 macOS 网易云音乐客户端**
+**雲の音 — 原生 macOS 与 iOS 音乐播放器**
 
-SwiftUI 编写 · 直连网易云真实 API · Sparkle 自动更新
+SwiftUI 编写 · 无第三方服务器 · Sparkle 自动更新
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue?logo=apple)](#构建)
 [![Swift](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](Package.swift)
@@ -33,16 +36,16 @@ SwiftUI 编写 · 直连网易云真实 API · Sparkle 自动更新
 
 ## 名字由来
 
-**Kumone** 取自日语 **雲の音**（*kumo no ne*，「云的声音」），缩合为一个词 —— **雲音**（假名写作 くもね，读作 *kumone*）。呼应网易「云」音乐的「云」字：从云端飘落到你耳边的音乐。
+**Kumone** 取自日语 **雲の音**（*kumo no ne*，「云的声音」），缩合为一个词 —— **雲音**（假名写作 くもね，读作 *kumone*）：从云端飘落到你耳边的音乐。
 
 ## 功能
 
-- 🔐 **扫码登录** — 网易云 App 扫码，Cookie 本地持久化，自动续期
+- 🔐 **扫码登录** — 官方 App 扫码，Cookie 本地持久化，自动续期
 - 🏠 **推荐** — 每日推荐、私人漫游、心动模式、推荐歌单、雷达歌单（私人雷达系列，按账号个性化）、排行榜、新碟上架、推荐歌手
 - 🧭 **精选** — 分类歌单（精品 / 官方 / 排行榜 / 场景分类）无限滚动
 - 🎵 **播放** — AVPlayer 引擎，标准 ~ Hi-Res 音质可选（黑胶 VIP 可播无损，自动回落），随机 / 单曲循环 / 列表循环，下一首播放队列，灰色歌曲识别
 - 🚗 **CarPlay（iOS，按需开启）** — Now Playing、分类音乐库、播放队列与搜索模板已写入二进制；激活需 [Apple 授权的 CarPlay 音频能力](https://developer.apple.com/contact/carplay/)，大多数账号不会被授予。默认关闭以保证开源源码树可直接编译，详见下方[启用 CarPlay](#启用-carplayios)
-- 🔓 **灰色歌曲解锁** — 原生实现 UnblockNeteaseMusic 核心音源（pyncmd / 酷我 / 酷狗），无版权或试听歌曲自动匹配第三方音源
+- 🔓 **灰色歌曲解锁** — 原生实现常见解锁音源（pyncmd / 酷我 / 酷狗），无版权或试听歌曲自动匹配第三方音源
 - 🖼 **沉浸播放页** — 封面取色渐变背景 + 大封面 + 大字同步歌词（点击播放条封面进入，Esc 退出）
 - 📻 **私人漫游** — 沉浸式 FM 页面，不喜欢 / 切歌
 - 📝 **歌词** — 侧边玻璃面板，逐行同步 + 翻译，点击跳转
@@ -51,7 +54,7 @@ SwiftUI 编写 · 直连网易云真实 API · Sparkle 自动更新
 - ✏️ **歌单管理** — 新建 / 删除 / 收藏歌单、添加 / 移除歌曲、红心
 - 🔍 **搜索** — 综合 / 单曲 / 歌手 / 专辑 / 歌单，热搜词占位
 - ⌨️ **系统集成** — 媒体键 / 控制中心（Now Playing）、听歌打卡、退出后恢复播放队列
-- ☁️ **iCloud 同步** — 多设备之间接续播放听歌状态、设置偏好及网易云登录登录态；基于 iCloud Drive 共享目录实现，无中心服务器（详见 [iCloud 同步说明](docs/icloud-sync/icloud-sync.md)）
+- ☁️ **iCloud 同步** — 多设备之间接续播放听歌状态、设置偏好及登录态；基于 iCloud Drive 共享目录实现，无中心服务器（详见 [iCloud 同步说明](docs/icloud-sync/icloud-sync.md)）
 - 🌐 **多语言** — 简体中文与英文界面，跟随系统语言；Sparkle 更新说明双语
 
 ## 安装
@@ -122,7 +125,7 @@ Scripts/compile_and_run.sh     # 杀进程 → 重新打包 → 启动
 ```
 Sources/Kumone/
 ├── Core/
-│   ├── API/            # NeteaseCrypto（weapi/eapi 加密）、NeteaseClient（传输 + Cookie）、NeteaseAPI（约 50 个端点）
+│   ├── API/            # RequestCrypto（weapi/eapi 加密）、MusicClient（传输 + Cookie）、MusicAPI（约 50 个端点）
 │   ├── Models/         # 统一 Track 模型（兼容新旧两种 JSON 格式）、歌词解析器
 │   ├── Player/         # PlayerService（队列 / 随机 / 循环 / FM / URL 解析）、UnblockService、NowPlayingManager
 │   ├── Storage/        # AccountStore、SettingsManager、两级图片缓存
@@ -131,21 +134,17 @@ Sources/Kumone/
 └── Features/           # 各页面 + 播放条 + 沉浸播放页 + 歌词/队列面板
 ```
 
-不依赖任何第三方 API 服务器：weapi（AES-CBC 双层 + RSA）与 eapi（AES-ECB + MD5 摘要）加密为原生 Swift 实现，请求直达 `music.163.com` / `interface.music.163.com`。
-
-## 相关项目
-
-想要 **tvOS** 版本？欢迎使用我朋友 Svend 维护的 [Sonimbus](https://github.com/gee1k/sonimbus) —— 一个 Apple TV 上的网易云音乐客户端。
+不依赖任何第三方 API 服务器：weapi（AES-CBC 双层 + RSA）与 eapi（AES-ECB + MD5 摘要）加密为原生 Swift 实现。
 
 ## Credits
 
 Kumone 是从零编写的 Swift 实现，未复制以下项目的代码，但深度参考了它们的设计与实现思路，在此致谢：
 
-- [YesPlayMusic](https://github.com/qier222/YesPlayMusic)（MIT，© qier222）— 功能设计、网易云 API 端点与行为逻辑的参考
+- [YesPlayMusic](https://github.com/qier222/YesPlayMusic)（MIT，© qier222）— 功能设计，以及参考其 API 设计规范
 - [kaset](https://github.com/sozercan/kaset)（MIT，© sozercan）— UI 设计系统、动效与 SwiftPM 打包方案的参考
-- [UnblockNeteaseMusic/server](https://github.com/UnblockNeteaseMusic/server)（LGPL-3.0-only）— 灰色歌曲第三方音源的接口与匹配策略参考（`UnblockService.swift` 为独立的 Swift 重新实现）
+- 开源灰色歌曲解锁服务项目（LGPL-3.0-only）— 参考其 API 设计规范与音源匹配策略（`UnblockService.swift` 为独立的 Swift 重新实现）
 - [LyricsX](https://github.com/ddddxxx/LyricsX)（MPL-2.0，© ddddxxx）— 桌面歌词窗口的设计参考（窗口配置、屏幕比例定位；`DesktopLyrics.swift` 为独立的 SwiftUI 实现）
 
 ## 协议与说明
 
-本项目以 [LGPL-3.0-only](LICENSE) 协议开源（随附 [GPL-3.0](COPYING) 文本）。仅供学习交流，音乐数据与版权归网易云音乐及各音源平台所有。不支持下载、无社交功能。
+本项目以 [LGPL-3.0-only](LICENSE) 协议开源（随附 [GPL-3.0](COPYING) 文本）。仅供学习交流，音乐数据与版权归各自权利人及音源平台所有。不支持下载、无社交功能。

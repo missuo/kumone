@@ -200,11 +200,11 @@ public final class CarPlayConnector: NSObject {
 
         let fm = CPListTemplate(title: "漫游", sections: [])
         fm.tabImage = UIImage(systemName: "dot.radiowaves.left.and.right")
-        fm.emptyViewTitleVariants = [String(localized: "请先登录网易云音乐")]
+        fm.emptyViewTitleVariants = [String(localized: "请先登录账号")]
 
         let library = CPListTemplate(title: "我的", sections: [])
         library.tabImage = UIImage(systemName: "person.crop.circle")
-        library.emptyViewTitleVariants = [String(localized: "请先登录网易云音乐")]
+        library.emptyViewTitleVariants = [String(localized: "请先登录账号")]
 
         self.recommendTab = recommend
         self.curatedTab = curated
@@ -525,7 +525,7 @@ public final class CarPlayConnector: NSObject {
                 return
             }
             do {
-                let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: likedList.id)
+                let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: likedList.id)
                 guard !tracks.isEmpty else {
                     ToastCenter.shared.show(String(localized: "心动模式暂时不可用"))
                     return
@@ -605,13 +605,13 @@ public final class CarPlayConnector: NSObject {
     /// Refreshes the Roaming tab on CarPlay. Logged-in users get the FM template
     /// with the currently playing track row plus the action button (Start Roaming /
     /// Next / Resume Roaming). Logged-out users see an empty view prompting them
-    /// to sign in to NetEase Music first.
+    /// to sign in first.
     private func updateFMTab() {
         guard let fmTab else { return }
         let loggedIn = AccountStore.shared.isLoggedIn
         if !loggedIn {
             fmTab.updateSections([])
-            fmTab.emptyViewTitleVariants = [String(localized: "请先登录网易云音乐")]
+            fmTab.emptyViewTitleVariants = [String(localized: "请先登录账号")]
             return
         }
         let player = PlayerService.shared
@@ -628,11 +628,11 @@ public final class CarPlayConnector: NSObject {
     /// What happens when the driver taps the FM tab's action button, depending
     /// on what the player is doing right now:
     /// - FM mode is off entirely → fire `startFM()` to begin a fresh roaming
-    ///   session (fetches recommendations from NetEase and starts playing).
+    ///   session (fetches recommendations from the service and starts playing).
     /// - FM mode is on and we're playing → skip ahead via `fmNext()`. We
     ///   intentionally don't reuse `next()` here because FM doesn't use the
     ///   normal queue — its tracks are pulled one batch at a time from
-    ///   NetEase's recommendation API, and CPNowPlayingTemplate's built-in
+    ///   The service's recommendation API, and CPNowPlayingTemplate's built-in
     ///   "next" button doesn't know about that semantics. Putting the skip
     ///   right on the FM tab keeps the driver's intent obvious.
     /// - FM mode is on but we're paused → just resume with `togglePlayPause()`.
@@ -656,7 +656,7 @@ public final class CarPlayConnector: NSObject {
         let account = AccountStore.shared
         guard account.isLoggedIn else {
             libraryTab.updateSections([])
-            libraryTab.emptyViewTitleVariants = [String(localized: "请先登录网易云音乐")]
+            libraryTab.emptyViewTitleVariants = [String(localized: "请先登录账号")]
             return
         }
         let model = CarPlayLibraryModel(

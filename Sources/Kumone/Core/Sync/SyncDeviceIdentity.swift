@@ -6,7 +6,7 @@ import Security
 enum SyncDeviceIdentity {
     private static let cache = Cache()
 
-    static func load(service: String = "im.missuo.kumone.sync-device") async throws -> UUID {
+    static func load(service: String = "sb.moe.kumone.sync-device") async throws -> UUID {
         try await cache.load(service: service)
     }
 

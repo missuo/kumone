@@ -5,7 +5,7 @@ import os
 /// A one-line-per-event journal of the seam machinery, written to the unified
 /// log so a field incident can be reconstructed after the fact.
 ///
-///     log show --predicate 'subsystem == "im.missuo.Kumone"' --last 30m
+///     log show --predicate 'subsystem == "sb.moe.kumone"' --last 30m
 ///
 /// **Why this exists.** The watery-playback bug is a deck left with its
 /// time-pitch unit off unity and no transition to explain it. Nothing in the
@@ -25,7 +25,7 @@ import os
 /// is a track title, which is deliberately not included.
 enum PlaybackJournal {
 
-    static let log = Logger(subsystem: "im.missuo.Kumone", category: "automix")
+    static let log = Logger(subsystem: "sb.moe.kumone", category: "automix")
 
     static func note(_ message: String) {
         log.log("\(message, privacy: .public)")

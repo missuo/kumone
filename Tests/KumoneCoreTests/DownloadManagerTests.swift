@@ -93,7 +93,7 @@ private final class DownloadHarness {
     static func resolve(track: Track, quality: String, scope: String) async throws -> OfflineAudioResource {
         let fixture = try OfflineAudioFixture(quality == "lossless" ? .flac : .mp3, scope: scope)
         let original = fixture.descriptor.identity
-        let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: track.id, source: "netease",
+        let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: scope, trackID: track.id, source: Upstream.tag,
             quality: quality, format: original.format, contentMD5: original.contentMD5), byteCount: fixture.descriptor.byteCount, duration: 3)
         return .init(descriptor: descriptor, url: URL(string: "https://example.test/audio")!)
     }

@@ -32,9 +32,9 @@ private func exists(_ url: URL) -> Bool {
     @Test func evictsOldestFirstUntilUnderTheLimit() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let oldest = try write("1-a-netease.mp3", bytes: 1000, age: 300, in: directory)
-        let middle = try write("2-a-netease.mp3", bytes: 1000, age: 200, in: directory)
-        let newest = try write("3-a-netease.mp3", bytes: 1000, age: 100, in: directory)
+        let oldest = try write("1-a-\(Upstream.tag).mp3", bytes: 1000, age: 300, in: directory)
+        let middle = try write("2-a-\(Upstream.tag).mp3", bytes: 1000, age: 200, in: directory)
+        let newest = try write("3-a-\(Upstream.tag).mp3", bytes: 1000, age: 100, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 2000)
         await cache.evictIfNeeded(sparing: nil)
@@ -49,10 +49,10 @@ private func exists(_ url: URL) -> Bool {
     @Test func neverEvictsAFileInUse() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let playing = try write("1-a-netease.flac", bytes: 1000, age: 500, in: directory)
-        let armed = try write("2-a-netease.mp3", bytes: 1000, age: 400, in: directory)
-        let candidate = try write("3-a-netease.mp3", bytes: 1000, age: 300, in: directory)
-        let fresh = try write("4-a-netease.mp3", bytes: 1000, age: 100, in: directory)
+        let playing = try write("1-a-\(Upstream.tag).flac", bytes: 1000, age: 500, in: directory)
+        let armed = try write("2-a-\(Upstream.tag).mp3", bytes: 1000, age: 400, in: directory)
+        let candidate = try write("3-a-\(Upstream.tag).mp3", bytes: 1000, age: 300, in: directory)
+        let fresh = try write("4-a-\(Upstream.tag).mp3", bytes: 1000, age: 100, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 3000)
         cache.setFilesInUse([playing, armed])
@@ -65,7 +65,7 @@ private func exists(_ url: URL) -> Bool {
 
         // Released: the next pass may take it like any other file.
         cache.setFilesInUse([armed])
-        try write("5-a-netease.mp3", bytes: 1000, age: 0, in: directory)
+        try write("5-a-\(Upstream.tag).mp3", bytes: 1000, age: 0, in: directory)
         await cache.evictIfNeeded(sparing: nil)
         #expect(!exists(playing))
         #expect(exists(armed))
@@ -76,8 +76,8 @@ private func exists(_ url: URL) -> Bool {
     @Test func inUseMatchesAcrossSymlinkedSpellings() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let playing = try write("1-a-netease.mp3", bytes: 1000, age: 500, in: directory)
-        try write("2-a-netease.mp3", bytes: 1000, age: 100, in: directory)
+        let playing = try write("1-a-\(Upstream.tag).mp3", bytes: 1000, age: 500, in: directory)
+        try write("2-a-\(Upstream.tag).mp3", bytes: 1000, age: 100, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 1000)
         cache.setFilesInUse([playing.resolvingSymlinksInPath()])
@@ -91,9 +91,9 @@ private func exists(_ url: URL) -> Bool {
     @Test func aLivePartFileIsNeitherCountedNorEvicted() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let part = try write("9-a-netease.mp3.part", bytes: 5000, age: 1, in: directory)
-        let older = try write("1-a-netease.mp3", bytes: 1000, age: 300, in: directory)
-        let newer = try write("2-a-netease.mp3", bytes: 1000, age: 200, in: directory)
+        let part = try write("9-a-\(Upstream.tag).mp3.part", bytes: 5000, age: 1, in: directory)
+        let older = try write("1-a-\(Upstream.tag).mp3", bytes: 1000, age: 300, in: directory)
+        let newer = try write("2-a-\(Upstream.tag).mp3", bytes: 1000, age: 200, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 2500)
         await cache.evictIfNeeded(sparing: nil)
@@ -107,9 +107,9 @@ private func exists(_ url: URL) -> Bool {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let abandoned = try write(
-            "9-a-netease.mp3.part", bytes: 2000,
+            "9-a-\(Upstream.tag).mp3.part", bytes: 2000,
             age: EngineAudioCache.stalePartAge + 600, in: directory)
-        let kept = try write("1-a-netease.mp3", bytes: 1000, age: 300, in: directory)
+        let kept = try write("1-a-\(Upstream.tag).mp3", bytes: 1000, age: 300, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 1500)
         await cache.evictIfNeeded(sparing: nil)
@@ -121,9 +121,9 @@ private func exists(_ url: URL) -> Bool {
     @Test func lyricsFollowTheirAudioOutAndSpareIsKept() async throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let spare = try write("1-a-netease.mp3", bytes: 1000, age: 500, in: directory)
-        let evicted = try write("2-a-netease.mp3", bytes: 1000, age: 400, in: directory)
-        let lyrics = try write("2-a-netease.lrc", bytes: 10, age: 400, in: directory)
+        let spare = try write("1-a-\(Upstream.tag).mp3", bytes: 1000, age: 500, in: directory)
+        let evicted = try write("2-a-\(Upstream.tag).mp3", bytes: 1000, age: 400, in: directory)
+        let lyrics = try write("2-a-\(Upstream.tag).lrc", bytes: 10, age: 400, in: directory)
 
         let cache = EngineAudioCache(directory: directory, limitBytes: 1500)
         await cache.evictIfNeeded(sparing: spare)

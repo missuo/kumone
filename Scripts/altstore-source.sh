@@ -83,8 +83,8 @@ NOTES_JSON="$(
 cat <<JSON
 {
   "name": "Kumone",
-  "subtitle": "网易云音乐第三方客户端 · Unofficial NetEase Cloud Music client",
-  "description": "Kumone 是网易云音乐的非官方原生客户端，直连网易云真实 API：扫码登录、日推、歌单、歌词、播客与灰色歌曲解锁。\n\nAn unofficial, native client for NetEase Cloud Music that talks directly to NetEase's real API — no ads, no telemetry, no bundled third-party SDKs.\n\n每次发版附带的是**未签名**的 iOS IPA，安装时请用你自己的 Apple ID 重新签名：AltStore、SideStore、Sideloadly 或 Xcode 均可。",
+  "subtitle": "原生音乐播放器 · A native music player",
+  "description": "Kumone 是一个原生音乐播放器：扫码登录、日推、歌单、歌词、播客与灰色歌曲解锁。\n\nA native music player — no ads, no telemetry, no bundled third-party SDKs.\n\n每次发版附带的是**未签名**的 iOS IPA，安装时请用你自己的 Apple ID 重新签名：AltStore、SideStore、Sideloadly 或 Xcode 均可。",
   "iconURL": "$ICON_URL",
   "website": "https://github.com/$REPO",
   "tintColor": "$TINT",
@@ -94,8 +94,8 @@ cat <<JSON
       "name": "Kumone",
       "bundleIdentifier": "$BUNDLE_ID",
       "developerName": "missuo",
-      "subtitle": "网易云音乐第三方客户端 · Unofficial NetEase Cloud Music client",
-      "localizedDescription": "网易云音乐的非官方原生客户端：扫码登录、每日推荐、个人 FM、歌单管理、逐行歌词、播客与灰色歌曲解锁，界面中英双语。\n\nAn unofficial native client for NetEase Cloud Music — QR login, daily recommendations, Personal FM, playlist management, line-synced lyrics, podcasts and gray-track unblocking, localized in English and Simplified Chinese.\n\n这里发布的 IPA 未经签名，安装时由你的 Apple ID 重新签名（AltStore、SideStore、Sideloadly 或 Xcode）。装有 TrollStore 的设备可在 设置 → 关于 → 检查更新 里一键自更新。",
+      "subtitle": "原生音乐播放器 · A native music player",
+      "localizedDescription": "原生音乐播放器：扫码登录、每日推荐、个人 FM、歌单管理、逐行歌词、播客与灰色歌曲解锁，界面中英双语。\n\nA native music player — QR login, daily recommendations, Personal FM, playlist management, line-synced lyrics, podcasts and gray-track unblocking, localized in English and Simplified Chinese.\n\n这里发布的 IPA 未经签名，安装时由你的 Apple ID 重新签名（AltStore、SideStore、Sideloadly 或 Xcode）。装有 TrollStore 的设备可在 设置 → 关于 → 检查更新 里一键自更新。",
       "iconURL": "$ICON_URL",
       "tintColor": "$TINT",
       "category": "entertainment",

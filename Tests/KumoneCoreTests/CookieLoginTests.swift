@@ -34,10 +34,10 @@ private final class CookieLoginProtocol: URLProtocol, @unchecked Sendable {
 
 @Suite("Cookie login", .serialized)
 struct CookieLoginTests {
-    private func candidate(directory: URL? = nil) -> NeteaseClient {
+    private func candidate(directory: URL? = nil) -> MusicClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CookieLoginProtocol.self]
-        return NeteaseClient(cookieDirectory: directory, configuration: configuration, persistsCookies: false)
+        return MusicClient(cookieDirectory: directory, configuration: configuration, persistsCookies: false)
     }
 
     @Test(arguments: [false, true])
@@ -45,7 +45,7 @@ struct CookieLoginTests {
         CookieLoginProtocol.state.reset("{\"code\":200,\"profile\":{\"userId\":42,\"nickname\":\"Fixture\"}}")
         let client = candidate()
         let header = " unrelated=ignored; MUSIC_U = synthetic=token== ; " + (includeCSRF ? "__csrf=synthetic-csrf;" : "")
-        let login = try await NeteaseAPI.loginWithCookie(header, using: client)
+        let login = try await MusicAPI.loginWithCookie(header, using: client)
         #expect(login.profile.userId == 42)
         let expected = includeCSRF ? ["MUSIC_U": "synthetic=token==", "__csrf": "synthetic-csrf"] : ["MUSIC_U": "synthetic=token=="]
         let permittedCookiesOnly = login.cookies == expected && client.cookie(named: "unrelated") == nil
@@ -61,8 +61,8 @@ struct CookieLoginTests {
         for header in ["", "  ", "__csrf=synthetic", "MUSIC_U=", "MUSIC_U", "MUSIC_U=synthetic; __csrf",
                        "MUSIC_U=synthetic; __csrf=", "MUSIC_U=one; MUSIC_U=two",
                        "MUSIC_U=synthetic; __csrf=one; __csrf=two", "MUSIC_U=bad\nvalue"] {
-            await #expect(throws: NeteaseAPI.CookieLoginError.self) {
-                _ = try await NeteaseAPI.loginWithCookie(header, using: candidate())
+            await #expect(throws: MusicAPI.CookieLoginError.self) {
+                _ = try await MusicAPI.loginWithCookie(header, using: candidate())
             }
         }
         #expect(CookieLoginProtocol.state.received.isEmpty)
@@ -71,7 +71,7 @@ struct CookieLoginTests {
     @Test func failedValidationDoesNotPersistOrChangeTheLiveSession() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kumone-cookie-login-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        let live = NeteaseClient(cookieDirectory: root.appendingPathComponent("live"), configuration: .ephemeral)
+        let live = MusicClient(cookieDirectory: root.appendingPathComponent("live"), configuration: .ephemeral)
         live.setCookies(["MUSIC_U": "synthetic-live"])
         let before = try Data(contentsOf: root.appendingPathComponent("live/cookies.json"))
         let candidateDirectory = root.appendingPathComponent("candidate")
@@ -80,10 +80,10 @@ struct CookieLoginTests {
                      "{\"code\":200,\"profile\":{\"userId\":-1}}", "malformed", "transport-error"] {
             CookieLoginProtocol.state.reset(body)
             do {
-                _ = try await NeteaseAPI.loginWithCookie("MUSIC_U=synthetic-candidate", using: candidate(directory: candidateDirectory))
+                _ = try await MusicAPI.loginWithCookie("MUSIC_U=synthetic-candidate", using: candidate(directory: candidateDirectory))
                 Issue.record("Invalid session was accepted")
             } catch {
-                let safeMessage = error is NeteaseAPI.CookieLoginError && !error.localizedDescription.contains("synthetic-secret")
+                let safeMessage = error is MusicAPI.CookieLoginError && !error.localizedDescription.contains("synthetic-secret")
                 #expect(safeMessage)
             }
             let saved = try Data(contentsOf: root.appendingPathComponent("live/cookies.json"))

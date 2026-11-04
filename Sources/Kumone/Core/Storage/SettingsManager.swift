@@ -232,14 +232,14 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(lyricsAnnotation.rawValue, forKey: Keys.annotation) }
     }
 
-    /// Karaoke-style word-by-word highlighting: NetEase's own timing when the
+    /// Karaoke-style word-by-word highlighting: the service's own timing when the
     /// song has verbatim (yrc) lyrics, else the line's time spread across its
     /// characters.
     @Published var verbatimLyrics: Bool {
         didSet { UserDefaults.standard.set(verbatimLyrics, forKey: Keys.verbatimLyrics) }
     }
 
-    /// Resolve gray tracks from third-party sources (UnblockNeteaseMusic-style).
+    /// Resolve gray tracks from third-party sources (unblock-style).
     @Published var enableUnblock: Bool {
         didSet { UserDefaults.standard.set(enableUnblock, forKey: Keys.unblock) }
     }

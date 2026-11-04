@@ -11,7 +11,7 @@ cd "$ROOT"
 
 CONF="${1:-debug}"
 APP_NAME="Kumone"
-BUNDLE_ID="im.missuo.Kumone"
+BUNDLE_ID="sb.moe.kumone"
 # Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"
@@ -244,7 +244,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
-    <key>NSHumanReadableCopyright</key><string>© 2026 missuo</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 MOE AI LLC</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppTransportSecurity</key>

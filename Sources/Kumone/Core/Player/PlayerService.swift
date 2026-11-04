@@ -370,8 +370,9 @@ final class PlayerService: ObservableObject {
         // installed once here and never touched again, so no track change, seek
         // or hand-over has to think about it. The closure runs on the audio
         // thread and only writes floats into a preallocated store.
+        let spectrum = AudioSpectrum.shared
         engine.setOutputSampleSink { buffer in
-            AudioSpectrum.shared.ingest(buffer)
+            spectrum.ingest(buffer)
         }
 
         // macOS output routing (incl. AirPlay endpoints the system publishes):
@@ -825,7 +826,7 @@ final class PlayerService: ObservableObject {
         guard isFMMode, let track = currentTrack else { return }
         Task {
             await fmAdvance()
-            try? await NeteaseAPI.fmTrash(id: track.id)
+            try? await MusicAPI.fmTrash(id: track.id)
         }
     }
 
@@ -836,7 +837,7 @@ final class PlayerService: ObservableObject {
         }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
-                if let tracks = try? await NeteaseAPI.personalFM(), !tracks.isEmpty {
+                if let tracks = try? await MusicAPI.personalFM(), !tracks.isEmpty {
                     fmUpcoming = tracks
                     break
                 }
@@ -852,7 +853,7 @@ final class PlayerService: ObservableObject {
         pendingAutoAdvance = true
         startPlaying(track)
         if fmUpcoming.count < 1 {
-            if let more = try? await NeteaseAPI.personalFM() {
+            if let more = try? await MusicAPI.personalFM() {
                 fmUpcoming.append(contentsOf: more)
             }
         }
@@ -1060,10 +1061,10 @@ final class PlayerService: ObservableObject {
     private func resolveSource(for track: Track) async -> ResolvedSource? {
         let quality = SettingsManager.shared.audioQuality.rawValue
         guard !Task.isCancelled else { return nil }
-        var data = try? await NeteaseAPI.songURL(ids: [track.id], level: quality).first
+        var data = try? await MusicAPI.songURL(ids: [track.id], level: quality).first
         guard !Task.isCancelled else { return nil }
         if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await NeteaseAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
         }
         guard !Task.isCancelled else { return nil }
         var url: URL?
@@ -1071,7 +1072,7 @@ final class PlayerService: ObservableObject {
         if let urlString = data?.url {
             url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
-        // NetEase refused — try third-party sources (UnblockNeteaseMusic-style).
+        // The service refused — try third-party sources (unblock-style).
         // #104 made the source list configurable; resolve through the enabled
         // sources (single-shot here, so nothing is excluded).
         if url == nil || data?.freeTrialInfo != nil, SettingsManager.shared.enableUnblock {
@@ -1091,7 +1092,7 @@ final class PlayerService: ObservableObject {
         return ResolvedSource(
             url: url,
             key: EngineAudioCache.Key(trackID: track.id, level: data?.level ?? quality,
-                                source: unblock.map { "unblock:\($0)" } ?? "netease",
+                                source: unblock.map { "unblock:\($0)" } ?? Upstream.tag,
                                 fileExtension: ext),
             level: data?.level,
             unblockSource: unblock,
@@ -2265,7 +2266,7 @@ final class PlayerService: ObservableObject {
         // checkpoint.
         let cancellableFull: FullStemProvider? = fourLaneRender
             ? StemSeparation.fullProvider.map { full in
-                { request in
+                { @Sendable request in
                     if stop.isCancelled { throw CancellationError() }
                     return try full(request)
                 }
@@ -2704,7 +2705,7 @@ final class PlayerService: ObservableObject {
 
         if isFMMode, fmUpcoming.count < 1 {
             Task {
-                if let more = try? await NeteaseAPI.personalFM() {
+                if let more = try? await MusicAPI.personalFM() {
                     fmUpcoming.append(contentsOf: more)
                     schedulePrefetch()
                 }
@@ -2719,7 +2720,7 @@ final class PlayerService: ObservableObject {
             applyLyrics(saved)
         }
         guard !Task.isCancelled, generation == resolveGeneration, !usesOfflineQueue else { return }
-        let response = try? await NeteaseAPI.lyric(id: track.id)
+        let response = try? await MusicAPI.lyric(id: track.id)
         guard !Task.isCancelled, generation == resolveGeneration, let response else { return }
         applyLyrics(response)
         // The engine caches every song it streams, so each one may play offline.
@@ -3242,7 +3243,7 @@ final class PlayerService: ObservableObject {
         startScrobbled = true
         let tid = track.id
         let sid = source.sourceID
-        Task.detached { await NeteaseAPI.scrobbleStart(trackID: tid, sourceID: sid) }
+        Task.detached { await MusicAPI.scrobbleStart(trackID: tid, sourceID: sid) }
     }
 
     private func scrobbleIfNeeded(completed: Bool) {
@@ -3251,7 +3252,7 @@ final class PlayerService: ObservableObject {
         let seconds = completed ? Int(duration) : Int(progress)
         let sourceID = source.sourceID
         Task.detached {
-            await NeteaseAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
+            await MusicAPI.scrobbleFinish(trackID: track.id, sourceID: sourceID, seconds: seconds)
         }
     }
 
@@ -3647,7 +3648,7 @@ final class PlayerService: ObservableObject {
     /// land every few seconds during an escalation, and a pool one track richer
     /// does not meaningfully change an eight-step preview. So the pool-growth
     /// trigger is throttled and the work is skipped rather than queued.
-    static let lookaheadRefreshInterval: TimeInterval = 5
+    nonisolated static let lookaheadRefreshInterval: TimeInterval = 5
 
     /// The throttle rule, in one place: a commit always goes, a landing
     /// analysis waits its turn, and only one computation is ever in flight.
@@ -3779,31 +3780,31 @@ final class PlayerService: ObservableObject {
         case .fm:
             return nil
         case .album:
-            return (try await NeteaseAPI.album(id: context.id).songs, .album(context.id))
+            return (try await MusicAPI.album(id: context.id).songs, .album(context.id))
         case .artist:
-            return (try await NeteaseAPI.artist(id: context.id).hotSongs, .artist(context.id))
+            return (try await MusicAPI.artist(id: context.id).hotSongs, .artist(context.id))
         case .daily:
-            return (try await NeteaseAPI.dailyRecommendSongs(), .daily)
+            return (try await MusicAPI.dailyRecommendSongs(), .daily)
         case .cloud:
-            let songs = try await NeteaseAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
+            let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
             guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await NeteaseAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,
                   let seed = AccountStore.shared.likedTrackIDs.randomElement() else { return nil }
-            let tracks = try await NeteaseAPI.intelligenceList(songID: seed, playlistID: liked.id)
+            let tracks = try await MusicAPI.intelligenceList(songID: seed, playlistID: liked.id)
             return (tracks, .playlist(liked.id))
         case .playlist:
-            let response = try await NeteaseAPI.playlistDetail(id: context.id)
+            let response = try await MusicAPI.playlistDetail(id: context.id)
             var tracks = response.playlist.tracks
             // /v6/playlist/detail only carries the first page of tracks.
             let remaining = response.playlist.trackIds.map(\.id).dropFirst(tracks.count)
             for chunk in stride(from: 0, to: remaining.count, by: 500)
                 .map({ Array(remaining.dropFirst($0).prefix(500)) }) {
-                guard let more = try? await NeteaseAPI.songDetails(ids: chunk) else { break }
+                guard let more = try? await MusicAPI.songDetails(ids: chunk) else { break }
                 tracks += more.songs
             }
             return (tracks, .playlist(context.id))

@@ -163,7 +163,7 @@ final class DownloadManager: ObservableObject {
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
-         resolver: @escaping Resolver = { try await NeteaseAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
+         resolver: @escaping Resolver = { try await MusicAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
          cachedTracks: @escaping () async -> Set<Int> = { await DownloadManager.platformCachedTrackIDs() },
@@ -687,7 +687,7 @@ final class DownloadManager: ObservableObject {
             // discard it before reserving disk space for the full transfer.
             if resumeData != nil, catalog.jobs[i].descriptor != resource.descriptor
                 || received < 0 || received > resource.descriptor.byteCount
-                || NeteaseCDNHost.preferred(for: resource.url) != resource.url {
+                || CDNHost.preferred(for: resource.url) != resource.url {
                 resumeData = nil
                 try await persistence.saveResumeData(nil, jobID: job.id)
             }
@@ -1056,7 +1056,7 @@ final class DownloadManager: ObservableObject {
             let value = DownloadNetworkState(connected: path.status == .satisfied, expensive: path.isExpensive, constrained: path.isConstrained)
             Task { @MainActor in self?.setNetwork(value) }
         }
-        monitor.start(queue: DispatchQueue(label: "im.missuo.Kumone.download-network"))
+        monitor.start(queue: DispatchQueue(label: "sb.moe.kumone.download-network"))
         self.monitor = monitor
     }
 

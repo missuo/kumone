@@ -4,8 +4,8 @@ import os
 /// Keep the newest pending snapshot per file. A short coalescing window avoids
 /// encoding intermediate seeks; the serial writer preserves in-flight ordering.
 enum PlaybackStateStorage {
-    private static let queue = DispatchQueue(label: "im.missuo.kumone.playback-state", qos: .utility)
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "playback-state")
+    private static let queue = DispatchQueue(label: "sb.moe.kumone.playback-state", qos: .utility)
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "playback-state")
     private struct Pending {
         var snapshots: [URL: () throws -> Data] = [:]
         var scheduled = false

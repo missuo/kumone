@@ -192,7 +192,7 @@ struct FMView: View {
                 .foregroundStyle(.tertiary)
             Text("登录后开启私人漫游")
                 .font(.headline)
-            Text("网易云会根据你的听歌口味推荐音乐")
+            Text("根据你的听歌口味推荐音乐")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Button("登录") { openLogin() }

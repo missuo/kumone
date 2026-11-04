@@ -3,7 +3,7 @@ import Testing
 
 @testable import KumoneCore
 
-// The lyrics bridge: what the app fetches from Netease has to land on disk in
+// The lyrics bridge: what the app fetches from the service has to land on disk in
 // the exact shape `Audition.Lyrics.load` expects, because that read is the only
 // thing standing between a `vocalExchange` and its vocal-trough fallback.
 //
@@ -24,10 +24,10 @@ import Testing
         return url
     }
 
-    /// A Netease body as it actually arrives: a credit header, a repeated line
+    /// An upstream body as it actually arrives: a credit header, a repeated line
     /// carrying two timestamps, and a rolling credit block on real timestamps
     /// at the close.
-    private static let netease = """
+    private static let upstreamBody = """
         [00:00.00] 作词 : 佚名
         [00:01.00] 作曲 : 佚名
         [ti:测试]
@@ -39,7 +39,7 @@ import Testing
 
     @Test func roundTripsCreditsAndMultiStampLines() throws {
         let audio = try Self.makeAudio("round-trip")
-        #expect(LyricsSidecar.write(Self.netease, for: audio))
+        #expect(LyricsSidecar.write(Self.upstreamBody, for: audio))
 
         let loaded = try #require(Audition.Lyrics.load(for: audio))
         #expect(loaded.map(\.time) == [10, 20.5, 30, 65.25])
@@ -48,11 +48,11 @@ import Testing
 
     @Test func writesBesideTheAudioWithTheLrcExtension() throws {
         let audio = try Self.makeAudio("naming")
-        #expect(LyricsSidecar.write(Self.netease, for: audio))
+        #expect(LyricsSidecar.write(Self.upstreamBody, for: audio))
         let sidecar = audio.deletingPathExtension().appendingPathExtension("lrc")
         #expect(FileManager.default.fileExists(atPath: sidecar.path))
         // Verbatim: the parser downstream owns the interpretation.
-        #expect(try String(contentsOf: sidecar, encoding: .utf8) == Self.netease)
+        #expect(try String(contentsOf: sidecar, encoding: .utf8) == Self.upstreamBody)
     }
 
     @Test func skipsInstrumentalAndUntimedAndAbsentBodies() throws {
@@ -65,7 +65,7 @@ import Testing
         #expect(!LyricsSidecar.write("第一句\n第二句", for: audio))
         // Credits only: parsed away to nothing.
         #expect(!LyricsSidecar.write("[00:00.00] 作词 : 佚名", for: audio))
-        // Netease's instrumental answer.
+        // The upstream instrumental answer.
         #expect(!LyricsSidecar.write("[00:00.00]纯音乐，请欣赏", for: audio))
         #expect(!FileManager.default.fileExists(atPath: sidecar.path))
     }
@@ -73,20 +73,20 @@ import Testing
     @Test func writesNothingWhenThereIsNoLocalFile() throws {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("LyricsSidecar-nonexistent-\(UUID().uuidString).mp3")
-        #expect(!LyricsSidecar.write(Self.netease, for: missing))
+        #expect(!LyricsSidecar.write(Self.upstreamBody, for: missing))
         let sidecar = missing.deletingPathExtension().appendingPathExtension("lrc")
         #expect(!FileManager.default.fileExists(atPath: sidecar.path))
     }
 
     @Test func identicalContentIsNotRewritten() throws {
         let audio = try Self.makeAudio("idempotent")
-        #expect(LyricsSidecar.write(Self.netease, for: audio))
+        #expect(LyricsSidecar.write(Self.upstreamBody, for: audio))
         let sidecar = audio.deletingPathExtension().appendingPathExtension("lrc")
         let stamp = Date(timeIntervalSince1970: 1)
         try FileManager.default.setAttributes([.modificationDate: stamp],
                                               ofItemAtPath: sidecar.path)
 
-        #expect(LyricsSidecar.write(Self.netease, for: audio))
+        #expect(LyricsSidecar.write(Self.upstreamBody, for: audio))
         let after = try FileManager.default.attributesOfItem(atPath: sidecar.path)[.modificationDate]
         #expect(after as? Date == stamp)
 

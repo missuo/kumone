@@ -161,8 +161,8 @@ enum CarPlayTemplateFactory {
 
         if !upcoming.isEmpty {
             // CarPlay silently drops anything past CPListTemplate.maximumItemCount, so cap
-            // explicitly at the framework's own limit rather than a guessed number — a NetEase
-            // queue is routinely longer than that. The section header still reports the real
+            // explicitly at the framework's own limit rather than a guessed number — an
+            // upstream queue is routinely longer than that. The section header still reports the real
             // total so the driver can tell the list is partial.
             let limit = max(0, CPListTemplate.maximumItemCount - (current == nil ? 0 : 1))
             let items = upcoming.prefix(limit).enumerated().map { index, track -> CPListItem in
@@ -214,7 +214,7 @@ extension CarPlayTemplateFactory {
     /// things off. When FM mode is on we lead with the currently playing track
     /// (assuming we already have one loaded) so the driver can see at a glance
     /// what they're listening to — that's the "Now Roaming" row. If FM is on but
-    /// the first track hasn't loaded yet (we're still talking to NetEase),
+    /// the first track hasn't loaded yet (we're still talking to the service),
     /// we drop in a small "Preparing roaming…" placeholder so the tab doesn't look
     /// broken in the meantime.
     ///

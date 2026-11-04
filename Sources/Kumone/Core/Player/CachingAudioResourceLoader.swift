@@ -110,7 +110,7 @@ final class CachingAudioResourceLoader: NSObject {
     let assetURL: URL
 
     /// Moves to the CDN twin when its host cannot be reached (see
-    /// `NeteaseCDNHost`). Read and written on the delegate queue only.
+    /// `CDNHost`). Read and written on the delegate queue only.
     private var remoteURL: URL
     private let trackID: Int
     private let requestedQuality: String
@@ -238,10 +238,10 @@ final class CachingAudioResourceLoader: NSObject {
         self.assetURL = assetURL
 
         let delegateQueue = OperationQueue()
-        delegateQueue.name = "im.missuo.Kumone.CachingAudioResourceLoader"
+        delegateQueue.name = "sb.moe.kumone.CachingAudioResourceLoader"
         delegateQueue.maxConcurrentOperationCount = 1
         self.delegateQueue = delegateQueue
-        resourceLoaderQueue = DispatchQueue(label: "im.missuo.Kumone.CachingAudioResourceLoader.Asset")
+        resourceLoaderQueue = DispatchQueue(label: "sb.moe.kumone.CachingAudioResourceLoader.Asset")
 
         super.init()
 
@@ -463,7 +463,7 @@ final class CachingAudioResourceLoader: NSObject {
     ) {
         networkTask.receivedResponse = true
         if let url = networkTask.task?.originalRequest?.url {
-            NeteaseCDNHost.markReachable(url)
+            CDNHost.markReachable(url)
         }
         if networkTask.initializesResource {
             initializeResource(from: response, for: networkTask, completionHandler: completionHandler)
@@ -877,9 +877,9 @@ final class CachingAudioResourceLoader: NSObject {
               let request = failedTask.originalRequest,
               let failedURL = request.url else { return false }
         if failedURL == remoteURL {
-            guard let twin = NeteaseCDNHost.failover(from: failedURL, after: error) else { return false }
+            guard let twin = CDNHost.failover(from: failedURL, after: error) else { return false }
             remoteURL = twin
-        } else if !NeteaseCDNHost.isHostUnreachable(error) {
+        } else if !CDNHost.isHostUnreachable(error) {
             return false
         }
         networkTask.retriedOnTwin = true

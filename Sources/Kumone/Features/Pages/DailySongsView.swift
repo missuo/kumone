@@ -112,7 +112,7 @@ struct DailySongsView: View {
         isLoading = true
         errorMessage = nil
         do {
-            tracks = try await NeteaseAPI.dailyRecommendSongs()
+            tracks = try await MusicAPI.dailyRecommendSongs()
             isLoading = false
         } catch {
             isLoading = false

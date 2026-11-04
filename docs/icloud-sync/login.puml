@@ -8,8 +8,8 @@ participant "SyncService" as Service
 participant "LoginSync" as Login
 participant "SyncRepository" as Repo
 participant "AccountStore" as Account
-participant "Temporary NeteaseClient" as Candidate
-participant "Local NeteaseClient" as Client
+participant "Temporary MusicClient" as Candidate
+participant "Local MusicClient" as Client
 
 == Refresh and publish offers ==
 opt login domain refresh requested

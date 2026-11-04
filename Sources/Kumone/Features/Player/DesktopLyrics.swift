@@ -148,16 +148,9 @@ private struct DesktopLyricsBox: View {
                             .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                             .contentTransition(.opacity)
                     }
-                    LyricText(
-                        line: line,
-                        size: 26,
-                        weight: .bold,
-                        color: .white,
-                        alignment: .center,
-                        rounded: true
-                    )
-                    .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
-                    .contentTransition(.opacity)
+                    mainText(for: line)
+                        .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
+                        .contentTransition(.opacity)
                     if settings.showLyricsTranslation, let translation = line.translation {
                         Text(translation)
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
@@ -184,6 +177,41 @@ private struct DesktopLyricsBox: View {
         .animation(.easeInOut(duration: 0.3), value: currentLine?.id)
         .animation(.easeInOut(duration: 0.25), value: currentLine == nil)
         .fixedSize()
+    }
+
+    /// The lyric itself: the same per-character karaoke wipe as the
+    /// now-playing page when the reader has it on and the line carries word
+    /// timings, otherwise the plain line.
+    ///
+    /// The wipe rides a `TimelineView` here rather than the display-link host
+    /// the page uses: this window holds nothing but the box, so re-measuring
+    /// it per frame is cheap, and the SwiftUI path keeps the text shadow and
+    /// the crossfade between lines. It is not tied to the main window's
+    /// visibility — desktop lyrics are mostly read while that window is away.
+    @ViewBuilder
+    private func mainText(for line: LyricLine) -> some View {
+        if settings.verbatimLyrics, let words = line.words, !words.isEmpty {
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !player.isPlaying)) { _ in
+                LyricText(
+                    line: line,
+                    size: 26,
+                    weight: .bold,
+                    color: .white,
+                    alignment: .center,
+                    rounded: true,
+                    alphas: LyricMainText.alphas(for: line, words: words, at: player.livePlaybackTime)
+                )
+            }
+        } else {
+            LyricText(
+                line: line,
+                size: 26,
+                weight: .bold,
+                color: .white,
+                alignment: .center,
+                rounded: true
+            )
+        }
     }
 }
 

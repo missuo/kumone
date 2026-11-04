@@ -25,7 +25,7 @@ enum ReleaseChecker {
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = obj["tag_name"] as? String,
               let html = obj["html_url"] as? String, let url = URL(string: html)
-        else { throw NeteaseAPIError.decoding("release") }
+        else { throw MusicAPIError.decoding("release") }
         let assets = obj["assets"] as? [[String: Any]] ?? []
         let ipa = assets.first { ($0["name"] as? String)?.lowercased().hasSuffix(".ipa") == true }
         let ipaURL = (ipa?["browser_download_url"] as? String).flatMap(URL.init)

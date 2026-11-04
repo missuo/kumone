@@ -43,7 +43,7 @@ private actor HeldAudioDownload {
 }
 
 struct EngineAudioCacheDownloadTests {
-    private let key = EngineAudioCache.Key(trackID: 1, level: "standard", source: "netease", fileExtension: "flac")
+    private let key = EngineAudioCache.Key(trackID: 1, level: "standard", source: Upstream.tag, fileExtension: "flac")
     private let remote = URL(fileURLWithPath: "/held-audio")
 
     private func waitUntil(_ condition: () async -> Bool) async throws {

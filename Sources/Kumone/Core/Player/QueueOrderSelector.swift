@@ -44,7 +44,7 @@ enum QueueOrder: String, Codable, Sendable, CaseIterable {
 final class QueueOrderSelector {
 
     /// The quality the *scoring* copy of a candidate is downloaded at
-    /// (predev §2.2): the cheapest level NetEase serves, ~4 MB against 20–40
+    /// (predev §2.2): the cheapest level the service serves, ~4 MB against 20–40
     /// for a lossless file. Every term the scorer reads is shift-invariant, so
     /// the lossy encoder's leading delay cannot reach it — but the beat grid a
     /// *plan* aligns to is not, which is why the winner is re-downloaded at
@@ -72,7 +72,7 @@ final class QueueOrderSelector {
     /// this; nothing else does.
     private var lostRounds: [Int: Int] = [:]
     /// Candidates that could not be fetched or analyzed. Never retried this
-    /// session — a track NetEase will not serve at the scoring level will not
+    /// session — a track the service will not serve at the scoring level will not
     /// start serving it three minutes later, and retrying would starve the
     /// budget-1 queue behind a track that can never join the pool.
     private var refused: Set<Int> = []
@@ -635,7 +635,7 @@ final class QueueOrderSelector {
     /// Resolve, download and analyze one candidate at the scoring level.
     ///
     /// The audio goes through `EngineAudioCache` like everything else, so it lands
-    /// under the ordinary key (`<id>-standard-netease.<ext>`) and takes part in
+    /// under the ordinary key (`<id>-standard-<tag>.<ext>`) and takes part in
     /// LRU eviction. The analysis does not: it goes to `AnalysisStore`, keyed
     /// by track ID alone, so it outlives the audio and is found again for free
     /// by `analyses(forTrackIDs:)` on a later queue — and a later
@@ -661,7 +661,7 @@ final class QueueOrderSelector {
         try Task.checkCancellation()
         var failureReason = "songURL failed"
         do {
-            guard let data = try await NeteaseAPI.songURL(
+            guard let data = try await MusicAPI.songURL(
                 ids: [track.id], level: scoringLevel).first
             else { return .refused("songURL failed") }
             guard data.freeTrialInfo == nil else { return .refused("trial fragment") }
@@ -671,7 +671,7 @@ final class QueueOrderSelector {
             else { return .refused("no url served") }
             let ext = remote.pathExtension.isEmpty ? "mp3" : remote.pathExtension.lowercased()
             let key = EngineAudioCache.Key(trackID: track.id, level: data.level ?? scoringLevel,
-                                          source: "netease", fileExtension: ext)
+                                          source: Upstream.tag, fileExtension: ext)
             try Task.checkCancellation()
             failureReason = "download failed"
             let local = try await EngineAudioCache.shared.download(from: remote, key: key)

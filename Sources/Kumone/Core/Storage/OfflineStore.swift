@@ -88,7 +88,7 @@ actor OfflineStore {
         let rank = AudioQuality.allCases.map(\.rawValue)
         guard let requested = rank.firstIndex(of: quality) else { return nil }
         for record in try db.records(scope: accountScope, trackID: trackID) where record.state == .complete {
-            guard record.descriptor.identity.source == "netease",
+            guard record.descriptor.identity.source == Upstream.tag,
                   (rank.firstIndex(of: record.descriptor.identity.quality) ?? -1) >= requested else { continue }
             if var available = try availableRecord(record, database: db) {
                 if let owner { available.retainedBy.insert(owner); try db.save(available) }
@@ -192,7 +192,7 @@ actor OfflineStore {
 
     private func playbackRecords(accountScope: String, trackID: Int, preferredQuality: String) throws -> [OfflineAudioRecord] {
         try preparedDatabase().records(scope: accountScope, trackID: trackID)
-            .filter { $0.state == .complete && $0.descriptor.identity.source == "netease" }
+            .filter { $0.state == .complete && $0.descriptor.identity.source == Upstream.tag }
             .sorted {
                 let qualities = AudioQuality.allCases.map(\.rawValue)
                 let lhs = $0.descriptor.identity.quality, rhs = $1.descriptor.identity.quality

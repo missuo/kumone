@@ -63,7 +63,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
             continuation.yield(.failed(token: token, domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, resumeData: nil))
             return
         }
-        if let url = response.url { NeteaseCDNHost.markReachable(url) }
+        if let url = response.url { CDNHost.markReachable(url) }
         do {
             try DownloadFileProtection.prepareDirectory(inbox)
             let fileName = "\(token).audio"
@@ -97,10 +97,10 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let token = task.taskDescription else { return }
         progressDates[token] = nil
-        if let url = task.response?.url { NeteaseCDNHost.markReachable(url) }
+        if let url = task.response?.url { CDNHost.markReachable(url) }
         guard let error = error as NSError? else { return }
         if task.response == nil, let url = task.currentRequest?.url ?? task.originalRequest?.url {
-            _ = NeteaseCDNHost.failover(from: url, after: error)
+            _ = CDNHost.failover(from: url, after: error)
         }
         continuation.yield(.failed(token: token, domain: error.domain, code: error.code,
                                    resumeData: error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data))
@@ -118,7 +118,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate, @unch
 
 @MainActor
 final class BackgroundDownloadTransport: DownloadTransport {
-    nonisolated static let identifier = "im.missuo.Kumone.offline-downloads.v1"
+    nonisolated static let identifier = "sb.moe.kumone.offline-downloads.v1"
     let events: AsyncStream<DownloadTransportEvent>
     let inbox: URL
     private let session: URLSession
@@ -167,7 +167,7 @@ final class BackgroundDownloadTransport: DownloadTransport {
     }
 
     func start(resource: OfflineAudioResource, token: String, allowsMetered: Bool, resumeData: Data?) {
-        let preferred = NeteaseCDNHost.preferred(for: resource.url)
+        let preferred = CDNHost.preferred(for: resource.url)
         var request = URLRequest(url: preferred)
         request.allowsCellularAccess = allowsMetered
         request.allowsExpensiveNetworkAccess = allowsMetered

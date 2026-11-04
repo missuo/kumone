@@ -8,7 +8,7 @@ struct PlaybackSyncStore {
         let records: [SyncRecord<PlaybackCheckpoint>]
         let counter: UInt64
     }
-    private let log = Logger(subsystem: "im.missuo.kumone", category: "playback-sync-store")
+    private let log = Logger(subsystem: "sb.moe.kumone", category: "playback-sync-store")
     private struct PublishedQueue {
         let revision: UUID
         let snapshot: PlaybackQueueSnapshot

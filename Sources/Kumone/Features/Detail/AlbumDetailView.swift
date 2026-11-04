@@ -113,17 +113,17 @@ struct AlbumDetailView: View {
         errorMessage = nil
         defer { if generation == loadGeneration { isLoading = false } }
         do {
-            let response = try await NeteaseAPI.album(id: albumID)
+            let response = try await MusicAPI.album(id: albumID)
             guard generation == loadGeneration, !Task.isCancelled else { return }
             album = response.album
             tracks = response.songs
             isLoading = false
-            if let dynamic = try? await NeteaseAPI.albumDynamic(id: albumID) {
+            if let dynamic = try? await MusicAPI.albumDynamic(id: albumID) {
                 guard generation == loadGeneration, !Task.isCancelled else { return }
                 isSubscribed = dynamic.isSub ?? false
             }
             if let artistID = response.album.artist?.id,
-               let albums = try? await NeteaseAPI.artistAlbums(id: artistID, limit: 12) {
+               let albums = try? await MusicAPI.artistAlbums(id: artistID, limit: 12) {
                 guard generation == loadGeneration, !Task.isCancelled else { return }
                 otherAlbums = albums.hotAlbums.filter { $0.id != albumID }
             }
@@ -336,7 +336,7 @@ struct AlbumDetailView: View {
     private func toggleSubscribe() {
         Task {
             do {
-                try await NeteaseAPI.subscribeAlbum(id: albumID, subscribe: !isSubscribed)
+                try await MusicAPI.subscribeAlbum(id: albumID, subscribe: !isSubscribed)
                 isSubscribed.toggle()
                 ToastCenter.shared.show(isSubscribed ? String(localized: "已收藏专辑") : String(localized: "已取消收藏"))
             } catch {

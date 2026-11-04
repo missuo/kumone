@@ -39,17 +39,17 @@ final class ExploreViewModel: ObservableObject {
 
         switch selectedCategory {
         case "排行榜":
-            if let lists = try? await NeteaseAPI.toplists() {
+            if let lists = try? await MusicAPI.toplists() {
                 toplists = lists
             }
             hasMore = false
         case "推荐歌单":
-            if let result = try? await NeteaseAPI.personalizedPlaylists(limit: 100) {
+            if let result = try? await MusicAPI.personalizedPlaylists(limit: 100) {
                 playlists = result
             }
             hasMore = false
         case "精品歌单":
-            if let result = try? await NeteaseAPI.highQualityPlaylists(before: highQualityBefore) {
+            if let result = try? await MusicAPI.highQualityPlaylists(before: highQualityBefore) {
                 let existing = Set(playlists.map(\.id))
                 playlists += result.playlists.filter { !existing.contains($0.id) }
                 highQualityBefore = result.lasttime ?? 0
@@ -59,7 +59,7 @@ final class ExploreViewModel: ObservableObject {
             }
         default:
             let cat = selectedCategory == "官方" ? "官方" : selectedCategory
-            if let result = try? await NeteaseAPI.topPlaylists(
+            if let result = try? await MusicAPI.topPlaylists(
                 category: cat == "全部" ? "全部" : cat, offset: offset
             ) {
                 let existing = Set(playlists.map(\.id))
@@ -152,11 +152,11 @@ struct ExploreView: View {
 
     private func playPlaylist(_ id: Int) {
         Task {
-            guard let detail = try? await NeteaseAPI.playlistDetail(id: id) else { return }
+            guard let detail = try? await MusicAPI.playlistDetail(id: id) else { return }
             var tracks = detail.playlist.tracks
             if tracks.isEmpty {
                 let ids = detail.playlist.trackIds.map(\.id)
-                tracks = (try? await NeteaseAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
+                tracks = (try? await MusicAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
             }
             player.play(tracks: tracks, source: .playlist(id),
                         context: .playlist(id: id, name: detail.playlist.name))
@@ -224,7 +224,7 @@ struct ToplistsView: View {
         .navigationTitle("排行榜")
         .task {
             if toplists.isEmpty {
-                toplists = (try? await NeteaseAPI.toplists()) ?? []
+                toplists = (try? await MusicAPI.toplists()) ?? []
             }
         }
     }

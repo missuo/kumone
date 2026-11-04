@@ -4,8 +4,8 @@ import Network
 import Testing
 @testable import KumoneCore
 
-@Suite("NetEase download eligibility")
-struct NeteaseDownloadTests {
+@Suite("Download eligibility")
+struct DownloadEligibilityTests {
     private struct ProbeFailure: Error, CustomStringConvertible {
         let domain: String
         let code: Int
@@ -22,16 +22,16 @@ struct NeteaseDownloadTests {
             "freeTrialInfo":\(trial ? "{\"start\":0,\"end\":30}" : "null")}
             """.utf8))
         }
-        let full = try NeteaseAPI.downloadResource(data: response(), track: track, accountScope: "test")
+        let full = try MusicAPI.downloadResource(data: response(), track: track, accountScope: "test")
         #expect(full.url.scheme == "https")
         #expect(throws: OfflineAudioError.unavailable) {
-            try NeteaseAPI.downloadResource(data: response(trial: true), track: track, accountScope: "test")
+            try MusicAPI.downloadResource(data: response(trial: true), track: track, accountScope: "test")
         }
         #expect(throws: OfflineAudioError.unavailable) {
-            try NeteaseAPI.downloadResource(data: response(code: 403), track: track, accountScope: "test")
+            try MusicAPI.downloadResource(data: response(code: 403), track: track, accountScope: "test")
         }
         #expect(throws: OfflineAudioError.invalidAudio) {
-            try NeteaseAPI.downloadResource(data: response(time: 30_000), track: track, accountScope: "test")
+            try MusicAPI.downloadResource(data: response(time: 30_000), track: track, accountScope: "test")
         }
     }
 
@@ -46,10 +46,10 @@ struct NeteaseDownloadTests {
             "md5":"0123456789abcdef0123456789abcdef","time":\(time),"code":200,"freeTrialInfo":null}
             """.utf8))
         }
-        let resource = try NeteaseAPI.downloadResource(data: response(time: 180_000), track: track, accountScope: "test")
+        let resource = try MusicAPI.downloadResource(data: response(time: 180_000), track: track, accountScope: "test")
         #expect(resource.descriptor.duration == 180)
         #expect(throws: OfflineAudioError.unavailable) {
-            try NeteaseAPI.downloadResource(data: response(time: 0), track: track, accountScope: "test")
+            try MusicAPI.downloadResource(data: response(time: 0), track: track, accountScope: "test")
         }
     }
 
@@ -89,21 +89,21 @@ struct NeteaseDownloadTests {
         if let originalCookieFile {
             try FileManager.default.copyItem(at: originalCookieFile, to: cookieDirectory.appendingPathComponent("cookies.json"))
         }
-        let client = NeteaseClient(cookieDirectory: cookieDirectory)
+        let client = MusicClient(cookieDirectory: cookieDirectory)
         do {
             let body = try await client.eapi("/v3/song/detail", ["c": "[{\"id\":\(trackID)}]"])
-            let details = try client.decoded(NeteaseAPI.SongDetailResponse.self, from: body)
+            let details = try client.decoded(MusicAPI.SongDetailResponse.self, from: body)
             let track = try #require(details.songs.first)
-            let data = try await NeteaseAPI.songDownloadURL(id: track.id, level: "exhigh", client: client)
+            let data = try await MusicAPI.songDownloadURL(id: track.id, level: "exhigh", client: client)
             print("Download eligibility: authenticated=\(client.isLoggedIn) id=\(data.id) code=\(data.code.map(String.init) ?? "missing") url=\(data.url != nil) trial=\(data.freeTrialInfo != nil) format=\(data.type ?? "missing") quality=\(data.level ?? "missing") checksum=\(data.md5 != nil) bytes=\(data.size)")
             if data.code != 200 || data.url == nil {
                 #expect(throws: OfflineAudioError.unavailable) {
-                    try NeteaseAPI.downloadResource(data: data, track: track, accountScope: "probe")
+                    try MusicAPI.downloadResource(data: data, track: track, accountScope: "probe")
                 }
                 print("Offline probe: download denied; full CDN transfer was not exercised")
                 return
             }
-            let resource = try NeteaseAPI.downloadResource(data: data, track: track, accountScope: "probe")
+            let resource = try MusicAPI.downloadResource(data: data, track: track, accountScope: "probe")
             let store = OfflineStore(directory: root.appendingPathComponent("offline"), minimumFreeBytes: 0)
             let (file, _) = try await URLSession.shared.download(from: resource.url)
             try await store.importDownload(at: file, descriptor: resource.descriptor)

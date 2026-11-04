@@ -1,25 +1,24 @@
 import Foundation
 import os
 
-/// NetEase serves every signed audio path from a pair of CDN hosts,
-/// `mN.music.126.net` and `mNc.music.126.net`. The signature lives in the
-/// path and is not bound to the host, so a URL whose host cannot be reached
-/// can be retried on its twin. The official client switches between the two
-/// the same way (`^(m|s|v|sv|p|d)(\d+)(c)?.music.126.net$`).
+/// Every signed audio path is served from a pair of CDN hosts, `mN` and
+/// `mNc` under ``Upstream/cdnSuffix``. The signature lives in the path and is
+/// not bound to the host, so a URL whose host cannot be reached can be
+/// retried on its twin. The official client switches between the two the
+/// same way (`^(m|s|v|sv|p|d)(\d+)(c)?<suffix>$`).
 ///
 /// Why it matters: a resolver can fail one host of the pair and not the
-/// other. Some resolvers time out on `166cdn.com`, which `m801` CNAMEs
-/// through, while `m801c` goes through `163jiasu.com` and resolves fine. So
-/// without the swap every song NetEase happens to place on `m801` fails on
-/// such a network after a ten-second DNS stall.
+/// other, for instance when only one of them CNAMEs through a CDN provider
+/// that resolver times out on. Without the swap every song that happens to
+/// be placed on the unlucky host fails on such a network after a ten-second
+/// DNS stall.
 ///
 /// Every audio request path reports here: ``failover(from:after:)`` when a
 /// request failed before any response, ``markReachable(_:)`` when a host
 /// answered. ``preferred(for:now:)`` then steers new requests.
-enum NeteaseCDNHost {
+enum CDNHost {
 
-    private static let suffix = ".music.126.net"
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "audio-source")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "audio-source")
 
     /// How long a host that failed to connect is skipped in favour of its
     /// twin. Short enough that moving to a network where it works again
@@ -39,9 +38,10 @@ enum NeteaseCDNHost {
     private static let hosts = OSAllocatedUnfairLock(initialState: [String: HostState]())
 
     /// `url` on the twin CDN host (`m801` <-> `m801c`), or nil when `url` is not
-    /// a NetEase audio CDN URL.
+    /// an audio CDN URL.
     static func alternate(for url: URL) -> URL? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+        guard let suffix = Upstream.cdnSuffix,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let host = components.host?.lowercased(),
               host.hasSuffix(suffix) else { return nil }
         var label = host.dropLast(suffix.count)

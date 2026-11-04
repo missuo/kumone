@@ -667,7 +667,7 @@ struct SearchFieldView: View {
         #endif
         .animation(AppAnimation.quick, value: focused)
         .task {
-            if let keyword = try? await NeteaseAPI.searchDefaultKeyword(), !keyword.isEmpty {
+            if let keyword = try? await MusicAPI.searchDefaultKeyword(), !keyword.isEmpty {
                 placeholder = keyword
                 placeholderQuery = keyword
             }

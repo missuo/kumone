@@ -65,7 +65,7 @@ struct OfflineStoreTests {
         try await store.release(offline)
 
         let high = try OfflineAudioFixture(.flac)
-        let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: "test-account", trackID: 1, source: "netease", quality: "lossless",
+        let descriptor = OfflineAudioDescriptor(identity: .init(accountScope: "test-account", trackID: 1, source: Upstream.tag, quality: "lossless",
                                                                format: .flac, contentMD5: high.descriptor.identity.contentMD5),
                                                 byteCount: high.descriptor.byteCount, duration: 3)
         try await store.importFixture(high.data, descriptor: descriptor)
@@ -213,7 +213,7 @@ struct OfflineStoreTests {
         let store = try OfflineAudioFixture().store()
         defer { try? FileManager.default.removeItem(at: store.directory) }
         func descriptor(_ trackID: Int, _ fixture: OfflineAudioFixture) -> OfflineAudioDescriptor {
-            .init(identity: .init(accountScope: "test-account", trackID: trackID, source: "netease", quality: "exhigh",
+            .init(identity: .init(accountScope: "test-account", trackID: trackID, source: Upstream.tag, quality: "exhigh",
                                   format: fixture.descriptor.identity.format, contentMD5: fixture.descriptor.identity.contentMD5),
                   byteCount: fixture.descriptor.byteCount, duration: 3)
         }
@@ -241,7 +241,7 @@ struct OfflineStoreTests {
         var cached = OfflineAudioRecord(descriptor: fixture.descriptor)
         cached.state = .partial
         try db.save(cached)
-        let ownedDescriptor = OfflineAudioDescriptor(identity: .init(accountScope: "test-account", trackID: 2, source: "netease",
+        let ownedDescriptor = OfflineAudioDescriptor(identity: .init(accountScope: "test-account", trackID: 2, source: Upstream.tag,
             quality: "exhigh", format: .mp3, contentMD5: fixture.descriptor.identity.contentMD5), byteCount: fixture.descriptor.byteCount, duration: 3)
         var owned = OfflineAudioRecord(descriptor: ownedDescriptor)
         owned.state = .partial

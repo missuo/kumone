@@ -2,9 +2,9 @@ import Foundation
 import os.log
 
 /// Resolves gray tracks from the direct pyncmd source, then built-in search
-/// providers when pyncmd cannot serve the original NetEase song ID.
+/// providers when pyncmd cannot serve the original song ID.
 enum UnblockService {
-    private static let log = Logger(subsystem: "im.missuo.kumone", category: "audio-source")
+    private static let log = Logger(subsystem: "sb.moe.kumone", category: "audio-source")
     private static let httpClient = AudioSourceClient.shared
     private static let fallbackProviders: [any AudioSourceProvider] = [
         KugouAudioSourceProvider(),
@@ -53,7 +53,7 @@ enum UnblockService {
     }
 
     private static func pyncmd(_ track: Track) async throws -> ResolvedAudioSource {
-        let urlString = "https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id=\(track.id)&br=320"
+        let urlString = "https://music-api.gdstudio.xyz/api.php?types=url&source=\(Upstream.tag)&id=\(track.id)&br=320"
         let data = try await httpClient.data(
             from: urlString,
             source: .pyncmd,
