@@ -147,7 +147,10 @@ jobs:
 
   ios:
     # Runs beside the macOS job instead of after it.
-    runs-on: macos-26
+    # iPhone Duo inner display needs the iOS 27.1 SDK (Apple docs);
+    # GitHub's xcode-27 image defaults to Xcode 27.1. Keep the macOS
+    # release job on macos-26 — only the IPA needs the newer SDK.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
         with:
