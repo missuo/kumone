@@ -7,6 +7,34 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.29 - 2026-11-06
+
+### Fixed
+
+- **macOS**: the now-playing page opens and closes cleanly — the page title, search field and sidebar toggle no longer hang over it while it moves, it no longer snaps into place at the end, and the thin white line beside the window buttons is gone; its collapse button is larger, sits in the top-right corner and always answers clicks.
+- **iOS**: adding a song to a playlist from the now-playing page shows the confirmation over the page; a song that is already in the playlist says so, and any other failure is shown inside the playlist picker (#182).
+- **iOS**: the search field stays visible when the Search tab opens.
+
+### Improved
+
+- **macOS**: hiding and showing the sidebar is smooth — the sidebar stays put and the page slides over it, the toggle never leaves its place beside the window buttons, the page title moves with the page, and View → Hide/Show Sidebar (⌃⌘S) is back.
+- **macOS**: the back button follows the sidebar toggle and, like it, is drawn without a glass capsule.
+- **macOS**: in the player bar, the like button sits right after the song title.
+
+---
+
+### 修复
+
+- **macOS**：播放页的打开和收起更干净——移动过程中页面标题、搜索框和侧栏按钮不再浮在播放页上，结束时不再突然跳一下，红绿灯旁的白色细线也没有了；收起按钮更大，移到右上角，并且每次点击都能响应。
+- **iOS**：在播放页把歌曲收藏到歌单时，提示直接显示在播放页上；歌单里已有这首歌时会明确提示，其他失败会显示在歌单选择框里（#182）。
+- **iOS**：打开搜索页时搜索框保持可见。
+
+### 改进
+
+- **macOS**：收起和展开侧栏不再卡顿——侧栏固定不动，由右侧页面滑动覆盖；切换按钮始终在红绿灯旁边不动，页面标题跟随页面移动，「显示」菜单中的「隐藏/显示边栏」（⌃⌘S）也恢复了。
+- **macOS**：返回按钮跟在侧栏按钮之后，并和它一样去掉了玻璃胶囊。
+- **macOS**：播放条里的「喜欢」按钮紧跟在歌名后面。
+
 ## 0.3.28 - 2026-11-04
 
 ### Improved
