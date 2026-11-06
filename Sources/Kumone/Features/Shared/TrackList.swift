@@ -709,12 +709,25 @@ struct AddToPlaylistSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var newName = ""
     @State private var creating = false
+    @State private var busyPlaylistID: Int?
+    @State private var statusMessage: String?
+
+    private var isBusy: Bool { creating || busyPlaylistID != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("收藏到歌单")
                 .font(.headline)
                 .padding(16)
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .accessibilityIdentifier("addToPlaylistStatus")
+            }
             Divider().opacity(0.4)
             if account.createdPlaylists.isEmpty {
                 EmptyStateView(icon: "music.note.list", title: "还没有创建歌单")
@@ -740,12 +753,17 @@ struct AddToPlaylistSheet: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     Spacer()
+                                    if busyPlaylistID == playlist.id {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.interactiveRow)
+                            .disabled(isBusy)
                         }
                     }
                     .padding(8)
@@ -759,7 +777,7 @@ struct AddToPlaylistSheet: View {
                 Button("创建并收藏") {
                     createAndAdd()
                 }
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || creating)
+                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || isBusy)
             }
             .padding(12)
         }
@@ -767,34 +785,79 @@ struct AddToPlaylistSheet: View {
     }
 
     private func add(to playlist: PlaylistSummary) {
+        guard !isBusy else { return }
+        statusMessage = nil
+        busyPlaylistID = playlist.id
         Task {
+            defer { busyPlaylistID = nil }
             do {
                 try await MusicAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
-                ToastCenter.shared.show(String(localized: "已收藏到「\(playlist.name)」"))
-                await account.refreshLibrary()
-                dismiss()
+                await finishSuccess(playlistName: playlist.name)
             } catch {
-                ToastCenter.shared.show(error.localizedDescription)
+                await finishFailure(error)
             }
         }
     }
 
     private func createAndAdd() {
         let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, !isBusy else { return }
+        statusMessage = nil
         creating = true
         Task {
             defer { creating = false }
             do {
                 if let id = try await MusicAPI.createPlaylist(name: name, isPrivate: false) {
                     try await MusicAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
-                    ToastCenter.shared.show(String(localized: "已收藏到「\(name)」"))
-                    await account.refreshLibrary()
-                    dismiss()
+                    await finishSuccess(playlistName: name)
                 }
             } catch {
-                ToastCenter.shared.show(error.localizedDescription)
+                await finishFailure(error)
             }
         }
+    }
+
+    @MainActor
+    private func finishSuccess(playlistName: String) async {
+        let message = String(localized: "已收藏到「\(playlistName)」")
+        // Dismiss first so the toast is not trapped behind this sheet or the
+        // Now Playing cover (see #182).
+        dismiss()
+        ToastCenter.shared.show(message)
+        await account.refreshLibrary()
+    }
+
+    @MainActor
+    private func finishFailure(_ error: Error) async {
+        if PlaylistAddError.isAlreadyInPlaylist(error) {
+            let message = String(localized: "歌单中已有此歌曲")
+            dismiss()
+            ToastCenter.shared.show(message)
+            return
+        }
+        let message = error.localizedDescription
+        statusMessage = message
+        ToastCenter.shared.show(message)
+    }
+}
+
+enum PlaylistAddError {
+    /// NetEase (and mirrored clients) report an already-present track with a
+    /// business code or a Chinese/English "already exists" message.
+    static func isAlreadyInPlaylist(_ error: Error) -> Bool {
+        if case MusicAPIError.business(_, let message) = error,
+           let message, looksLikeDuplicate(message) {
+            return true
+        }
+        return looksLikeDuplicate(error.localizedDescription)
+    }
+
+    private static func looksLikeDuplicate(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return text.contains("重复")
+            || text.contains("已存在")
+            || text.contains("已在歌单")
+            || lowered.contains("already")
+            || lowered.contains("duplicate")
     }
 }

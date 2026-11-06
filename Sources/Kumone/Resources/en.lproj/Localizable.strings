@@ -114,6 +114,7 @@
 "创建" = "Create";
 "创建并收藏" = "Create & Add";
 "已收藏到「%@」" = "Added to “%@”";
+"歌单中已有此歌曲" = "Already in this playlist";
 "歌单已创建" = "Playlist created";
 "取消" = "Cancel";
 "删除歌单" = "Delete Playlist";
