@@ -105,7 +105,14 @@ struct SearchView: View {
         // iPad enters SearchView from the sidebar, where the desktop window
         // toolbar search field is unavailable. On macOS, MainWindow owns the
         // only search field and navigates here with its submitted query.
-        .searchable(text: $searchText, prompt: "搜索歌曲、歌手、专辑、歌单")
+        // Keep the field pinned under the title. The default drawer collapses
+        // until the page scrolls, and the empty search page has nothing to
+        // scroll, so the field stayed hidden on the iPhone Search tab.
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "搜索歌曲、歌手、专辑、歌单"
+        )
         .onSubmit(of: .search) {
             model.setQuery(searchText)
             Task { await model.load(tab: model.tab) }

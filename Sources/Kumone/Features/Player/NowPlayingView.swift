@@ -50,23 +50,26 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
+            #if os(macOS)
+            .overlay(alignment: .topTrailing) {
+                // Toward the top-trailing corner, level with the window
+                // buttons (#128): a 36pt bubble whose center matches the 14pt
+                // traffic lights (y 19…33 inside the 52pt titlebar). Clear of
+                // the leading corner, where the sidebar toggle sits on the
+                // page below.
+                collapseButton(diameter: 36, glyphSize: 14)
+                    .padding(.top, 8)
+                    .padding(.trailing, 24)
+            }
+            #else
             .overlay(alignment: .topLeading) {
                 if showsClassicChrome(isCompact: isCompact) {
-                    #if os(macOS)
-                    // The window keeps its own buttons while this page is up
-                    // (#128). Beside them the chevron reads as one toolbar row:
-                    // a 28pt bubble whose center matches the 14pt traffic
-                    // lights (y 19…33 inside the 52pt titlebar).
-                    collapseButton(diameter: 28, glyphSize: 12)
-                        .padding(.top, 12)
-                        .padding(.leading, 91)
-                    #else
                     collapseButton(diameter: 36, glyphSize: 14)
                         .padding(.top, 20)
                         .padding(.leading, 20)
-                    #endif
                 }
             }
+            #endif
             .overlay(alignment: .topTrailing) {
                 if isCompact, showsClassicChrome(isCompact: isCompact) {
                     Button {

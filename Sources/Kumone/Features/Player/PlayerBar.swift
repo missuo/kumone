@@ -34,8 +34,11 @@ struct PlayerBar: View {
             artworkButton
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    MarqueeText(text: player.currentTrack?.name ?? String(localized: "未在播放"))
-                        .frame(height: 17)
+                    MarqueeText(
+                        text: player.currentTrack?.name ?? String(localized: "未在播放"),
+                        hugsText: true
+                    )
+                    .frame(height: 17)
                     if player.currentTrack?.fee == 1 {
                         VIPBadge()
                     }
@@ -45,10 +48,13 @@ struct PlayerBar: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Only as wide as the title and artist need, so the like button
+            // follows the title however wide the bar is.
+            .layoutPriority(1)
             if let track = player.currentTrack {
                 LikeButton(trackID: track.id)
             }
+            Spacer(minLength: 0)
         }
     }
 

@@ -94,18 +94,6 @@ enum Theme {
         }
         #endif
         static let minWindowWidth: CGFloat = 1020
-        /// Width the split view's divider occupies between the two columns.
-        static let splitDividerWidth: CGFloat = 8
-        /// Window minimum while the sidebar is collapsed. The window-wide
-        /// minimum is a *content* constraint, so with the sidebar hidden it
-        /// lands entirely on the detail column; restoring the sidebar would
-        /// then add its width on top and `.contentMinSize` would widen the
-        /// window every time the now-playing page is dismissed (#19).
-        /// Subtracting the sidebar here keeps the restored total at
-        /// `minWindowWidth`.
-        static var minWindowWidthSidebarCollapsed: CGFloat {
-            minWindowWidth - sidebarWidth - splitDividerWidth
-        }
         static let minWindowHeight: CGFloat = 640
         static let defaultWindowWidth: CGFloat = 1200
         static let defaultWindowHeight: CGFloat = 780

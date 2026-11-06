@@ -134,6 +134,11 @@ struct DestinationsModifier: ViewModifier {
                 }
             }
             .playerContentInset()
+            #if os(macOS)
+            // The main window draws its own back button, after the sidebar
+            // toggle and without a capsule (`BackButton`).
+            .navigationBarBackButtonHidden(true)
+            #endif
         }
     }
 }

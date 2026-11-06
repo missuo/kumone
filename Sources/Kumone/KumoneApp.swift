@@ -24,9 +24,7 @@ public struct KumoneApp: App {
                 .environmentObject(toasts)
                 .tint(Theme.accent)
                 .preferredColorScheme(settings.appearance.colorScheme)
-                .frame(minWidth: player.showNowPlaying
-                           ? Theme.Layout.minWindowWidthSidebarCollapsed
-                           : Theme.Layout.minWindowWidth,
+                .frame(minWidth: Theme.Layout.minWindowWidth,
                        minHeight: Theme.Layout.minWindowHeight)
         }
         .defaultSize(width: Theme.Layout.defaultWindowWidth,
@@ -35,6 +33,10 @@ public struct KumoneApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton()
+            }
+
+            CommandGroup(before: .toolbar) {
+                SidebarCommandButton()
             }
 
             CommandMenu("播放") {
