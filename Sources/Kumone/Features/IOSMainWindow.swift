@@ -205,6 +205,17 @@ public struct IOSMainWindow: View {
                 .environmentObject(settings)
         }
         .modifier(NowPlayingLoginPresenter())
+        // fullScreenCover / legacy NP cover sits above the root toast overlay,
+        // so re-host the same ToastCenter here while Now Playing is open (#182).
+        .overlay(alignment: .top) {
+            if let toast = toasts.current {
+                ToastView(toast: toast)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.3), value: toasts.current)
+        .environmentObject(toasts)
     }
 
     @ViewBuilder
