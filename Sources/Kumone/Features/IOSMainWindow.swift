@@ -205,10 +205,12 @@ public struct IOSMainWindow: View {
                 .environmentObject(settings)
         }
         .modifier(NowPlayingLoginPresenter())
-        // fullScreenCover / legacy NP cover sits above the root toast overlay,
-        // so re-host the same ToastCenter here while Now Playing is open (#182).
+        // A fullScreenCover sits above the root toast overlay, so re-host the
+        // same ToastCenter on the page while it is presented that way (#182).
+        // The legacy in-place page (iOS 16/17) is already under the root
+        // overlay; a second toast there would draw on top of the first.
         .overlay(alignment: .top) {
-            if let toast = toasts.current {
+            if usesSystemInteractiveDismissal, let toast = toasts.current {
                 ToastView(toast: toast)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
