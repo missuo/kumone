@@ -234,9 +234,14 @@ struct MarqueeText: View {
     let text: String
     var fontSize: CGFloat = 13
     var fontWeight: PlatformFont.Weight = .medium
+    /// Takes only the width the text needs, up to what it is offered, so a
+    /// view placed after it follows the text instead of the far edge.
+    var hugsText = false
 
     var body: some View {
-        MarqueeTextView.Representable(text: text, fontSize: fontSize, weight: fontWeight)
+        MarqueeTextView.Representable(
+            text: text, fontSize: fontSize, weight: fontWeight, hugsText: hugsText
+        )
     }
 }
 
@@ -313,9 +318,14 @@ final class MarqueeTextView: PlatformView {
         #endif
     }
 
+    static func textWidth(_ text: String, fontSize: CGFloat, weight: PlatformFont.Weight) -> CGFloat {
+        let font = PlatformFont.systemFont(ofSize: fontSize, weight: weight)
+        return (text as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+    }
+
     private func applyText() {
         let font = self.font
-        textWidth = (text as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+        textWidth = Self.textWidth(text, fontSize: fontSize, weight: weight)
         for textLayer in [first, second] {
             textLayer.string = text
             textLayer.font = font
@@ -424,6 +434,24 @@ final class MarqueeTextView: PlatformView {
         let text: String
         let fontSize: CGFloat
         let weight: PlatformFont.Weight
+        let hugsText: Bool
+
+        #if os(macOS)
+        func sizeThatFits(_ proposal: ProposedViewSize, nsView: MarqueeTextView, context: Context) -> CGSize? {
+            hugging(proposal)
+        }
+        #else
+        func sizeThatFits(_ proposal: ProposedViewSize, uiView: MarqueeTextView, context: Context) -> CGSize? {
+            hugging(proposal)
+        }
+        #endif
+
+        private func hugging(_ proposal: ProposedViewSize) -> CGSize? {
+            guard hugsText else { return nil }
+            let needed = MarqueeTextView.textWidth(text, fontSize: fontSize, weight: weight)
+            let width = proposal.width.map { min($0, needed) } ?? needed
+            return CGSize(width: width, height: proposal.height ?? fontSize * 1.3)
+        }
 
         #if os(macOS)
         func makeNSView(context: Context) -> MarqueeTextView {

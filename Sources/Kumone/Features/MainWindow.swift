@@ -5,7 +5,6 @@ struct MainWindow: View {
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
 #endif
-    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
@@ -26,7 +25,6 @@ struct MainWindow: View {
     @State private var mainColumnGeometry = MainColumnGeometry()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var nowPlayingChromeHidden = false
-    @State private var nowPlayingChromeFadedOut = false
     @State private var nowPlayingChromeTask: Task<Void, Never>?
 
     init(path: Binding<[Destination]>? = nil) {
@@ -48,20 +46,32 @@ struct MainWindow: View {
         externalPath ?? $localPath
     }
 
-    var body: some View {
+    /// The split between sidebar and page. On macOS the sidebar is a fixed
+    /// panel and the page slides over it (see `MacSidebarShell`); iPad keeps
+    /// the system split view.
+    @ViewBuilder
+    private var splitLayout: some View {
+        #if os(macOS)
+        MacSidebarShell {
+            SidebarView(selection: $selection, showLogin: $showLogin)
+        } detail: {
+            measuredDetail
+        } tint: {
+            if settings.showMainWindowAmbientBackground {
+                MainWindowAmbientBackground(
+                    colors: artworkStore.colors,
+                    intensity: settings.mainWindowAmbientBackgroundIntensity
+                )
+            }
+        }
+        #else
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selection, showLogin: $showLogin)
                 .navigationSplitViewColumnWidth(min: 200, ideal: Theme.Layout.sidebarWidth, max: 280)
         } detail: {
-            detailStack
-                .onGeometryChange(for: MainColumnGeometry.Layout.self) { proxy in
-                    MainColumnGeometry.Layout(frame: proxy.frame(in: .named("mainWindow")))
-                } action: { layout in
-                    mainColumnGeometry.update(layout)
-                }
+            measuredDetail
         }
         .navigationSplitViewStyle(.balanced)
-        .coordinateSpace(name: "mainWindow")
         .overlay(alignment: .trailing) {
             if settings.showMainWindowAmbientBackground {
                 MainColumnAmbientOverlay(
@@ -71,6 +81,21 @@ struct MainWindow: View {
                 )
             }
         }
+        #endif
+    }
+
+    private var measuredDetail: some View {
+        detailStack
+            .onGeometryChange(for: MainColumnGeometry.Layout.self) { proxy in
+                MainColumnGeometry.Layout(frame: proxy.frame(in: .named("mainWindow")))
+            } action: { layout in
+                mainColumnGeometry.update(layout)
+            }
+    }
+
+    var body: some View {
+        splitLayout
+        .coordinateSpace(name: "mainWindow")
         .toolbar {
             if nowPlayingChromeHidden {
                 // Immersive now-playing page: the real items step aside (the
@@ -80,10 +105,64 @@ struct MainWindow: View {
                 // alive. SwiftUI tears the whole toolbar — and with it the
                 // taller titlebar that parks the window buttons at their home
                 // position — down when its last item leaves (#128).
+                #if os(macOS)
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .automatic) {
+                        Color.clear.frame(width: 1, height: 1)
+                    }
+                    // Without this, macOS 26 wraps the 1pt item in a Liquid
+                    // Glass capsule: a thin white bar beside the window
+                    // buttons, over the page.
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .automatic) {
+                        Color.clear.frame(width: 1, height: 1)
+                    }
+                }
+                #else
                 ToolbarItem(placement: .automatic) {
                     Color.clear.frame(width: 1, height: 1)
                 }
+                #endif
             } else {
+                #if os(macOS)
+                // The first item, beside the window buttons: it stays put
+                // whether the sidebar is open or not.
+                // Back follows it, ours rather than the navigation stack's:
+                // the stack puts its own before the toggle, which would push
+                // the toggle along whenever a page is opened, and wraps it in
+                // a Liquid Glass capsule the toggle does not have.
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .navigation) {
+                        SidebarToggleButton()
+                    }
+                    // Plain icons over the page, as the split view drew them.
+                    .sharedBackgroundVisibility(.hidden)
+                    if !path.isEmpty {
+                        ToolbarItem(placement: .navigation) {
+                            BackButton { path.removeLast() }
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
+                } else {
+                    ToolbarItem(placement: .navigation) {
+                        SidebarToggleButton()
+                    }
+                    if !path.isEmpty {
+                        ToolbarItem(placement: .navigation) {
+                            BackButton { path.removeLast() }
+                        }
+                    }
+                }
+                #endif
+                #if os(macOS)
+                if #available(macOS 26.0, *) {
+                    // The window title is hidden (the page draws its own), and
+                    // with it went the flexible space that kept the search
+                    // field at the trailing end.
+                    ToolbarSpacer(.flexible)
+                }
+                #endif
                 if #available(macOS 26.0, iOS 26.0, *) {
                     ToolbarItem(placement: .primaryAction) {
                         SearchFieldView { query in
@@ -113,17 +192,11 @@ struct MainWindow: View {
         // Dock icon can always bring it back (#60/#63/#66/#70).
         .background(
             MainWindowConfigurator(
-                geometry: mainColumnGeometry,
-                ambientConfiguration: MainWindowAmbientConfiguration(
-                    showsAmbientBackground: settings.showMainWindowAmbientBackground,
-                    showsTitlebarAmbientBackground: !nowPlayingChromeHidden,
-                    showsNowPlaying: player.showNowPlaying,
-                    colors: artworkStore.colors,
-                    intensity: settings.mainWindowAmbientBackgroundIntensity,
-                    isDark: isDarkAppearance
+                chromeConfiguration: MainWindowChromeConfiguration(
+                    toolbarItemsHidden: nowPlayingChromeHidden
                 ),
-                titlebarFadedOut: nowPlayingChromeFadedOut,
-                toolbarHidden: nowPlayingChromeHidden
+                toolbarHidden: nowPlayingChromeHidden,
+                toolbarItemsFaded: player.showNowPlaying
             )
         )
         #endif
@@ -152,6 +225,11 @@ struct MainWindow: View {
             // Dock reopen event directly.
             AppDelegate.shared?.openMainWindow = { openWindow(id: "main") }
             artworkStore.setArtworkNeeded(needsCurrentArtwork)
+            // The page can be up from the start (restored with the player
+            // state), and then `onChange` never sees it open: its toolbar
+            // items must step aside all the same, or the sidebar toggle sits
+            // over the page's collapse chevron and takes its clicks.
+            if player.showNowPlaying { nowPlayingChromeHidden = true }
 #endif
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
             await DownloadManager.shared.start()
@@ -176,24 +254,19 @@ struct MainWindow: View {
             artworkStore.setArtworkNeeded(needsCurrentArtwork)
             nowPlayingChromeTask?.cancel()
             if player.showNowPlaying {
-                // Quiet the titlebar as the page rises to cover it: hide the
-                // title text, then swap the toolbar's items (search field,
-                // sidebar toggle) for a placeholder once nothing is left to
-                // see — snapping them away at once reads as a glitch above
-                // the rising page. The buttons stay: this page is the whole
-                // window, so they are its only way to close, dock or zoom it
-                // (#128).
+                // Swap the toolbar's items (search field, sidebar toggle) for
+                // a placeholder once the rising page covers them — snapping
+                // them away at once reads as a glitch above the page. The
+                // page's title is part of the page and is simply covered.
+                // The window buttons stay: this page is the whole window, so
+                // they are its only way to close, dock or zoom it (#128).
                 nowPlayingChromeTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(120))
-                    guard !Task.isCancelled else { return }
-                    nowPlayingChromeFadedOut = true
-                    try? await Task.sleep(for: .milliseconds(230))
+                    try? await Task.sleep(for: .milliseconds(350))
                     guard !Task.isCancelled else { return }
                     nowPlayingChromeHidden = true
                 }
             } else {
                 nowPlayingChromeHidden = false
-                nowPlayingChromeFadedOut = false
             }
             #endif
         }
@@ -206,20 +279,30 @@ struct MainWindow: View {
             // holds together add up to tens of megabytes, and rebuilding the
             // page takes a single frame when the window comes back. The
             // player state — and the page on restore — is untouched.
-            if player.showNowPlaying, windowVisibility.isOnScreen {
-                #if os(macOS)
-                NowPlayingView(onOpenDestination: openDestination)
-                    .environmentObject(artworkStore)
-                    .background(ArrowCursorOverride())
-                    // Resolve the slide at the page boundary, including artwork
-                    // inserted asynchronously while the transition is running.
-                    .geometryGroup()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                #else
-                NowPlayingView(onOpenDestination: openDestination)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                #endif
+            #if os(macOS)
+            // The container spans the whole window, the toolbar's band
+            // included. The page's own `ignoresSafeArea` does not reach the
+            // band while its transition runs, so it rose with the band above
+            // it still showing the page underneath (title, tint) and snapped
+            // over it only when the slide ended.
+            ZStack {
+                if player.showNowPlaying, windowVisibility.isOnScreen {
+                    NowPlayingView(onOpenDestination: openDestination)
+                        .environmentObject(artworkStore)
+                        .background(ArrowCursorOverride())
+                        // Resolve the slide at the page boundary, including artwork
+                        // inserted asynchronously while the transition is running.
+                        .geometryGroup()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .ignoresSafeArea()
+            #else
+            if player.showNowPlaying, windowVisibility.isOnScreen {
+                NowPlayingView(onOpenDestination: openDestination)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            #endif
         }
         .overlay(alignment: .top) {
             if let toast = toasts.current {
@@ -316,10 +399,6 @@ struct MainWindow: View {
     private var needsCurrentArtwork: Bool {
         settings.showMainWindowAmbientBackground || player.hasCurrentTrack
     }
-
-    private var isDarkAppearance: Bool {
-        (settings.appearance.colorScheme ?? colorScheme) == .dark
-    }
     #endif
 }
 
@@ -351,77 +430,60 @@ struct ArrowCursorOverride: NSViewRepresentable {
 /// can front it again on a Dock click. Every other window-delegate callback is
 /// forwarded untouched to SwiftUI's own delegate.
 struct MainWindowConfigurator: NSViewRepresentable {
-    @ObservedObject var geometry: MainColumnGeometry
-    let ambientConfiguration: MainWindowAmbientConfiguration
-    /// Hides the titlebar text while the immersive page covers the window;
-    /// the window buttons stay on top of the page (#128).
-    let titlebarFadedOut: Bool
+    let chromeConfiguration: MainWindowChromeConfiguration
     /// Drops the window toolbar while the immersive page covers the window in
     /// full screen, where the system otherwise pins it over the page. In a
     /// window the toolbar stays (its items swapped for a placeholder) so the
     /// titlebar keeps the height that positions the window buttons (#128).
     let toolbarHidden: Bool
+    /// Fades the toolbar's items (sidebar toggle, search field) out as the
+    /// immersive page starts to rise over them, and back in as it leaves,
+    /// rather than leaving them over the page until it settles and then
+    /// snapping them away.
+    let toolbarItemsFaded: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        let configuration = resolvedAmbientConfiguration
+        let configuration = chromeConfiguration
         DispatchQueue.main.async {
-            context.coordinator.requestAmbientBackgroundConfiguration(
+            context.coordinator.requestChromeConfiguration(
                 from: view,
-                ambientConfiguration: configuration
+                configuration: configuration
             )
-            context.coordinator.setTitlebarFadedOut(titlebarFadedOut)
             context.coordinator.setToolbarHidden(toolbarHidden)
+            context.coordinator.setToolbarItemsFaded(toolbarItemsFaded)
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        let configuration = resolvedAmbientConfiguration
+        let configuration = chromeConfiguration
         DispatchQueue.main.async {
-            context.coordinator.requestAmbientBackgroundConfiguration(
+            context.coordinator.requestChromeConfiguration(
                 from: nsView,
-                ambientConfiguration: configuration
+                configuration: configuration
             )
-            context.coordinator.setTitlebarFadedOut(titlebarFadedOut)
             context.coordinator.setToolbarHidden(toolbarHidden)
+            context.coordinator.setToolbarItemsFaded(toolbarItemsFaded)
         }
-    }
-
-    private var resolvedAmbientConfiguration: MainWindowAmbientConfiguration {
-        var configuration = ambientConfiguration
-        configuration.mainColumnLeadingInset = geometry.layout.leadingInset
-        return configuration
     }
 
     @MainActor
     final class Coordinator: NSObject, NSWindowDelegate {
         private(set) weak var window: NSWindow?
         private weak var forwardee: NSWindowDelegate?
-        private let ambientAppearance = MainWindowAmbientAppearanceController()
+        private let chrome = MainWindowChromeController()
         private weak var configurationHost: NSView?
-        private var pendingAmbientConfiguration: MainWindowAmbientConfiguration?
-        private var hasScheduledAmbientConfiguration = false
-        private var titlebarFadedOut = false
+        private var pendingChromeConfiguration: MainWindowChromeConfiguration?
+        private var hasScheduledChromeConfiguration = false
         private var windowToolbarHidden = false
         /// The toolbar items the immersive page hides, kept so the home page
         /// gets them back; see `suppressImmersiveToolbarItems`.
         private var hiddenToolbarItemIdentifiers: Set<String> = []
-
-        /// Hides the titlebar text while the immersive page covers the window.
-        /// The toolbar is dropped separately, and the window buttons stay: this
-        /// page is the whole window, so they are its only way to close,
-        /// minimize or zoom it — and the page paints its backdrop around them
-        /// (#128). Leaving them in the system's hands also keeps their
-        /// full-screen behaviour (auto-hide, reveal on hover) for free.
-        func setTitlebarFadedOut(_ fadedOut: Bool) {
-            guard fadedOut != titlebarFadedOut else { return }
-            titlebarFadedOut = fadedOut
-            window?.titleVisibility = fadedOut ? .hidden : .visible
-            ambientAppearance.setTitlebarMaskFadedOut(fadedOut)
-        }
+        private var titleObservation: NSKeyValueObservation?
+        private var toolbarItemsFaded = false
 
         /// Drops the window toolbar while the immersive page is up *in full
         /// screen*, the classic AppKit way: `toolbar.isVisible = false` takes
@@ -437,6 +499,34 @@ struct MainWindowConfigurator: NSViewRepresentable {
             guard hidden != windowToolbarHidden else { return }
             windowToolbarHidden = hidden
             applyWindowToolbarVisibility()
+        }
+
+        /// See `toolbarItemsFaded`. The window buttons are not toolbar items
+        /// and stay as they are.
+        func setToolbarItemsFaded(_ faded: Bool) {
+            guard faded != toolbarItemsFaded else { return }
+            toolbarItemsFaded = faded
+            guard let toolbar = window?.toolbar else { return }
+            let views = toolbar.items.compactMap(\.view)
+            if !faded {
+                // Items coming back may be fresh views; start them from clear.
+                for view in views { view.alphaValue = 0 }
+            }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = faded ? 0.15 : 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                for view in views { view.animator().alphaValue = faded ? 0 : 1 }
+            }
+            guard !faded else { return }
+            // SwiftUI may put an item's view back after this ran; never leave
+            // one clear once the page has gone.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, !self.toolbarItemsFaded,
+                      let toolbar = self.window?.toolbar else { return }
+                for view in toolbar.items.compactMap(\.view) where view.alphaValue < 1 {
+                    view.animator().alphaValue = 1
+                }
+            }
         }
 
         /// SwiftUI re-commits toolbar visibility on its own schedule and can
@@ -496,6 +586,13 @@ struct MainWindowConfigurator: NSViewRepresentable {
                 window.delegate = self
             }
             AppDelegate.shared?.mainWindow = window
+            // The page draws the title at its own leading edge, so it slides
+            // with the page instead of sitting beside the toggle; it reads the
+            // text SwiftUI still gives the window (see `PageTitleBand`).
+            titleObservation = window.observe(\.title, options: [.initial, .new]) { window, _ in
+                let title = window.title
+                Task { @MainActor in PageTitle.shared.update(title) }
+            }
             observeFullScreenChanges(of: window)
             observeWindowVisibility(of: window)
             refreshWindowVisibility()
@@ -521,7 +618,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
                     Task { @MainActor in
                         self?.reassertChromeState()
                         // SwiftUI re-commits toolbar visibility around the
-                        // hand-off (see MainWindowAmbientAppearanceController),
+                        // hand-off (see MainWindowChromeController),
                         // so run one more pass once that commit settles.
                         try? await Task.sleep(for: .milliseconds(100))
                         self?.reassertChromeState()
@@ -566,28 +663,27 @@ struct MainWindowConfigurator: NSViewRepresentable {
         }
 
         private func reassertChromeState() {
-            window?.titleVisibility = titlebarFadedOut ? .hidden : .visible
             applyWindowToolbarVisibility()
             refreshWindowVisibility()
         }
 
-        func requestAmbientBackgroundConfiguration(
+        func requestChromeConfiguration(
             from host: NSView,
-            ambientConfiguration: MainWindowAmbientConfiguration
+            configuration: MainWindowChromeConfiguration
         ) {
             configurationHost = host
-            pendingAmbientConfiguration = ambientConfiguration
-            guard !hasScheduledAmbientConfiguration else { return }
-            hasScheduledAmbientConfiguration = true
+            pendingChromeConfiguration = configuration
+            guard !hasScheduledChromeConfiguration else { return }
+            hasScheduledChromeConfiguration = true
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.hasScheduledAmbientConfiguration = false
-                guard let configuration = self.pendingAmbientConfiguration else { return }
-                self.pendingAmbientConfiguration = nil
+                self.hasScheduledChromeConfiguration = false
+                guard let configuration = self.pendingChromeConfiguration else { return }
+                self.pendingChromeConfiguration = nil
                 self.attach(to: self.configurationHost?.window)
                 guard let window = self.window else { return }
-                self.ambientAppearance.configure(configuration, in: window)
+                self.chrome.configure(configuration, in: window)
                 // SwiftUI re-commits toolbar visibility on its own schedule;
                 // put the immersive state back whenever it may have drifted.
                 self.applyWindowToolbarVisibility()
@@ -597,7 +693,14 @@ struct MainWindowConfigurator: NSViewRepresentable {
         func windowDidUpdate(_ notification: Notification) {
             forwardee?.windowDidUpdate?(notification)
             if let window {
-                ambientAppearance.updateLayout(in: window)
+                chrome.updateLayout(in: window)
+                // SwiftUI and AppKit bring hidden toolbar items back on their
+                // own schedule; while the immersive page is up, put them away
+                // again at once. One that came back (faded out, so unseen)
+                // sat over the page's collapse chevron and took its clicks.
+                if windowToolbarHidden, let toolbar = window.toolbar {
+                    suppressImmersiveToolbarItems(in: toolbar)
+                }
             }
             refreshWindowVisibility()
         }
@@ -605,7 +708,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
         func windowDidResize(_ notification: Notification) {
             forwardee?.windowDidResize?(notification)
             if let window {
-                ambientAppearance.updateLayout(in: window)
+                chrome.updateLayout(in: window)
             }
             refreshWindowVisibility()
         }

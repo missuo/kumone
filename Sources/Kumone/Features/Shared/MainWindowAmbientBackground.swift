@@ -80,67 +80,31 @@ enum MainWindowAmbientOpacity {
 }
 
 #if os(macOS)
-struct MainWindowAmbientConfiguration {
-    let showsAmbientBackground: Bool
-    let showsTitlebarAmbientBackground: Bool
-    let showsNowPlaying: Bool
-    let colors: ArtworkColors
-    var mainColumnLeadingInset: CGFloat = 0
-    let intensity: Double
-    let isDark: Bool
+/// What the main window's chrome needs from AppKit.
+struct MainWindowChromeConfiguration: Equatable {
+    /// The immersive now-playing page has taken the toolbar's items away.
+    let toolbarItemsHidden: Bool
 }
 
-/// Shares titlebar extension between the artwork tint and now-playing page,
-/// restoring the original appearance when neither needs it.
+/// Keeps the main window's content running up under a transparent titlebar.
+/// The sidebar panel reaches up under the window buttons and the page paints
+/// its own backdrop, tint and title in the toolbar's band (`MacSidebarShell`),
+/// so the titlebar itself must draw nothing.
 @MainActor
-final class MainWindowAmbientAppearanceController {
-    private var configuration = MainWindowAmbientConfiguration(
-        showsAmbientBackground: false,
-        showsTitlebarAmbientBackground: false,
-        showsNowPlaying: false,
-        colors: .fallback,
-        mainColumnLeadingInset: 0,
-        intensity: 1,
-        isDark: false
-    )
-    private var titlebarWasTransparent: Bool?
-    private var hadFullSizeContentView = false
-    private var titlebarMask: TitlebarMaskView?
+final class MainWindowChromeController {
+    private var configuration = MainWindowChromeConfiguration(toolbarItemsHidden: false)
     private var toolbarUpdateTask: Task<Void, Never>?
     private var isUpdatingLayout = false
 
-    private var extendsContentIntoTitlebar: Bool {
-        configuration.showsAmbientBackground || configuration.showsNowPlaying
-    }
-
-    /// Fades the titlebar tint along with the window chrome while the
-    /// now-playing page covers it.
-    func setTitlebarMaskFadedOut(_ fadedOut: Bool) {
-        guard let titlebarMask else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = fadedOut ? 0.2 : 0.25
-            titlebarMask.animator().alphaValue = fadedOut ? 0 : 1
-        }
-    }
-
-    func configure(_ configuration: MainWindowAmbientConfiguration, in window: NSWindow) {
-        let wasExtendingContent = extendsContentIntoTitlebar
-        let toolbarVisibilityChanged = self.configuration.showsTitlebarAmbientBackground
-            != configuration.showsTitlebarAmbientBackground
+    func configure(_ configuration: MainWindowChromeConfiguration, in window: NSWindow) {
+        let toolbarItemsChanged = self.configuration != configuration
         self.configuration = configuration
-
-        if !wasExtendingContent, extendsContentIntoTitlebar {
-            titlebarWasTransparent = window.titlebarAppearsTransparent
-            hadFullSizeContentView = window.styleMask.contains(.fullSizeContentView)
-        }
         updateLayout(in: window)
-        if !extendsContentIntoTitlebar {
-            titlebarWasTransparent = nil
-        }
 
-        // SwiftUI can reset the window style after committing toolbar visibility.
-        // Reapply after that commit; a quick close/reopen cancels the old request.
-        if toolbarVisibilityChanged {
+        // SwiftUI can reset the window style after committing a toolbar
+        // change. Reapply after that commit; a quick close/reopen cancels the
+        // old request.
+        if toolbarItemsChanged {
             toolbarUpdateTask?.cancel()
             toolbarUpdateTask = Task { @MainActor [weak self, weak window] in
                 try? await Task.sleep(for: .milliseconds(100))
@@ -156,154 +120,18 @@ final class MainWindowAmbientAppearanceController {
         isUpdatingLayout = true
         defer { isUpdatingLayout = false }
 
-        if extendsContentIntoTitlebar || titlebarWasTransparent != nil {
-            let transparent = extendsContentIntoTitlebar || titlebarWasTransparent == true
-            let fullSize = extendsContentIntoTitlebar || hadFullSizeContentView
-            let styleChanged = window.styleMask.contains(.fullSizeContentView) != fullSize
-            if window.titlebarAppearsTransparent != transparent {
-                window.titlebarAppearsTransparent = transparent
-            }
-            if styleChanged {
-                // Finish the new content geometry in the same transaction. A
-                // deferred layout can leave the backdrop behind during zoom.
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0
-                    context.allowsImplicitAnimation = false
-                    if fullSize {
-                        window.styleMask.insert(.fullSizeContentView)
-                    } else {
-                        window.styleMask.remove(.fullSizeContentView)
-                    }
-                    window.contentView?.superview?.layoutSubtreeIfNeeded()
-                }
-            }
+        if !window.titlebarAppearsTransparent {
+            window.titlebarAppearsTransparent = true
         }
-
-        guard configuration.showsAmbientBackground,
-              configuration.showsTitlebarAmbientBackground else {
-            titlebarMask?.removeFromSuperview()
-            titlebarMask = nil
-            return
+        guard !window.styleMask.contains(.fullSizeContentView) else { return }
+        // Finish the new content geometry in the same transaction. A deferred
+        // layout can leave the backdrop behind during zoom.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            window.styleMask.insert(.fullSizeContentView)
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
         }
-        installTitlebarMask(in: window)
-        layoutTitlebarMask(in: window)
-    }
-
-    private func installTitlebarMask(in window: NSWindow) {
-        guard titlebarMask == nil, let contentView = window.contentView else { return }
-        let mask = TitlebarMaskView()
-        mask.autoresizingMask = [.width, contentView.isFlipped ? .maxYMargin : .minYMargin]
-        contentView.addSubview(mask, positioned: .above, relativeTo: nil)
-        titlebarMask = mask
-    }
-
-    private func layoutTitlebarMask(in window: NSWindow) {
-        guard let mask = titlebarMask, let contentView = window.contentView else { return }
-        // During zoom, SwiftUI's detail width can lag behind the window bounds.
-        // Anchor to the sidebar edge and size from AppKit's current bounds.
-        let leadingInset = max(configuration.mainColumnLeadingInset, 0)
-        let width = max(contentView.bounds.width - leadingInset, 0)
-        guard width > 0 else {
-            mask.isHidden = true
-            return
-        }
-
-        let titlebarHeight = contentView.bounds.height - window.contentLayoutRect.height
-        guard titlebarHeight > 0 else {
-            mask.isHidden = true
-            return
-        }
-        let y = contentView.isFlipped
-            ? contentView.bounds.minY
-            : contentView.bounds.maxY - titlebarHeight
-        let frame = CGRect(
-            x: contentView.bounds.maxX - width,
-            y: y,
-            width: width,
-            height: titlebarHeight
-        )
-
-        if mask.frame != frame {
-            mask.frame = frame
-        }
-        if mask.isHidden {
-            mask.isHidden = false
-        }
-        mask.update(
-            colors: configuration.colors,
-            intensity: configuration.intensity,
-            isDark: configuration.isDark
-        )
-    }
-}
-
-private final class TitlebarMaskView: NSView {
-    private let gradientLayer = CAGradientLayer()
-    private var appliedColors: ArtworkColors?
-    private var appliedIntensity: Double?
-    private var appliedIsDark: Bool?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.addSublayer(gradientLayer)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        gradientLayer.frame = bounds
-        CATransaction.commit()
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    func update(colors: ArtworkColors, intensity: Double, isDark: Bool) {
-        guard appliedColors != colors
-                || appliedIntensity != intensity
-                || appliedIsDark != isDark else {
-            return
-        }
-        appliedColors = colors
-        appliedIntensity = intensity
-        appliedIsDark = isDark
-
-        let opacity = CGFloat(
-            MainWindowAmbientOpacity.gradient(isDark: isDark, intensity: intensity)
-        )
-        let appearanceName: NSAppearance.Name = isDark ? .darkAqua : .aqua
-        var base = NSColor.windowBackgroundColor.usingColorSpace(.extendedSRGB)
-            ?? NSColor.windowBackgroundColor
-        NSAppearance(named: appearanceName)?.performAsCurrentDrawingAppearance {
-            base = NSColor.windowBackgroundColor.usingColorSpace(.extendedSRGB)
-                ?? NSColor.windowBackgroundColor
-        }
-        let primary = blended(NSColor(colors.primary), over: base, opacity: opacity)
-        let secondary = blended(NSColor(colors.secondary), over: base, opacity: opacity)
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(Platform.isReduceMotionEnabled)
-        CATransaction.setAnimationDuration(0.6)
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
-        gradientLayer.colors = [primary.cgColor, secondary.cgColor]
-        gradientLayer.startPoint = CGPoint(x: 0, y: 1)
-        gradientLayer.endPoint = CGPoint(x: 1, y: 0)
-        CATransaction.commit()
-    }
-
-    private func blended(_ color: NSColor, over base: NSColor, opacity: CGFloat) -> NSColor {
-        let foreground = color.usingColorSpace(.extendedSRGB) ?? color
-        let background = base.usingColorSpace(.extendedSRGB) ?? base
-        return NSColor(
-            red: background.redComponent + (foreground.redComponent - background.redComponent) * opacity,
-            green: background.greenComponent + (foreground.greenComponent - background.greenComponent) * opacity,
-            blue: background.blueComponent + (foreground.blueComponent - background.blueComponent) * opacity,
-            alpha: 1
-        )
     }
 }
 #endif
