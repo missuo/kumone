@@ -66,6 +66,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS])),
                 .target(name: "KumoneObjC", condition: .when(platforms: [.macOS])),
+                "KumoneAudioDSP",
             ],
             path: "Sources/Kumone",
             exclude: ["Resources"],
@@ -78,6 +79,13 @@ let package = Package(
         .target(
             name: "KumoneObjC",
             path: "Sources/KumoneObjC"
+        ),
+        // Lock-free parameter exchange between SwiftUI and the iOS real-time
+        // audio tap. C11 atomics back-deploy to iOS 16 without another package.
+        .target(
+            name: "KumoneAudioDSP",
+            path: "Sources/KumoneAudioDSP",
+            publicHeadersPath: "include"
         ),
         .executableTarget(
             name: "KumoneLauncher",
@@ -137,6 +145,7 @@ let package = Package(
             name: "KumoneCoreTests",
             dependencies: [
                 "KumoneCore",
+                "KumoneAudioDSP",
                 .target(name: "KumoneObjC", condition: .when(platforms: [.macOS])),
             ],
             path: "Tests/KumoneCoreTests",

@@ -1012,20 +1012,11 @@ final class PlayerService: ObservableObject {
         offlineLease: OfflinePlaybackLease? = nil,
         resumeAt: TimeInterval = 0
     ) async -> ResolvedURLLoadResult {
-        // Resolve the asset's audio track before the item goes live: an audio mix
-        // attached after playback starts is silently ignored, so the spectrum tap
-        // has to be spliced in here or not at all. Unsupported sources and iOS
-        // cache hits play untapped and use the decorative UI fallback.
-        #if os(iOS)
-        // Cached files already have a complete local media source. Keeping their
-        // playback path free of a MediaToolbox processing tap avoids rebuilding
-        // the custom render pipeline on every rapid cache-to-cache switch.
-        let assetTrack = asset.url.isFileURL
-            ? nil
-            : await loadAudioTrack(from: asset, timeout: 2)
-        #else
+        // Resolve the audio track before the item goes live: an audio mix attached
+        // after playback starts is silently ignored. The one tap now drives both
+        // the spectrum and iOS equalizer, so local/cache/offline assets take the
+        // same path as remote streams. Unsupported sources still play untouched.
         let assetTrack = await loadAudioTrack(from: asset, timeout: 2)
-        #endif
         guard generation == resolveGeneration,
               resourceLoader.map({ pendingAudioResourceLoader === $0 }) ?? true else {
             resourceLoader?.cancel()

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		37A7A8CCC1891436A0367530 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = AFE2C8AFE097D6A514E82AA7 /* Localizable.strings */; };
 		69F9DF0E863EFB197513936E /* KumoneIOSUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9033A23C5610F19ABA3774 /* KumoneIOSUITests.swift */; };
 		912D4F61C71BE306BABD494B /* KumoneIOSFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 2D74B41A7A94ABA39956EC55 /* KumoneIOSFeature */; };
 		C2D27A1CAB9C74AB85AE8166 /* KumoneIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A494667EB444A90236506102 /* KumoneIOSApp.swift */; };
@@ -27,10 +28,12 @@
 /* Begin PBXFileReference section */
 		0646F456C7BF38C0A8ED880E /* KumoneIOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KumoneIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		1E04E1B88D02E80377A46D7F /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		2199D32FC69383EC32B19794 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = KumoneIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = TestFlight.xcconfig; sourceTree = "<group>"; };
 		45602F996F250E88035F23A9 /* KumoneIOSPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = KumoneIOSPackage; path = KumoneIOSPackage; sourceTree = SOURCE_ROOT; };
+		568F93291A899D30E78DE035 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		66554F47F0D6FC82F2EFDB2A /* KumoneIOS.xctestplan */ = {isa = PBXFileReference; path = KumoneIOS.xctestplan; sourceTree = "<group>"; };
 		6D28AAA402747474C3A1B8AD /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		74C59F0F113B18EBEA9C55B6 /* Tests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Tests.xcconfig; sourceTree = "<group>"; };
@@ -138,6 +141,7 @@
 			isa = PBXGroup;
 			children = (
 				07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */,
+				AFE2C8AFE097D6A514E82AA7 /* Localizable.strings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -208,6 +212,7 @@
 			knownRegions = (
 				Base,
 				en,
+				"zh-Hans",
 			);
 			mainGroup = 407A4760CEE331B6B395DECF;
 			minimizedProjectReferenceProxies = 1;
@@ -231,6 +236,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C777A61B1DD211B6FF64D88B /* Assets.xcassets in Resources */,
+				37A7A8CCC1891436A0367530 /* Localizable.strings in Resources */,
 				EC74DAC7ED94A1CFD01A6BB9 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -263,6 +269,18 @@
 			targetProxy = 938A878937A1366DA22272E1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		AFE2C8AFE097D6A514E82AA7 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				1E04E1B88D02E80377A46D7F /* en */,
+				568F93291A899D30E78DE035 /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		4D26825A4F27432C1574AD3E /* Debug */ = {

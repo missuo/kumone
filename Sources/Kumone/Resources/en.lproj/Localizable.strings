@@ -561,3 +561,32 @@
 "显示或隐藏边栏 (⌃⌘S)" = "Show or hide the sidebar (⌃⌘S)";
 "隐藏边栏" = "Hide Sidebar";
 "显示边栏" = "Show Sidebar";
+
+/* iOS sound effects */
+"音效" = "Sound Effects";
+"原声" = "Original";
+"超重低音" = "Deep Bass";
+"清澈人声" = "Clear Vocals";
+"自定义" = "Custom";
+"正在使用" = "In Use";
+"开始播放后可实时试听音效" = "Start playing to preview sound effects in real time.";
+"正在准备当前音源的音效处理…" = "Preparing sound effects for this source…";
+"当前音源暂不支持音效，将保持原声播放；所选方案会在下一首可处理歌曲自动生效。" = "Sound effects are unavailable for this source, so it will play unchanged. Your selection will apply automatically to the next supported track.";
+"自定义均衡器" = "Custom Equalizer";
+"拖动频段即可实时试听，设置会自动保存" = "Adjust a band to hear it immediately. Changes are saved automatically.";
+"重置" = "Reset";
+"均衡器" = "Equalizer";
+"调整任一频段后自动启用自定义音效" = "Adjust any band to enable the custom sound effect automatically.";
+"已开启" = "On";
+"已关闭" = "Off";
+"实时频响曲线" = "Live frequency response";
+"使用" = "Use";
+"保留音乐原本的频率与动态" = "Preserves the music's original frequency balance and dynamics.";
+"提亮节奏与旋律，让整体听感更鲜明" = "Brightens rhythm and melody for a more vivid sound.";
+"增强低频冲击与高频亮度，突出吉他和鼓点" = "Adds bass impact and treble presence for guitars and drums.";
+"强化低频下潜与空气感，营造更强电子氛围" = "Extends the bass and air for a stronger electronic atmosphere.";
+"保持中频自然，提升乐器层次与空间细节" = "Keeps mids natural while revealing instrumental depth and space.";
+"温暖低频并柔和提升高频，突出器乐质感" = "Warms the bass and gently lifts treble for richer instruments.";
+"显著增强低频下潜与弹性，适合强节奏音乐" = "Adds deep, elastic bass for beat-driven music.";
+"收紧低频并抬升中高频，让歌声更靠前" = "Tightens bass and lifts the upper mids to bring vocals forward.";
+"按照均衡器设置调整各个频段" = "Uses your equalizer settings to shape each frequency band.";
