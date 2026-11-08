@@ -11,7 +11,7 @@ PRODUCT_BUNDLE_IDENTIFIER = sb.moe.kumone-ios
 // PRODUCT_DISPLAY_NAME is not a real build setting; the Home Screen
 // name comes from CFBundleDisplayName.
 INFOPLIST_KEY_CFBundleDisplayName = Kumone
-MARKETING_VERSION = 0.3.29
+MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 5
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
