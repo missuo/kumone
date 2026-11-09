@@ -15,15 +15,14 @@ enum OfflineAudioFormat: String, Codable, CaseIterable {
         UTType(filenameExtension: rawValue)?.identifier ?? "public.audio"
     }
 
+    /// Whether a transfer's Content-Type could carry audio at all. It cannot
+    /// tell the formats apart: the CDN serves FLAC as `audio/mpeg` (#147). The
+    /// MD5 and a full decode in `OfflineAudioValidator` prove the file; this
+    /// only turns away an error page before it is hashed.
     func accepts(mimeType: String?) -> Bool {
-        guard let mimeType else { return false }
-        switch mimeType.lowercased().split(separator: ";").first.map(String.init) {
-        case "application/octet-stream": return true
-        case "audio/mpeg", "audio/mp3": return self == .mp3
-        case "audio/mp4", "audio/x-m4a", "video/mp4": return self == .m4a
-        case "audio/flac", "audio/x-flac": return self == .flac
-        default: return false
-        }
+        guard let type = mimeType?.lowercased().split(separator: ";").first?
+            .trimmingCharacters(in: .whitespaces), !type.isEmpty else { return true }
+        return type.hasPrefix("audio/") || type == "application/octet-stream" || type == "video/mp4"
     }
 }
 

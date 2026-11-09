@@ -7,6 +7,18 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## Unreleased
+
+### Fixed
+
+- **Downloads**: lossless and Hi-Res downloads no longer fail with "Audio verification failed": the CDN labels FLAC files as MP3, and that label no longer rejects a file whose checksum and decoding are already verified (#147).
+
+---
+
+### 修复
+
+- **下载**：无损和 Hi-Res 音质下载不再报「音频校验失败」。CDN 会把 FLAC 文件标成 MP3 类型，现在不再因为这个标签拒收已通过校验和解码验证的文件（#147）。
+
 ## 0.3.30 - 2026-11-09
 
 ### Fixed
