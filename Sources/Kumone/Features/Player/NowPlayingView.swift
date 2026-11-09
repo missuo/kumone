@@ -1942,7 +1942,7 @@ private struct CompactSecondaryControls: View {
 
     private func secondaryButton(
         icon: String,
-        label: String,
+        label: LocalizedStringKey,
         isActive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -2053,7 +2053,7 @@ private struct CompactQueueContent: View {
 
     private func modeButton(
         icon: String,
-        label: String,
+        label: LocalizedStringKey,
         isActive: Bool,
         action: @escaping () -> Void
     ) -> some View {
@@ -2706,7 +2706,7 @@ private struct MinimalTransportControls: View {
             : .white.opacity(0.88)
     }
 
-    private var playbackModeLabel: String {
+    private var playbackModeLabel: LocalizedStringKey {
         if player.shuffleEnabled { return "随机播放" }
         switch player.repeatMode {
         case .off: return "顺序播放"
