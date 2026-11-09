@@ -12,12 +12,14 @@
 ### Fixed
 
 - **macOS**: on macOS 15 Sequoia, the toolbar search field stays at the trailing end of the window instead of sitting beside the sidebar toggle and covering the page title (#188).
+- **macOS**: on macOS 15 Sequoia, the sidebar is back to the system sidebar material, flush with the window edge, and the toolbar is back to its standard height (#193).
 
 ---
 
 ### 修复
 
 - **macOS**：在 macOS 15 Sequoia 上，工具栏搜索框保持在窗口右侧，而不再挤在侧栏按钮旁边挡住页面标题（#188）。
+- **macOS**：在 macOS 15 Sequoia 上，侧栏恢复系统原生侧栏材质并贴齐窗口边缘，工具栏恢复标准高度（#193）。
 
 ## 0.3.29 - 2026-11-06
 
