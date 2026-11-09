@@ -35,10 +35,10 @@ enum SoundEffectPreset: String, CaseIterable, Identifiable, Sendable {
         case .original: return "waveform"
         case .pop: return "sparkles"
         case .rock: return "guitars.fill"
-        case .electronic: return "waveform.path.ecg.rectangle.fill"
+        case .electronic: return "bolt.fill"
         case .classical: return "music.quarternote.3"
-        case .jazz: return "music.mic"
-        case .deepBass: return "hifispeaker.2.fill"
+        case .jazz: return "pianokeys"
+        case .deepBass: return "speaker.wave.3.fill"
         case .clearVocal: return "mic.fill"
         case .custom: return "slider.vertical.3"
         }
@@ -312,20 +312,27 @@ final class GraphicEqualizerDSP: @unchecked Sendable {
                                 stride: Int, channel: Int, preamp: Float) {
         guard frames > 0 else { return }
         let stateOffset = channel * EqualizerConfiguration.bandCount
-        for frame in 0..<frames {
-            let sampleIndex = frame * stride
-            var value = samples[sampleIndex] * preamp
-            for band in 0..<EqualizerConfiguration.bandCount {
-                let coefficient = coefficients[band]
-                let stateIndex = stateOffset + band
-                var state = states[stateIndex]
-                let output = coefficient.b0 * value + state.z1
-                state.z1 = coefficient.b1 * value - coefficient.a1 * output + state.z2
-                state.z2 = coefficient.b2 * value - coefficient.a2 * output
-                states[stateIndex] = state
-                value = output
+        // Take the arrays' storage once per buffer: indexing the class's array
+        // properties inside the per-sample loop would run an exclusivity check
+        // and a uniqueness check for every band of every sample.
+        coefficients.withUnsafeBufferPointer { coefficients in
+            states.withUnsafeMutableBufferPointer { states in
+                for frame in 0..<frames {
+                    let sampleIndex = frame * stride
+                    var value = samples[sampleIndex] * preamp
+                    for band in 0..<EqualizerConfiguration.bandCount {
+                        let coefficient = coefficients[band]
+                        let stateIndex = stateOffset + band
+                        var state = states[stateIndex]
+                        let output = coefficient.b0 * value + state.z1
+                        state.z1 = coefficient.b1 * value - coefficient.a1 * output + state.z2
+                        state.z2 = coefficient.b2 * value - coefficient.a2 * output
+                        states[stateIndex] = state
+                        value = output
+                    }
+                    samples[sampleIndex] = value
+                }
             }
-            samples[sampleIndex] = value
         }
     }
 }

@@ -11,26 +11,17 @@ struct SoundEffectsButton: View {
 
     var body: some View {
         Menu {
-            Section("音效") {
+            // A picker gives the menu the system checkmark on the active preset.
+            Picker("音效", selection: Binding(
+                get: { settings.soundEffectPreset },
+                set: { settings.selectSoundEffect($0) }
+            )) {
                 ForEach(SoundEffectPreset.allCases.filter { $0 != .custom }) { preset in
-                    Button {
-                        settings.selectSoundEffect(preset)
-                    } label: {
-                        Label {
-                            Text(
-                                settings.soundEffectPreset == preset
-                                    ? "\(preset.displayName)  ✓"
-                                    : preset.displayName
-                            )
-                        } icon: {
-                            Image(systemName: preset.systemImage)
-                        }
-                    }
-                    .accessibilityValue(
-                        settings.soundEffectPreset == preset ? "正在使用" : ""
-                    )
+                    Label(preset.displayName, systemImage: preset.systemImage)
+                        .tag(preset)
                 }
             }
+            .pickerStyle(.inline)
 
             Divider()
 
@@ -79,6 +70,7 @@ private struct SoundEffectsPresentationModifier: ViewModifier {
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("完成") { isPresented = false }
+                                .tint(Color.primary)
                         }
                     }
             }
@@ -123,7 +115,7 @@ private struct SoundEffectsContent: View {
     var body: some View {
         VStack(spacing: 0) {
             Picker("", selection: $selectedSection) {
-                Text("音效").tag(SoundEffectsSection.effects)
+                Text("预设").tag(SoundEffectsSection.effects)
                 Text("均衡器").tag(SoundEffectsSection.equalizer)
             }
             .pickerStyle(.segmented)
@@ -144,25 +136,28 @@ private struct SoundEffectsContent: View {
         .navigationTitle("音效")
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeInOut(duration: 0.2), value: settings.soundEffectPreset)
+        // No accent-colored text on these pages: the app-wide accent tint
+        // would turn every plain button red. Controls that should carry the
+        // accent (the selection checkmark, the switch, the band handles) set
+        // it themselves.
+        .tint(Color.primary)
     }
 
     private var effectsContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if spectrum.tapState == .preparing || spectrum.tapState == .untappable {
+        List {
+            if spectrum.tapState == .preparing || spectrum.tapState == .untappable {
+                Section {
                     availabilityNotice
                 }
+            }
 
-                LazyVStack(spacing: 12) {
-                    ForEach(standardPresets) { preset in
-                        presetRow(preset)
-                    }
+            Section {
+                ForEach(standardPresets) { preset in
+                    presetRow(preset)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 28)
         }
+        .listStyle(.insetGrouped)
     }
 
     private var equalizerContent: some View {
@@ -181,7 +176,7 @@ private struct SoundEffectsContent: View {
     @ViewBuilder
     private var availabilityNotice: some View {
         switch spectrum.tapState {
-        case .idle:
+        case .idle, .tapped:
             EmptyView()
         case .preparing:
             HStack(spacing: 10) {
@@ -190,126 +185,56 @@ private struct SoundEffectsContent: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-        case .tapped:
-            EmptyView()
         case .untappable:
-            notice(
-                icon: "exclamationmark.triangle.fill",
-                text: "当前音源暂不支持音效，将保持原声播放；所选方案会在下一首可处理歌曲自动生效。",
-                tint: .orange)
-        }
-    }
-
-    private func notice(icon: String, text: LocalizedStringKey, tint: Color) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func presetRow(_ preset: SoundEffectPreset) -> some View {
-        let isSelected = settings.soundEffectPreset == preset
-        return HStack(spacing: 12) {
-            presetIcon(preset)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(preset.displayName)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(preset.effectDescription)
-                    .font(.caption)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("当前音源暂不支持音效，将保持原声播放；所选方案会在下一首可处理歌曲自动生效。")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            presetActionButton(preset, isSelected: isSelected)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 15)
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .accessibilityElement(children: .contain)
+    }
+
+    /// A plain settings row: tapping it selects the preset, and the selected
+    /// one carries the checkmark.
+    private func presetRow(_ preset: SoundEffectPreset) -> some View {
+        let isSelected = settings.soundEffectPreset == preset
+        return Button {
+            settings.selectSoundEffect(preset)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: preset.systemImage)
+                    .font(.body)
+                    .symbolRenderingMode(.hierarchical)
+                    // Concrete colors: in a list the button's tint would
+                    // otherwise recolor the hierarchical styles.
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(preset.displayName)
+                        .foregroundStyle(Color.primary)
+                    Text(preset.effectDescription)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "checkmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(preset.displayName)
-        .accessibilityValue(isSelected ? String(localized: "正在使用") : preset.effectDescription)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityValue(preset.effectDescription)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("soundEffectPreset.\(preset.rawValue)")
-    }
-
-    @ViewBuilder
-    private func presetActionButton(_ preset: SoundEffectPreset, isSelected: Bool) -> some View {
-        if #available(iOS 26.0, *) {
-            Button {
-                togglePreset(preset, isSelected: isSelected)
-            } label: {
-                presetActionLabel(isSelected: isSelected)
-            }
-            .buttonStyle(.glass(.regular.interactive()))
-            .buttonBorderShape(.capsule)
-            .tint(isSelected ? Color(uiColor: .secondaryLabel) : Theme.accent)
-            .accessibilityLabel(isSelected ? "取消" : "使用")
-            .accessibilityValue(preset.displayName)
-        } else {
-            Button {
-                togglePreset(preset, isSelected: isSelected)
-            } label: {
-                presetActionLabel(isSelected: isSelected)
-                    .background {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.04))
-                    }
-                    .overlay {
-                        Capsule()
-                            .stroke(
-                                isSelected ? Color.primary.opacity(0.16) : Theme.accent.opacity(0.72),
-                                lineWidth: 1)
-                    }
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isSelected ? "取消" : "使用")
-            .accessibilityValue(preset.displayName)
-        }
-    }
-
-    private func presetActionLabel(isSelected: Bool) -> some View {
-        Text(isSelected ? "取消" : "使用")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(isSelected ? .secondary : Theme.accent)
-            .frame(minWidth: 48)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-    }
-
-    private func togglePreset(_ preset: SoundEffectPreset, isSelected: Bool) {
-        settings.selectSoundEffect(isSelected ? .original : preset)
-    }
-
-    private func presetIcon(_ preset: SoundEffectPreset) -> some View {
-        Image(systemName: preset.systemImage)
-            .font(.system(size: 17, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(.primary)
-            .frame(width: 34, height: 34)
-            .background(
-                .primary.opacity(0.07),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
     }
 
     private var soundEffectsBackground: some View {

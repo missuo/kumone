@@ -12,10 +12,22 @@ private struct OpenDestinationKey: EnvironmentKey {
     static let defaultValue: (Destination) -> Void = { _ in }
 }
 
+private struct PresentSettingsSheetKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
 extension EnvironmentValues {
     var openLogin: () -> Void {
         get { self[OpenLoginKey.self] }
         set { self[OpenLoginKey.self] = newValue }
+    }
+
+    /// iOS: presents the Settings sheet from the app's root view. A sheet
+    /// presented from inside a tab is re-hosted when the tab view updates,
+    /// which reset its navigation (a pushed page popped back to the root).
+    var presentSettingsSheet: () -> Void {
+        get { self[PresentSettingsSheetKey.self] }
+        set { self[PresentSettingsSheetKey.self] = newValue }
     }
 
     var openDestination: (Destination) -> Void {

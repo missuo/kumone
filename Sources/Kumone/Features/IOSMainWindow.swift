@@ -26,6 +26,7 @@ public struct IOSMainWindow: View {
 
     @State private var lastForegroundRefresh: Date?
     @State private var showLogin = false
+    @State private var showSettings = false
     @State private var homePath: [Destination] = []
     @State private var explorePath: [Destination] = []
     @State private var fmPath: [Destination] = []
@@ -53,6 +54,7 @@ public struct IOSMainWindow: View {
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
             .environment(\.openLogin, { showLogin = true })
+            .environment(\.presentSettingsSheet, { showSettings = true })
             .environment(\.openDestination, openDestination)
             .modifier(PlaybackLifecycle())
             .task {
@@ -76,6 +78,25 @@ public struct IOSMainWindow: View {
             }
             .sheet(isPresented: $updater.showSheet) {
                 IOSUpdaterSheet()
+            }
+            // Presented here rather than from the Library tab or the iPad
+            // sidebar: a sheet hosted inside the tab view is re-hosted when
+            // the tabs update, which reset its navigation (#191 review).
+            .sheet(isPresented: $showSettings) {
+                // Outside the modifiers above, so hand the sheet the same
+                // environment the rest of the app gets.
+                SettingsSheet(
+                    titleDisplayMode: UIDevice.current.userInterfaceIdiom == .pad ? .inline : .automatic
+                )
+                .environmentObject(player)
+                .environmentObject(account)
+                .environmentObject(settings)
+                .environmentObject(toasts)
+                .environmentObject(artworkStore)
+                .tint(Theme.accent)
+                .preferredColorScheme(settings.appearance.colorScheme)
+                .environment(\.openLogin, { showLogin = true })
+                .environment(\.openDestination, openDestination)
             }
             .sheet(isPresented: $showLogin) {
                 LoginSheet()
@@ -631,7 +652,7 @@ struct IOSMiniPlayerBar: View {
 struct IOSLibraryView: View {
     @Binding var showLogin: Bool
     @EnvironmentObject private var account: AccountStore
-    @State private var showSettings = false
+    @Environment(\.presentSettingsSheet) private var presentSettingsSheet
     @State private var showNewPlaylist = false
     @State private var newPlaylistName = ""
 
@@ -777,24 +798,11 @@ struct IOSLibraryView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showSettings = true
+                    presentSettingsSheet()
                 } label: {
                     Image(systemName: "gearshape")
                 }
                 .accessibilityLabel("设置")
-            }
-        }
-        .sheet(isPresented: $showSettings) {
-            NavigationStack {
-                SettingsView()
-                    .navigationTitle("设置")
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("完成") {
-                                showSettings = false
-                            }
-                        }
-                    }
             }
         }
         .alert("新建歌单", isPresented: $showNewPlaylist) {

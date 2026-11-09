@@ -3,17 +3,57 @@ import SwiftUI
 import Combine
 #endif
 
+#if os(iOS)
+/// The iOS Settings sheet: its navigation stack, title and 完成 button around
+/// `SettingsView`. Present it from the app's root (`presentSettingsSheet`).
+///
+/// Presented from inside the Library tab, the sheet was re-hosted whenever
+/// the tab view updated, so changing a setting from a pushed page (picking a
+/// sound effect, say) reset the stack and popped the page back to the root.
+/// It also keeps the stack apart from `SettingsView`, which re-renders on
+/// every settings change.
+struct SettingsSheet: View {
+    var titleDisplayMode: NavigationBarItem.TitleDisplayMode = .automatic
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openDestination) private var openDestination
+    @State private var path: [SettingsView.SettingsPage] = []
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            SettingsView()
+                .navigationTitle("设置")
+                .navigationBarTitleDisplayMode(titleDisplayMode)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { dismiss() }
+                    }
+                }
+                .navigationDestination(for: SettingsView.SettingsPage.self) { page in
+                    switch page {
+                    case .storage:
+                        StorageSpaceView {
+                            dismiss()
+                            openDestination(.downloaded)
+                        }
+                    case .soundEffects:
+                        SoundEffectsPage()
+                    }
+                }
+        }
+    }
+}
+#endif
+
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
-    @Environment(\.dismiss) private var dismiss
     #if os(macOS)
     @AppStorage(SettingsManager.Keys.menuBarPlayer) private var showMenuBarPlayer = false
     @State private var navigationPath: [SettingsPage] = []
     #endif
 
-    private enum SettingsPage: Hashable {
+    fileprivate enum SettingsPage: Hashable {
         case storage
         #if os(iOS)
         case soundEffects
@@ -42,6 +82,7 @@ struct SettingsView: View {
             .frame(width: 520, height: 620)
             .overlay(alignment: .top) { SettingsToastOverlay() }
         #else
+        // Navigation lives in `SettingsSheet`, which observes no settings.
         settingsForm
         #endif
     }
@@ -250,27 +291,18 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        #if os(macOS)
         .navigationDestination(for: SettingsPage.self) { page in
             Group {
                 switch page {
                 case .storage:
                     StorageSpaceView {
-                        #if os(iOS)
-                        dismiss()
-                        #endif
                         openDestination(.downloaded)
                     }
-                #if os(iOS)
-                case .soundEffects:
-                    SoundEffectsPage()
-                #endif
-                #if os(macOS)
                 case .shortcuts:
                     ShortcutSettingsView()
-                #endif
                 }
             }
-            #if os(macOS)
             .navigationBarBackButtonHidden()
             .toolbar(removing: .title)
             .toolbar {
@@ -281,8 +313,8 @@ struct SettingsView: View {
                     }
                 }
             }
-            #endif
         }
+        #endif
     }
 
     /// Sparkle on macOS; on iOS only sideload builds carry an updater.
