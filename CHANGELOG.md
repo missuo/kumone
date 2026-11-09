@@ -7,6 +7,18 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## Unreleased
+
+### Improved
+
+- **Localization**: the English interface is complete on macOS, iOS and CarPlay. Album, playlist, artist and search pages, the iOS updater and CarPlay no longer fall back to Chinese, and VoiceOver reads the now-playing buttons in English. CarPlay play counts use K/M/B in English.
+
+---
+
+### 改进
+
+- **本地化**：macOS、iOS 与 CarPlay 的英文界面补齐。专辑、歌单、歌手与搜索页面、iOS 更新流程和 CarPlay 不再夹杂中文，播放页按钮的 VoiceOver 朗读也有了英文。CarPlay 的播放次数在英文下使用 K/M/B。
+
 ## 0.3.31 - 2026-11-09
 
 ### Fixed

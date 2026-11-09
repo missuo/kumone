@@ -748,7 +748,7 @@ struct SearchFieldView: View {
     let onSubmit: (String) -> Void
 
     @State private var text = ""
-    @State private var placeholder = "搜索音乐、歌手、专辑"
+    @State private var placeholder = String(localized: "搜索音乐、歌手、专辑")
     @FocusState private var focused: Bool
 
     var body: some View {
