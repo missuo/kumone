@@ -12,12 +12,14 @@
 ### Improved
 
 - **Localization**: the English interface is complete on macOS, iOS and CarPlay. Album, playlist, artist and search pages, the iOS updater and CarPlay no longer fall back to Chinese, and VoiceOver reads the now-playing buttons in English. CarPlay play counts use K/M/B in English.
+- **Downloads**: a failed download now says why — the service's own reason (such as a risk-control refusal) or the system error code — instead of only asking you to check the network (#141).
 
 ---
 
 ### 改进
 
 - **本地化**：macOS、iOS 与 CarPlay 的英文界面补齐。专辑、歌单、歌手与搜索页面、iOS 更新流程和 CarPlay 不再夹杂中文，播放页按钮的 VoiceOver 朗读也有了英文。CarPlay 的播放次数在英文下使用 K/M/B。
+- **下载**：下载失败时会说明原因（如服务端的风控拒绝）或系统错误码，而不再只提示检查网络（#141）。
 
 ## 0.3.31 - 2026-11-09
 

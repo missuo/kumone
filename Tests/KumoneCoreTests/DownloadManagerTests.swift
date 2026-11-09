@@ -522,6 +522,14 @@ struct DownloadManagerTests {
         #expect(h.manager.isDownloaded(trackID: h.track.id) == !corrupt)
     }
 
+    /// A failure names its cause instead of a bare "check your network" (#141).
+    @Test func failureMessagesNameTheirCause() {
+        let refusal = DownloadManager.message(for: MusicAPIError.business(code: -460, message: "检测到您的网络环境存在风险"))
+        #expect(refusal.contains("检测到您的网络环境存在风险"))
+        let code = DownloadManager.message(for: NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed))
+        #expect(code.contains("\(NSURLErrorSecureConnectionFailed)"))
+    }
+
     /// The CDN labels lossless FLAC as `audio/mpeg`; the MD5 and decode
     /// prove the file, so that label must not fail the download (#147).
     @Test func losslessFLACServedAsMPEGCompletes() async throws {

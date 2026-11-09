@@ -624,3 +624,5 @@
 "根据你的口味生成连续推荐" = "Endless picks based on your taste";
 "今日推荐" = "Today’s Picks";
 "关闭随机播放" = "Turn Off Shuffle";
+"下载失败：%@" = "Download failed: %@";
+"下载失败（%@ %@），请检查网络或账号权限后重试" = "Download failed (%@ %@). Check your network or account access and try again";
