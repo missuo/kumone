@@ -19,6 +19,32 @@
 
 - **iOS**：播放页和设置里新增八种音效预设和十段自定义均衡器，并带实时频率响应曲线。切换后直接作用于当前播放，不用重建播放器（#191）。
 
+## 0.3.31 - 2026-11-09
+
+### Fixed
+
+- **Downloads**: lossless and Hi-Res downloads no longer fail with "Audio verification failed": the CDN labels FLAC files as MP3, and that label no longer rejects a file whose checksum and decoding are already verified (#147).
+
+---
+
+### 修复
+
+- **下载**：无损和 Hi-Res 音质下载不再报「音频校验失败」。CDN 会把 FLAC 文件标成 MP3 类型，现在不再因为这个标签拒收已通过校验和解码验证的文件（#147）。
+
+## 0.3.30 - 2026-11-09
+
+### Fixed
+
+- **macOS**: on macOS 15 Sequoia, the toolbar search field stays at the trailing end of the window instead of sitting beside the sidebar toggle and covering the page title (#188).
+- **macOS**: on macOS 15 Sequoia, the sidebar is back to the system sidebar material, flush with the window edge, and the toolbar is back to its standard height (#193).
+
+---
+
+### 修复
+
+- **macOS**：在 macOS 15 Sequoia 上，工具栏搜索框保持在窗口右侧，而不再挤在侧栏按钮旁边挡住页面标题（#188）。
+- **macOS**：在 macOS 15 Sequoia 上，侧栏恢复系统原生侧栏材质并贴齐窗口边缘，工具栏恢复标准高度（#193）。
+
 ## 0.3.29 - 2026-11-06
 
 ### Fixed

@@ -49,12 +49,18 @@ final class SidebarState: ObservableObject {
 }
 
 enum SidebarMetrics {
-    /// Between the sidebar panel and the window's edges.
-    static let inset: CGFloat = 8
+    /// Liquid Glass floats inside the window; earlier sidebars meet its edges.
+    static var inset: CGFloat {
+        if #available(macOS 26.0, *) { return 8 }
+        return 0
+    }
     /// From the window's leading edge to the page's while the sidebar is
     /// open: the page starts right at the panel's trailing edge.
     static var span: CGFloat { Theme.Layout.sidebarWidth + inset }
-    static let panelRadius: CGFloat = 16
+    static var panelRadius: CGFloat {
+        if #available(macOS 26.0, *) { return 16 }
+        return 0
+    }
     /// From the page's leading edge to its title.
     static let titleInset: CGFloat = 20
     /// From the toggle to the title, when the page runs under the toggle.
@@ -163,9 +169,8 @@ final class PageTitle: ObservableObject {
     }
 }
 
-/// The sidebar: a panel inset from the window's leading edge, under the
-/// window buttons and the toggle, at a fixed width. It does not move; while
-/// it is hidden the page lies over it.
+/// A fixed sidebar under the window buttons and toggle. The page covers it
+/// when hidden; its surface follows the system's sidebar appearance.
 private struct SidebarPanel<Content: View>: View {
     let isOpen: Bool
     let isSliding: Bool
@@ -205,11 +210,28 @@ private struct SidebarPanel<Content: View>: View {
             Color.clear
                 .glassEffect(.regular, in: shape)
         } else {
-            shape
-                .fill(.regularMaterial)
-                .overlay(shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
+            SidebarBackdrop()
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: 1)
+                }
         }
     }
+}
+
+/// The sidebar material samples the desktop, including the system's inactive
+/// appearance and accessibility contrast/transparency settings.
+private struct SidebarBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// Shows and hides the sidebar from the start of the toolbar, beside the
