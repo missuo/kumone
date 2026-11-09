@@ -7,6 +7,18 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## Unreleased
+
+### Fixed
+
+- **macOS**: on macOS 15 Sequoia, the toolbar search field stays at the trailing end of the window instead of sitting beside the sidebar toggle and covering the page title (#188).
+
+---
+
+### 修复
+
+- **macOS**：在 macOS 15 Sequoia 上，工具栏搜索框保持在窗口右侧，而不再挤在侧栏按钮旁边挡住页面标题（#188）。
+
 ## 0.3.29 - 2026-11-06
 
 ### Fixed
