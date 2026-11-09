@@ -207,7 +207,7 @@ final class CarPlayContentStore {
         radarPlaylists = ids.compactMap { id in
             guard let brief = briefs[id] else { return nil }
             let parts = (brief.name ?? "").components(separatedBy: "|")
-            let title = parts.count > 1 ? parts.last! : (brief.name ?? "雷达歌单")
+            let title = parts.count > 1 ? parts.last! : (brief.name ?? String(localized: "雷达歌单"))
             let subtitle = parts.count > 1 ? parts.dropLast().joined(separator: "|") : nil
             return CarPlayRadarPlaylist(id: id, title: title, subtitle: subtitle, coverURL: brief.coverImgUrl)
         }

@@ -46,11 +46,12 @@ private final class FakeDownloadTransport: DownloadTransport {
         try? FileManager.default.removeItem(at: inbox.appendingPathComponent(receipt.fileName))
         try? FileManager.default.removeItem(at: inbox.appendingPathComponent("\(receipt.token).json"))
     }
-    func finish(_ item: Started, corrupt: Bool = false, deliver: Bool = true, statusCode: Int = 200) throws {
+    func finish(_ item: Started, corrupt: Bool = false, deliver: Bool = true, statusCode: Int = 200,
+                mimeType: String? = "application/octet-stream") throws {
         try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
         var data = try OfflineAudioFixture(item.resource.descriptor.identity.format).data
         if corrupt { data[100] ^= 0xff }
-        let receipt = CompletedDownload(token: item.token, statusCode: statusCode, mimeType: "application/octet-stream", fileName: "\(item.token).audio")
+        let receipt = CompletedDownload(token: item.token, statusCode: statusCode, mimeType: mimeType, fileName: "\(item.token).audio")
         try data.write(to: inbox.appendingPathComponent(receipt.fileName))
         try JSONEncoder().encode(receipt).write(to: inbox.appendingPathComponent("\(receipt.token).json"))
         existing.remove(item.token)
@@ -519,6 +520,37 @@ struct DownloadManagerTests {
         #expect(fractions.filter { [.verifying, .complete].contains($0.status) }.allSatisfy { $0.value == 1 })
         #expect(h.manager.progress.values[h.manager.jobs[0].id]?.received == total)
         #expect(h.manager.isDownloaded(trackID: h.track.id) == !corrupt)
+    }
+
+    /// A failure names its cause instead of a bare "check your network" (#141).
+    @Test func failureMessagesNameTheirCause() {
+        let refusal = DownloadManager.message(for: MusicAPIError.business(code: -460, message: "检测到您的网络环境存在风险"))
+        #expect(refusal.contains("检测到您的网络环境存在风险"))
+        let code = DownloadManager.message(for: NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed))
+        #expect(code.contains("\(NSURLErrorSecureConnectionFailed)"))
+    }
+
+    /// The CDN labels lossless FLAC as `audio/mpeg`; the MD5 and decode
+    /// prove the file, so that label must not fail the download (#147).
+    @Test func losslessFLACServedAsMPEGCompletes() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue(quality: "lossless")
+        try await waitForDownload { h.transport.started.count == 1 }
+        #expect(h.transport.started[0].resource.descriptor.identity.format == .flac)
+        try h.transport.finish(h.transport.started[0], mimeType: "audio/mpeg")
+        try await waitForDownload { h.manager.jobs.first?.status == .complete }
+        #expect(h.manager.isDownloaded(trackID: h.track.id))
+    }
+
+    @Test func anErrorPageIsTurnedAwayBeforeVerification() async throws {
+        let h = try DownloadHarness()
+        defer { h.close() }
+        await h.enqueue()
+        try await waitForDownload { h.transport.started.count == 1 }
+        try h.transport.finish(h.transport.started[0], mimeType: "text/html; charset=utf-8")
+        try await waitForDownload { h.manager.jobs.first?.status == .failed }
+        #expect(!h.manager.isDownloaded(trackID: h.track.id))
     }
 
     @Test func completedIconDoesNotWaitForTheLibraryScan() async throws {

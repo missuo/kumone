@@ -161,6 +161,15 @@ struct MainWindow: View {
                     // with it went the flexible space that kept the search
                     // field at the trailing end.
                     ToolbarSpacer(.flexible)
+                } else {
+                    // ToolbarSpacer is macOS 26+. On Sequoia the same title
+                    // removal packs the search field next to the sidebar
+                    // toggle, so it overflows the sidebar and covers the
+                    // page title (#188). A Spacer toolbar item is the
+                    // system flexible space.
+                    ToolbarItem(id: "kumone.flexibleSpace") {
+                        Spacer()
+                    }
                 }
                 #endif
                 if #available(macOS 26.0, iOS 26.0, *) {
@@ -739,7 +748,7 @@ struct SearchFieldView: View {
     let onSubmit: (String) -> Void
 
     @State private var text = ""
-    @State private var placeholder = "搜索音乐、歌手、专辑"
+    @State private var placeholder = String(localized: "搜索音乐、歌手、专辑")
     @FocusState private var focused: Bool
 
     var body: some View {

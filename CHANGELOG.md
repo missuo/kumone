@@ -7,6 +7,84 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.32 - 2026-11-09
+
+### Added
+
+- **iOS**: eight sound-effect presets and a ten-band custom equalizer on the now-playing page and in Settings, with a live response curve. A change applies to the playing track without rebuilding the player (#191).
+
+### Improved
+
+- **iOS**: the app follows the system language, English or Simplified Chinese, as the macOS app does (#191).
+- **Localization**: the English interface is complete on macOS, iOS and CarPlay. Album, playlist, artist and search pages, the iOS updater and CarPlay no longer fall back to Chinese, and VoiceOver reads the now-playing buttons in English. CarPlay play counts use K/M/B in English.
+- **Downloads**: a failed download now says why — the service's own reason (such as a risk-control refusal) or the system error code — instead of only asking you to check the network (#141).
+
+---
+
+### 新增
+
+- **iOS**：播放页和设置里新增八种音效预设和十段自定义均衡器，并带实时频率响应曲线。切换后直接作用于当前播放，不用重建播放器（#191）。
+
+### 改进
+
+- **iOS**：与 macOS 一样跟随系统语言，支持英文和简体中文（#191）。
+- **本地化**：macOS、iOS 与 CarPlay 的英文界面补齐。专辑、歌单、歌手与搜索页面、iOS 更新流程和 CarPlay 不再夹杂中文，播放页按钮的 VoiceOver 朗读也有了英文。CarPlay 的播放次数在英文下使用 K/M/B。
+- **下载**：下载失败时会说明原因（如服务端的风控拒绝）或系统错误码，而不再只提示检查网络（#141）。
+
+## 0.3.31 - 2026-11-09
+
+### Fixed
+
+- **Downloads**: lossless and Hi-Res downloads no longer fail with "Audio verification failed": the CDN labels FLAC files as MP3, and that label no longer rejects a file whose checksum and decoding are already verified (#147).
+
+---
+
+### 修复
+
+- **下载**：无损和 Hi-Res 音质下载不再报「音频校验失败」。CDN 会把 FLAC 文件标成 MP3 类型，现在不再因为这个标签拒收已通过校验和解码验证的文件（#147）。
+
+## 0.3.30 - 2026-11-09
+
+### Fixed
+
+- **macOS**: on macOS 15 Sequoia, the toolbar search field stays at the trailing end of the window instead of sitting beside the sidebar toggle and covering the page title (#188).
+- **macOS**: on macOS 15 Sequoia, the sidebar is back to the system sidebar material, flush with the window edge, and the toolbar is back to its standard height (#193).
+
+---
+
+### 修复
+
+- **macOS**：在 macOS 15 Sequoia 上，工具栏搜索框保持在窗口右侧，而不再挤在侧栏按钮旁边挡住页面标题（#188）。
+- **macOS**：在 macOS 15 Sequoia 上，侧栏恢复系统原生侧栏材质并贴齐窗口边缘，工具栏恢复标准高度（#193）。
+
+## 0.3.29 - 2026-11-06
+
+### Fixed
+
+- **macOS**: the now-playing page opens and closes cleanly — the page title, search field and sidebar toggle no longer hang over it while it moves, it no longer snaps into place at the end, and the thin white line beside the window buttons is gone; its collapse button is larger, sits in the top-right corner and always answers clicks.
+- **iOS**: adding a song to a playlist from the now-playing page shows the confirmation over the page; a song that is already in the playlist says so, and any other failure is shown inside the playlist picker (#182).
+- **iOS**: the search field stays visible when the Search tab opens.
+
+### Improved
+
+- **macOS**: hiding and showing the sidebar is smooth — the sidebar stays put and the page slides over it, the toggle never leaves its place beside the window buttons, the page title moves with the page, and View → Hide/Show Sidebar (⌃⌘S) is back.
+- **macOS**: the back button follows the sidebar toggle and, like it, is drawn without a glass capsule.
+- **macOS**: in the player bar, the like button sits right after the song title.
+
+---
+
+### 修复
+
+- **macOS**：播放页的打开和收起更干净——移动过程中页面标题、搜索框和侧栏按钮不再浮在播放页上，结束时不再突然跳一下，红绿灯旁的白色细线也没有了；收起按钮更大，移到右上角，并且每次点击都能响应。
+- **iOS**：在播放页把歌曲收藏到歌单时，提示直接显示在播放页上；歌单里已有这首歌时会明确提示，其他失败会显示在歌单选择框里（#182）。
+- **iOS**：打开搜索页时搜索框保持可见。
+
+### 改进
+
+- **macOS**：收起和展开侧栏不再卡顿——侧栏固定不动，由右侧页面滑动覆盖；切换按钮始终在红绿灯旁边不动，页面标题跟随页面移动，「显示」菜单中的「隐藏/显示边栏」（⌃⌘S）也恢复了。
+- **macOS**：返回按钮跟在侧栏按钮之后，并和它一样去掉了玻璃胶囊。
+- **macOS**：播放条里的「喜欢」按钮紧跟在歌名后面。
+
 ## 0.3.28 - 2026-11-04
 
 ### Improved

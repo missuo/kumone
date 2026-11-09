@@ -12,7 +12,7 @@ struct SidebarView: View {
     // iPad renders this sidebar layout (IOSMainWindow routes .pad to MainWindow)
     // and, unlike the iPhone tab bar, had no Settings entry — leaving audio
     // quality and other options unreachable (#67/#59). Surface it in the footer.
-    @State private var showSettings = false
+    @Environment(\.presentSettingsSheet) private var presentSettingsSheet
 #endif
 
     var body: some View {
@@ -184,7 +184,7 @@ struct SidebarView: View {
                 .accessibilityLabel(Text("搜索"))
 
                 Button {
-                    showSettings = true
+                    presentSettingsSheet()
                 } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 17))
@@ -199,20 +199,6 @@ struct SidebarView: View {
             }
         }
         .background(.ultraThinMaterial)
-#if os(iOS)
-        .sheet(isPresented: $showSettings) {
-            NavigationStack {
-                SettingsView()
-                    .navigationTitle("设置")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("完成") { showSettings = false }
-                        }
-                    }
-            }
-        }
-#endif
     }
 
     @ViewBuilder

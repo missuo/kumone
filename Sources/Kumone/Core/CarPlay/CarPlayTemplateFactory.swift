@@ -18,7 +18,7 @@ enum CarPlayTemplateFactory {
         header: String? = nil
     ) -> [CPListSection] {
         let items = playlists.map { playlist -> CPListItem in
-            let item = CPListItem(text: playlist.name, detailText: playlist.playCount > 0 ? "\(formattedCount(playlist.playCount))次播放" : nil)
+            let item = CPListItem(text: playlist.name, detailText: playlist.playCount > 0 ? String(localized: "\(Formatters.playCount(playlist.playCount))次播放") : nil)
             item.accessoryType = .none
             item.handler = { _, completion in
                 onPlaylistTap(playlist)
@@ -97,7 +97,7 @@ enum CarPlayTemplateFactory {
         onPlayAll: @escaping () -> Void,
         onTrackTap: @escaping (Track, [Track]) -> Void
     ) -> CPListTemplate {
-        let playAllItem = CPListItem(text: "播放全部 · \(trackCount) 首", detailText: nil)
+        let playAllItem = CPListItem(text: String(localized: "播放全部 · \(trackCount) 首"), detailText: nil)
         playAllItem.accessoryType = .none
         playAllItem.handler = { _, completion in
             onPlayAll()
@@ -120,7 +120,7 @@ enum CarPlayTemplateFactory {
             CPListSection(items: trackItems),
         ]
         let template = CPListTemplate(title: title, sections: sections)
-        template.emptyViewTitleVariants = ["暂无曲目"]
+        template.emptyViewTitleVariants = [String(localized: "暂无曲目")]
         return template
     }
 
@@ -156,7 +156,7 @@ enum CarPlayTemplateFactory {
                 completion()
             }
             fillArtwork(item, from: current.album.picUrl)
-            sections.append(CPListSection(items: [item], header: "正在播放", sectionIndexTitle: nil))
+            sections.append(CPListSection(items: [item], header: String(localized: "正在播放"), sectionIndexTitle: nil))
         }
 
         if !upcoming.isEmpty {
@@ -175,12 +175,12 @@ enum CarPlayTemplateFactory {
                 return item
             }
             sections.append(
-                CPListSection(items: items, header: "即将播放 · \(upcoming.count) 首", sectionIndexTitle: nil)
+                CPListSection(items: items, header: String(localized: "即将播放 · \(upcoming.count) 首"), sectionIndexTitle: nil)
             )
         }
 
-        let template = CPListTemplate(title: "播放队列", sections: sections)
-        template.emptyViewTitleVariants = ["当前没有播放队列"]
+        let template = CPListTemplate(title: String(localized: "播放队列"), sections: sections)
+        template.emptyViewTitleVariants = [String(localized: "当前没有播放队列")]
         return template
     }
 
@@ -195,14 +195,6 @@ enum CarPlayTemplateFactory {
         }
     }
 
-    // MARK: - Formatting
-
-    /// Compact play-count formatter that returns Chinese-locale units when the count is large enough; smaller values are returned as a plain integer.
-    private static func formattedCount(_ count: Int) -> String {
-        if count >= 100_000_000 { return "\(count / 100_000_000)亿" }
-        if count >= 10_000 { return "\(Double(count) / 10_000, default: "%.1f")万" }
-        return "\(count)"
-    }
 }
 
 // MARK: - FM tab
@@ -243,16 +235,16 @@ extension CarPlayTemplateFactory {
                 }
                 sections.append(CPListSection(
                     items: [trackItem],
-                    header: "正在漫游",
+                    header: String(localized: "正在漫游"),
                     sectionIndexTitle: nil
                 ))
             } else {
-                let placeholder = CPListItem(text: "正在准备漫游…", detailText: nil)
+                let placeholder = CPListItem(text: String(localized: "正在准备漫游…"), detailText: nil)
                 placeholder.accessoryType = .none
                 placeholder.handler = { _, completion in completion() }
                 sections.append(CPListSection(
                     items: [placeholder],
-                    header: "正在漫游",
+                    header: String(localized: "正在漫游"),
                     sectionIndexTitle: nil
                 ))
             }
@@ -263,14 +255,14 @@ extension CarPlayTemplateFactory {
         let actionItem: CPListItem
         if isFMMode {
             actionItem = CPListItem(
-                text: isPlaying ? "换一首" : "继续漫游",
+                text: isPlaying ? String(localized: "换一首") : String(localized: "继续漫游"),
                 detailText: nil
             )
             actionItem.setImage(UIImage(systemName: isPlaying ? "forward.fill" : "play.fill"))
         } else {
             actionItem = CPListItem(
-                text: "开始漫游",
-                detailText: "根据你的口味生成连续推荐"
+                text: String(localized: "开始漫游"),
+                detailText: String(localized: "根据你的口味生成连续推荐")
             )
             actionItem.setImage(UIImage(systemName: "dot.radiowaves.left.and.right"))
         }
@@ -301,10 +293,10 @@ enum CarPlayLibraryEntry {
 
     var title: String {
         switch self {
-        case .liked: return "我喜欢的音乐"
-        case .daily: return "每日推荐"
-        case .recents: return "最近播放"
-        case .cloud: return "音乐云盘"
+        case .liked: return String(localized: "我喜欢的音乐")
+        case .daily: return String(localized: "每日推荐")
+        case .recents: return String(localized: "最近播放")
+        case .cloud: return String(localized: "音乐云盘")
         }
     }
 
@@ -337,14 +329,14 @@ extension CarPlayTemplateFactory {
         myMusicItems.append(makeEntryItem(.cloud, onTap: onEntryTap))
 
         var sections: [CPListSection] = [
-            CPListSection(items: myMusicItems, header: "我的音乐", sectionIndexTitle: nil)
+            CPListSection(items: myMusicItems, header: String(localized: "我的音乐"), sectionIndexTitle: nil)
         ]
 
         if !library.created.isEmpty {
             sections.append(contentsOf: playlistSections(
                 library.created,
                 onPlaylistTap: onPlaylistTap,
-                header: "创建的歌单"
+                header: String(localized: "创建的歌单")
             ))
         }
 
@@ -352,7 +344,7 @@ extension CarPlayTemplateFactory {
             sections.append(contentsOf: playlistSections(
                 library.subscribed,
                 onPlaylistTap: onPlaylistTap,
-                header: "收藏的歌单"
+                header: String(localized: "收藏的歌单")
             ))
         }
 
@@ -383,17 +375,17 @@ enum CarPlayRecommendFeature {
 
     var title: String {
         switch self {
-        case .daily: return "每日推荐"
-        case .fm: return "私人漫游"
-        case .heartbeat: return "心动模式"
+        case .daily: return String(localized: "每日推荐")
+        case .fm: return String(localized: "私人漫游")
+        case .heartbeat: return String(localized: "心动模式")
         }
     }
 
     var detail: String {
         switch self {
-        case .daily: return "根据你的口味生成"
-        case .fm: return "从喜欢的歌开始漫游"
-        case .heartbeat: return "你的红心歌曲和相似推荐"
+        case .daily: return String(localized: "根据你的口味生成")
+        case .fm: return String(localized: "从喜欢的歌开始漫游")
+        case .heartbeat: return String(localized: "你的红心歌曲和相似推荐")
         }
     }
 
@@ -435,7 +427,7 @@ extension CarPlayTemplateFactory {
             makeFeatureItem(.fm, onTap: onTap),
             makeFeatureItem(.heartbeat, onTap: onTap),
         ]
-        return [CPListSection(items: items, header: "今日推荐", sectionIndexTitle: nil)]
+        return [CPListSection(items: items, header: String(localized: "今日推荐"), sectionIndexTitle: nil)]
     }
 
     private static func makeFeatureItem(
@@ -471,7 +463,7 @@ extension CarPlayTemplateFactory {
             fillArtwork(item, from: radar.coverURL)
             return item
         }
-        return [CPListSection(items: items, header: "雷达歌单", sectionIndexTitle: nil)]
+        return [CPListSection(items: items, header: String(localized: "雷达歌单"), sectionIndexTitle: nil)]
     }
 
     /// New albums section.
@@ -489,7 +481,7 @@ extension CarPlayTemplateFactory {
             fillArtwork(item, from: album.picUrl)
             return item
         }
-        return [CPListSection(items: items, header: "新碟上架", sectionIndexTitle: nil)]
+        return [CPListSection(items: items, header: String(localized: "新碟上架"), sectionIndexTitle: nil)]
     }
 
     /// Recommended artists section — no cover image, only the circular avatar placeholder that CPListItem renders by default.
@@ -507,7 +499,7 @@ extension CarPlayTemplateFactory {
             fillArtwork(item, from: artist.picUrl)
             return item
         }
-        return [CPListSection(items: items, header: "推荐歌手", sectionIndexTitle: nil)]
+        return [CPListSection(items: items, header: String(localized: "推荐歌手"), sectionIndexTitle: nil)]
     }
 }
 #endif

@@ -892,9 +892,15 @@ final class DownloadManager: ObservableObject {
             default: return String(localized: "无法保存音频，请重试")
             }
         }
-        let code = (error as NSError).code
-        if code == NSURLErrorCannotFindHost || code == NSURLErrorDNSLookupFailed { return String(localized: "无法解析音源地址，请检查网络后重试") }
-        return String(localized: "下载失败，请检查网络或账号权限后重试")
+        // Name the cause: the service's own refusal (risk control, region,
+        // login) or the system error code. A bare "check your network" left
+        // reports such as #141 with nothing to go on.
+        if let api = error as? MusicAPIError, let reason = api.errorDescription {
+            return String(localized: "下载失败：\(reason)")
+        }
+        let error = error as NSError
+        if error.code == NSURLErrorCannotFindHost || error.code == NSURLErrorDNSLookupFailed { return String(localized: "无法解析音源地址，请检查网络后重试") }
+        return String(localized: "下载失败（\(error.domain) \(String(error.code))），请检查网络或账号权限后重试")
     }
 
     private func fetchMetadata(_ job: DownloadJob) {
