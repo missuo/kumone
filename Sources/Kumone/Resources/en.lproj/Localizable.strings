@@ -161,7 +161,11 @@
 "根据你的音乐口味 · 每天 6:00 更新" = "Based on your taste · Refreshes daily at 6:00";
 "登录后才能查看每日推荐" = "Sign in to see daily recommendations";
 "减少推荐" = "Recommend less";
-"已减少推荐" = "Recommendation reduced";
+"不感兴趣" = "Not interested";
+"这首歌" = "This song";
+"音乐人：%@" = "Artist: %@";
+"已加入音乐黑名单" = "Added to music blacklist";
+"无法识别这项音乐内容" = "This music item could not be identified";
 "登录后查看你喜欢的音乐" = "Sign in to see your liked songs";
 
 /* Search */

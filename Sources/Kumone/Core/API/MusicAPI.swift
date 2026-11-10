@@ -278,6 +278,27 @@ enum MusicAPI {
         ).data
     }
 
+    static func addToMusicBlacklist(_ target: MusicBlacklistTarget,
+                                    using client: MusicClient = .shared) async throws {
+        guard client.isLoggedIn else { throw MusicAPIError.needLogin }
+        let type: String
+        let id: Int
+        switch target {
+        case .song(let songID):
+            type = "song"
+            id = songID
+        case .artist(let artistID):
+            type = "artist"
+            id = artistID
+        }
+        guard id > 0 else {
+            throw MusicAPIError.business(code: 400, message: String(localized: "无法识别这项音乐内容"))
+        }
+        let data = try await client.eapi("/music-blacklist/add",
+                                         ["contentType": type, "contentIdList": [String(id)]])
+        _ = try client.decoded(CodeOnly.self, from: data)
+    }
+
     struct PlaylistDetailResponse: Decodable {
         let playlist: PlaylistDetail
         let privileges: [TrackPrivilege]?

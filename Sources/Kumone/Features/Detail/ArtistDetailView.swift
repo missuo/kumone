@@ -199,6 +199,7 @@ struct ArtistDetailView: View {
                             .background(.primary.opacity(0.06), in: Circle())
                     }
                     .buttonStyle(.pressable)
+                    blacklistMenu
                 }
             }
         }
@@ -258,10 +259,30 @@ struct ArtistDetailView: View {
                                 .background(.primary.opacity(0.06), in: Capsule())
                         }
                         .buttonStyle(.pressable)
+                        blacklistMenu
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var blacklistMenu: some View {
+        if account.authenticatedAccountID != nil, artistID > 0 {
+            Menu {
+                MusicBlacklistButton(target: .artist(artistID), title: "减少推荐")
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.primary.opacity(0.06), in: Circle())
+            }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
+            .fixedSize()
+            .accessibilityLabel("更多操作")
         }
     }
 

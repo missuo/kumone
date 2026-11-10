@@ -1724,6 +1724,7 @@ private struct CompactTrackHeader: View {
 
                     Menu {
                         TrackDownloadActions(track: track, showsIcons: true)
+                        TrackBlacklistMenu(track: track, showsIcons: true)
                         Divider()
                         Button {
                             player.addToPlayNext(track)
@@ -2551,6 +2552,7 @@ private struct MinimalTrackInfoRow: View {
     private func moreMenu(for track: Track) -> some View {
         Menu {
             TrackDownloadActions(track: track, showsIcons: true)
+            TrackBlacklistMenu(track: track, showsIcons: true)
             Divider()
             Button {
                 airPlayRequest += 1

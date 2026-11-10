@@ -178,7 +178,7 @@ struct PlaylistDetailView: View {
             removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
             onRemoved: { track in Task { await model.remove(track) } },
             recommendationContext: recommendationContext,
-            onRecommendationReduced: { model.replaceRecommendation($0, with: $1) },
+            onRecommendationReplaced: { model.replaceRecommendation($0, with: $1) },
             layout: layout
         )
     }
