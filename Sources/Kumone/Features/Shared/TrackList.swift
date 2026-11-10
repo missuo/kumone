@@ -377,7 +377,7 @@ struct TrackRow: View {
                     do {
                         let replacement = try await MusicAPI.dislikeRecommendedSong(id: track.id)
                         onRecommendationReplaced(replacement)
-                        ToastCenter.shared.show(String(localized: "已加入音乐黑名单"))
+                        ToastCenter.shared.show(String(localized: "已减少推荐"))
                     } catch {
                         ToastCenter.shared.show(error.localizedDescription)
                     }
