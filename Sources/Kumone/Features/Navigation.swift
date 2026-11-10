@@ -147,8 +147,8 @@ struct DestinationsModifier: ViewModifier {
             }
             .playerContentInset()
             #if os(macOS)
-            // The main window draws its own back button, after the sidebar
-            // toggle and without a capsule (`BackButton`).
+            // The main window draws navigation beside the detail title
+            // (`PageNavigationBand`), keeping the sidebar toggle fixed.
             .navigationBarBackButtonHidden(true)
             #endif
         }

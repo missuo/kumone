@@ -61,8 +61,15 @@ enum SidebarMetrics {
         if #available(macOS 26.0, *) { return 16 }
         return 0
     }
+    /// Sequoia adds 10pt above source lists outside a system split view.
+    static var listTopPadding: CGFloat {
+        if #available(macOS 26.0, *) { return 0 }
+        return -10
+    }
     /// From the page's leading edge to its title.
     static let titleInset: CGFloat = 20
+    /// Align the back chevron with the system detail-column navigation.
+    static let navigationInset: CGFloat = 14
     /// From the toggle to the title, when the page runs under the toggle.
     static let titleGapAfterToggle: CGFloat = 14
 }
@@ -71,6 +78,7 @@ enum SidebarMetrics {
 /// over it, whose leading edge slides with `SidebarState`.
 struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
     @ObservedObject private var state = SidebarState.shared
+    let goBack: (() -> Void)?
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let detail: () -> Detail
     /// Laid over the page, the toolbar's band included; takes no hits.
@@ -88,16 +96,17 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
 
             // Where the split view put it: at the page's leading edge, or
             // after the toggle when the page runs under it.
-            PageTitleBand()
+            PageNavigationBand(goBack: goBack)
                 .padding(.leading, max(
-                    (state.isOpen ? SidebarMetrics.span : 0) + SidebarMetrics.titleInset,
+                    (state.isOpen ? SidebarMetrics.span : 0)
+                        + (goBack == nil ? SidebarMetrics.titleInset : SidebarMetrics.navigationInset),
                     state.toggleTrailingEdge + SidebarMetrics.titleGapAfterToggle
                 ))
         }
         // The page paints the toolbar's band itself (backdrop, tint, title),
         // so it slides with the page; the toolbar draws nothing of its own.
         .toolbarBackground(.hidden, for: .windowToolbar)
-        // The title is the page's own (`PageTitleBand`), so it can sit at
+        // The title is the page's own (`PageNavigationBand`), so it can sit at
         // the page's edge; the system one would stay beside the toggle.
         .toolbar(removing: .title)
     }
@@ -132,27 +141,40 @@ private struct BelowToolbarMask: View {
     }
 }
 
-/// The page's title, as the window would draw it, but at the page's leading
-/// edge in the toolbar's band, so it moves with the page.
-private struct PageTitleBand: View {
+/// Page navigation follows the detail's leading edge in the toolbar band.
+private struct PageNavigationBand: View {
+    let goBack: (() -> Void)?
     @ObservedObject private var title = PageTitle.shared
     @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         GeometryReader { proxy in
             let band = proxy.safeAreaInsets.top
-            Text(verbatim: title.text)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(controlActiveState == .inactive ? .tertiary : .primary)
-                .lineLimit(1)
-                // Clear of the search field at the trailing end.
-                .padding(.trailing, 240)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: band)
-                .offset(y: -band)
+            HStack(spacing: 12) {
+                if let goBack {
+                    Button(action: goBack) {
+                        Label("返回", systemImage: "chevron.backward")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 24, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.interactiveRow)
+                    .keyboardShortcut("[", modifiers: .command)
+                    .help("返回")
+                }
+                Text(verbatim: title.text)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(controlActiveState == .inactive ? .tertiary : .primary)
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            // Clear of the search field at the trailing end.
+            .padding(.trailing, 240)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: band)
+            .offset(y: -band)
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 
@@ -179,6 +201,7 @@ private struct SidebarPanel<Content: View>: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: SidebarMetrics.panelRadius, style: .continuous)
         content()
+            .padding(.top, SidebarMetrics.listTopPadding)
             .frame(width: Theme.Layout.sidebarWidth)
             .frame(maxHeight: .infinity)
             // The account footer paints its own material down to the panel's
@@ -249,19 +272,6 @@ struct SidebarToggleButton: View {
             SidebarState.shared.setToggleTrailingEdge(x)
         }
         .help("显示或隐藏边栏 (⌃⌘S)")
-    }
-}
-
-/// Back to the previous page, in the toolbar after the sidebar toggle.
-struct BackButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label("返回", systemImage: "chevron.backward")
-        }
-        .keyboardShortcut("[", modifiers: .command)
-        .help("返回")
     }
 }
 

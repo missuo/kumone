@@ -52,7 +52,10 @@ struct MainWindow: View {
     @ViewBuilder
     private var splitLayout: some View {
         #if os(macOS)
-        MacSidebarShell {
+        MacSidebarShell(goBack: path.isEmpty ? nil : {
+            guard !path.isEmpty else { return }
+            path.removeLast()
+        }) {
             SidebarView(selection: $selection, showLogin: $showLogin)
         } detail: {
             measuredDetail
@@ -128,30 +131,17 @@ struct MainWindow: View {
                 #if os(macOS)
                 // The first item, beside the window buttons: it stays put
                 // whether the sidebar is open or not.
-                // Back follows it, ours rather than the navigation stack's:
-                // the stack puts its own before the toggle, which would push
-                // the toggle along whenever a page is opened, and wraps it in
-                // a Liquid Glass capsule the toggle does not have.
+                // Page navigation lives at the detail's leading edge, leaving
+                // the sidebar toggle fixed beside the window buttons.
                 if #available(macOS 26.0, *) {
                     ToolbarItem(placement: .navigation) {
                         SidebarToggleButton()
                     }
                     // Plain icons over the page, as the split view drew them.
                     .sharedBackgroundVisibility(.hidden)
-                    if !path.isEmpty {
-                        ToolbarItem(placement: .navigation) {
-                            BackButton { path.removeLast() }
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    }
                 } else {
                     ToolbarItem(placement: .navigation) {
                         SidebarToggleButton()
-                    }
-                    if !path.isEmpty {
-                        ToolbarItem(placement: .navigation) {
-                            BackButton { path.removeLast() }
-                        }
                     }
                 }
                 #endif
@@ -597,7 +587,7 @@ struct MainWindowConfigurator: NSViewRepresentable {
             AppDelegate.shared?.mainWindow = window
             // The page draws the title at its own leading edge, so it slides
             // with the page instead of sitting beside the toggle; it reads the
-            // text SwiftUI still gives the window (see `PageTitleBand`).
+            // text SwiftUI still gives the window (see `PageNavigationBand`).
             titleObservation = window.observe(\.title, options: [.initial, .new]) { window, _ in
                 let title = window.title
                 Task { @MainActor in PageTitle.shared.update(title) }
