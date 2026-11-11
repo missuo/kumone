@@ -62,7 +62,7 @@ actor StorageUsageReader {
                                                                 .volumeAvailableCapacityKey]),
            let total = values.volumeTotalCapacity, total > 0,
            let available = values.volumeAvailableCapacityForImportantUsage.flatMap({ $0 > 0 ? $0 : nil })
-               ?? values.volumeAvailableCapacity.map { Int64($0) } {
+               ?? values.volumeAvailableCapacity.map({ Int64($0) }) {
             snapshot.device = .init(total: Int64(total), available: available)
         }
         let assets = Dictionary(audioFiles.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
