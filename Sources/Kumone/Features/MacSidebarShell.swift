@@ -146,6 +146,9 @@ private struct PageNavigationBand: View {
     let goBack: (() -> Void)?
     @ObservedObject private var title = PageTitle.shared
     @Environment(\.controlActiveState) private var controlActiveState
+    /// Pressed through `ToolbarBandClickTarget`, which the button's own
+    /// style never hears about.
+    @State private var isBandPressed = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -159,6 +162,12 @@ private struct PageNavigationBand: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.interactiveRow)
+                    .opacity(isBandPressed ? 0.8 : 1)
+                    .background {
+                        if #available(macOS 26.0, *) {
+                            ToolbarBandClickTarget(action: goBack, isPressed: $isBandPressed)
+                        }
+                    }
                     .keyboardShortcut("[", modifiers: .command)
                     .help("返回")
                 }
@@ -255,6 +264,88 @@ private struct SidebarBackdrop: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// macOS 26's window toolbar claims every click in its band, so a button the
+/// page draws there sees the pointer hover but never a click (Sequoia lets
+/// the click through). This catches the clicks over the button's own frame
+/// before the toolbar does; hover, VoiceOver and ⌘[ stay the button's.
+private struct ToolbarBandClickTarget: NSViewRepresentable {
+    let action: () -> Void
+    @Binding var isPressed: Bool
+
+    func makeNSView(context: Context) -> ClickTargetView { ClickTargetView() }
+
+    func updateNSView(_ view: ClickTargetView, context: Context) {
+        view.onClick = action
+        view.onPress = { pressed in
+            if isPressed != pressed { isPressed = pressed }
+        }
+    }
+
+    static func dismantleNSView(_ view: ClickTargetView, coordinator: ()) {
+        view.stopMonitoring()
+    }
+
+    final class ClickTargetView: NSView {
+        var onClick: () -> Void = {}
+        var onPress: (Bool) -> Void = { _ in }
+        private var monitor: Any?
+        private var isTracking = false
+
+        /// Never the target of a hit itself: the button below keeps hover.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            ) { [weak self] event in
+                guard let self else { return event }
+                return self.handle(event)
+            }
+        }
+
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            if isTracking {
+                isTracking = false
+                onPress(false)
+            }
+        }
+
+        private func isInside(_ event: NSEvent) -> Bool {
+            guard let window, event.window === window, !isHiddenOrHasHiddenAncestor else { return false }
+            return bounds.contains(convert(event.locationInWindow, from: nil))
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            switch event.type {
+            case .leftMouseDown:
+                // A sheet over the window owns its clicks.
+                guard window?.attachedSheet == nil, isInside(event) else { return event }
+                isTracking = true
+                onPress(true)
+                return nil
+            case .leftMouseDragged:
+                guard isTracking else { return event }
+                onPress(isInside(event))
+                return nil
+            case .leftMouseUp:
+                guard isTracking else { return event }
+                isTracking = false
+                onPress(false)
+                // Released outside, like any button: nothing happens.
+                if isInside(event) { onClick() }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
 }
 
 /// Shows and hides the sidebar from the start of the toolbar, beside the
