@@ -556,6 +556,13 @@
 "请先完成首次使用的设置" = "Finish first-launch setup first";
 "请先登录账号" = "Sign in first";
 
+/* Cookie login */
+"Cookie 登录" = "Cookie Login";
+"Cookie 内容" = "Cookie contents";
+"在浏览器登录网易云音乐后，粘贴包含 MUSIC_U 的 Cookie；可同时包含 __csrf。请勿分享 Cookie。" = "Sign in to NetEase Cloud Music in a browser, then paste a Cookie containing MUSIC_U and optionally __csrf. Keep your Cookie private.";
+"请输入有效的 Cookie，包含非空的 MUSIC_U，可选 __csrf" = "Enter a valid Cookie with a nonempty MUSIC_U and optionally __csrf.";
+"Cookie 登录验证失败，请检查 Cookie 或稍后重试" = "Cookie login could not be verified. Check your Cookie or try again later.";
+
 /* Main window sidebar (macOS) */
 "显示或隐藏边栏" = "Show or Hide Sidebar";
 "显示或隐藏边栏 (⌃⌘S)" = "Show or hide the sidebar (⌃⌘S)";

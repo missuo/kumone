@@ -82,6 +82,58 @@ enum MusicAPI {
         _ = try? await client.eapi("/login/token/refresh")
     }
 
+    enum CookieLoginError: LocalizedError {
+        case invalidHeader
+        case validationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidHeader: return String(localized: "请输入有效的 Cookie，包含非空的 MUSIC_U，可选 __csrf")
+            case .validationFailed: return String(localized: "Cookie 登录验证失败，请检查 Cookie 或稍后重试")
+            }
+        }
+    }
+
+    struct VerifiedLogin {
+        let profile: UserProfile
+        let cookies: [String: String]
+    }
+
+    /// Browser Cookie headers use single semicolons, unlike QR response cookies.
+    /// Candidate credentials stay in an isolated jar until the account is verified.
+    static func loginWithCookie(
+        _ header: String,
+        using candidate: MusicClient = MusicClient(configuration: .ephemeral, persistsCookies: false)
+    ) async throws -> VerifiedLogin {
+        var authentication: [String: String] = [:]
+        for part in header.split(separator: ";") {
+            let pair = part.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let name = pair[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name == "MUSIC_U" || name == "__csrf" else { continue }
+            guard pair.count == 2, authentication[name] == nil else { throw CookieLoginError.invalidHeader }
+            let value = pair[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.utf8.allSatisfy({
+                $0 >= 0x21 && $0 <= 0x7e && $0 != 0x22 && $0 != 0x2c && $0 != 0x5c
+            }) else { throw CookieLoginError.invalidHeader }
+            authentication[name] = value
+        }
+        guard authentication["MUSIC_U"] != nil else { throw CookieLoginError.invalidHeader }
+        try Task.checkCancellation()
+        do {
+            try candidate.replaceAuthentication(with: authentication)
+            guard let profile = try await userAccount(using: candidate), profile.userId > 0 else {
+                throw CookieLoginError.validationFailed
+            }
+            try Task.checkCancellation()
+            return VerifiedLogin(profile: profile, cookies: candidate.authenticationCookies())
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Server and transport errors may contain credential material.
+            throw CookieLoginError.validationFailed
+        }
+    }
+
     struct AccountResponse: Decodable {
         let code: Int
         let profile: UserProfile?

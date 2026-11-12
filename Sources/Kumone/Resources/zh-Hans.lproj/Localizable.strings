@@ -153,6 +153,13 @@
 "设置…" = "设置…";
 "退出 Kumone" = "退出 Kumone";
 
+/* Cookie login */
+"Cookie 登录" = "Cookie 登录";
+"Cookie 内容" = "Cookie 内容";
+"在浏览器登录网易云音乐后，粘贴包含 MUSIC_U 的 Cookie；可同时包含 __csrf。请勿分享 Cookie。" = "在浏览器登录网易云音乐后，粘贴包含 MUSIC_U 的 Cookie；可同时包含 __csrf。请勿分享 Cookie。";
+"请输入有效的 Cookie，包含非空的 MUSIC_U，可选 __csrf" = "请输入有效的 Cookie，包含非空的 MUSIC_U，可选 __csrf";
+"Cookie 登录验证失败，请检查 Cookie 或稍后重试" = "Cookie 登录验证失败，请检查 Cookie 或稍后重试";
+
 // iOS 音效
 "音效" = "音效";
 "原声" = "原声";

@@ -5,6 +5,7 @@ struct LoginSheet: View {
     private enum Mode: String, CaseIterable, Identifiable {
         case qr = "扫码登录"
         case sms = "手机验证码"
+        case cookie = "Cookie 登录"
 
         var id: String { rawValue }
     }
@@ -32,6 +33,12 @@ struct LoginSheet: View {
     @State private var smsLoggingIn = false
     @State private var smsMessage: String?
     @State private var cooldownTask: Task<Void, Never>?
+    @State private var cookieHeader = ""
+    @State private var cookieMessage: String?
+    @State private var cookieTask: Task<Void, Never>?
+    @State private var cookieAttempt: UUID?
+    @State private var syncedLoggingIn = false
+    @State private var isPresented = false
 
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var toasts: ToastCenter
@@ -50,15 +57,22 @@ struct LoginSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 220)
+                .frame(width: 280)
+                .disabled(smsLoggingIn || syncedLoggingIn)
                 .padding(.top, 6)
             }
             .padding(.top, 28)
 
-            SyncedLoginButtons(onStart: { pollTask?.cancel() }, onFinished: { signedIn in
+            SyncedLoginButtons(onStart: {
+                syncedLoggingIn = true
+                cancelCookieLogin()
+                pollTask?.cancel()
+            }, onFinished: { signedIn in
+                syncedLoggingIn = false
                 if signedIn { dismiss() }
                 else if mode == .qr, !account.isLoggedIn { startLogin(reusingKey: true) }
             })
+            .disabled(smsLoggingIn || cookieAttempt != nil)
             .padding(.horizontal, 24)
 
             switch mode {
@@ -66,9 +80,14 @@ struct LoginSheet: View {
                 qrSection
             case .sms:
                 smsSection
+            case .cookie:
+                cookieSection
             }
 
             Button("取消") {
+                isPresented = false
+                cancelCookieLogin()
+                pollTask?.cancel()
                 dismiss()
             }
             .buttonStyle(.plain)
@@ -80,8 +99,13 @@ struct LoginSheet: View {
         .overlay(alignment: .top) {
             if let toast = toasts.current { ToastView(toast: toast).padding(.top, 8) }
         }
-        .onAppear { startLogin() }
+        .onAppear {
+            isPresented = true
+            startLogin()
+        }
         .onDisappear {
+            isPresented = false
+            cancelCookieLogin()
             pollTask?.cancel()
             cooldownTask?.cancel()
         }
@@ -93,7 +117,9 @@ struct LoginSheet: View {
             else if pollTask == nil || pollTask?.isCancelled == true { startLogin(reusingKey: true) }
         }
         .onChange(of: mode) { _ in
-            if mode == .qr, case .failed = phase { startLogin(reusingKey: true) }
+            cancelCookieLogin()
+            pollTask?.cancel()
+            if mode == .qr { startLogin(reusingKey: true) }
         }
     }
 
@@ -194,6 +220,7 @@ struct LoginSheet: View {
     /// errors (the app being backgrounded while the user scans) instead of
     /// giving up on the first failure.
     private func startLogin(reusingKey: Bool = false) {
+        guard isPresented, mode == .qr, !smsLoggingIn, !syncedLoggingIn, cookieAttempt == nil else { return }
         pollTask?.cancel()
         let existingKey = reusingKey ? unikey : nil
         if existingKey == nil {
@@ -209,6 +236,7 @@ struct LoginSheet: View {
                     key = existingKey
                 } else {
                     key = try await MusicAPI.qrKey()
+                    try Task.checkCancellation()
                     unikey = key
                     guard let loginURL = MusicAPI.qrLoginURL(unikey: key) else { throw MusicAPIError.notConfigured }
                     qrImage = Self.generateQR(from: loginURL)
@@ -223,9 +251,21 @@ struct LoginSheet: View {
                         check = try await MusicAPI.qrCheck(unikey: key)
                         consecutiveErrors = 0
                     } catch {
+                        // Cancellation is not a transient network error.
+                        // Retrying it would keep a stopped poll alive.
+                        if Task.isCancelled { throw error }
                         consecutiveErrors += 1
                         if consecutiveErrors >= 15 { throw error }
                         continue
+                    }
+                    if Task.isCancelled {
+                        // qrCheck can finish after this poll was cancelled.
+                        // Code 803 has already stored Set-Cookie, so bootstrap
+                        // has to run on a task that cancellation will not abort.
+                        if check.code == 803 {
+                            await Task { @MainActor in await account.bootstrap() }.value
+                        }
+                        return
                     }
                     switch check.code {
                     case 800:
@@ -239,6 +279,7 @@ struct LoginSheet: View {
                     case 803:
                         phase = .success
                         await account.bootstrap()
+                        try Task.checkCancellation()
                         ToastCenter.shared.show(String(localized: "欢迎回来，\(account.profile?.nickname ?? "")"))
                         dismiss()
                         return
@@ -343,7 +384,7 @@ struct LoginSheet: View {
     }
 
     private var canSendCode: Bool { !smsSending && smsCooldown == 0 && phone.count >= 11 }
-    private var canLogin: Bool { !smsLoggingIn && phone.count >= 11 && code.count >= 4 }
+    private var canLogin: Bool { !smsLoggingIn && !syncedLoggingIn && cookieAttempt == nil && phone.count >= 11 && code.count >= 4 }
 
 
     private func sendCode() {
@@ -369,6 +410,7 @@ struct LoginSheet: View {
     }
 
     private func loginWithCode() {
+        guard canLogin else { return }
         smsLoggingIn = true
         smsMessage = nil
         Task {
@@ -381,6 +423,88 @@ struct LoginSheet: View {
                 dismiss()
             } catch {
                 smsMessage = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Cookie
+
+    private var cookieSection: some View {
+        VStack(spacing: 16) {
+            Text("在浏览器登录网易云音乐后，粘贴包含 MUSIC_U 的 Cookie；可同时包含 __csrf。请勿分享 Cookie。")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+
+            SecureField("Cookie 内容", text: $cookieHeader)
+                .textFieldStyle(.plain)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                #endif
+                .fieldChrome()
+                .disabled(cookieAttempt != nil)
+                .onSubmit { loginWithCookie() }
+
+            if let cookieMessage {
+                Text(cookieMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.accent)
+                    .multilineTextAlignment(.center)
+            }
+
+            Button(action: loginWithCookie) {
+                if cookieAttempt != nil {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("登录")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.accent)
+            .disabled(cookieAttempt != nil || smsLoggingIn || syncedLoggingIn || cookieHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 28)
+        .frame(minHeight: 300)
+    }
+
+    private func cancelCookieLogin() {
+        cookieAttempt = nil
+        cookieTask?.cancel()
+        cookieTask = nil
+        cookieHeader = ""
+    }
+
+    private func loginWithCookie() {
+        guard isPresented, mode == .cookie, cookieAttempt == nil, !smsLoggingIn, !syncedLoggingIn else { return }
+        let attempt = UUID()
+        cookieAttempt = attempt
+        cookieMessage = nil
+        let header = cookieHeader
+        cookieTask = Task {
+            defer {
+                if cookieAttempt == attempt {
+                    cookieAttempt = nil
+                    cookieTask = nil
+                }
+            }
+            do {
+                try await account.importCookieLogin(header) {
+                    isPresented && mode == .cookie && cookieAttempt == attempt
+                }
+                // installLogin clears the previous account's playlists and
+                // liked tracks. Fetch them even if this sheet task is cancelled
+                // after the credentials are committed.
+                await Task { @MainActor in await account.refreshLibrary() }.value
+                try Task.checkCancellation()
+                guard isPresented, mode == .cookie, cookieAttempt == attempt else { return }
+                cookieHeader = ""
+                ToastCenter.shared.show(String(localized: "欢迎回来，\(account.profile?.nickname ?? "")"))
+                dismiss()
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, cookieAttempt == attempt else { return }
+                cookieMessage = error.localizedDescription
             }
         }
     }
