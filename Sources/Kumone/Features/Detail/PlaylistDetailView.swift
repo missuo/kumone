@@ -37,13 +37,36 @@ struct PlaylistDetailView: View {
         #endif
     }
 
+    /// The account's own 我喜欢的音乐, whose 更多 menu also offers sorting.
+    private var isOwnLikedSongs: Bool {
+        model.detail?.specialType == 5 && isOwnPlaylist
+    }
+
+    /// iOS reveals the in-list search for every playlist (macOS keeps its
+    /// search field in the action row).
     private var supportsPlaylistSearch: Bool {
         #if os(iOS)
-        return model.detail?.specialType == 5 && isOwnPlaylist
+        return model.detail != nil
         #else
         return false
         #endif
     }
+
+    /// Loading notes that mention search: always on the liked list, as
+    /// before, and on any other playlist while it is being searched.
+    private var showsSearchLoadingNotes: Bool {
+        supportsPlaylistSearch && (isOwnLikedSongs || isSearchActive || TrackSearch.query(model.filter) != nil)
+    }
+
+    #if os(iOS)
+    private func revealSearch(_ proxy: ScrollViewProxy) {
+        withAnimation(AppAnimation.standard) {
+            showSearch = true
+            proxy.scrollTo("playlistTop", anchor: .top)
+        }
+        searchFocused = true
+    }
+    #endif
 
     private var isSearchActive: Bool {
         #if os(iOS)
@@ -68,15 +91,11 @@ struct PlaylistDetailView: View {
                         }
                     }
                     #if os(iOS)
-                    if supportsPlaylistSearch && !isSearchActive {
+                    if isOwnLikedSongs && supportsPlaylistSearch && !isSearchActive {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Menu {
                                 Button {
-                                    withAnimation(AppAnimation.standard) {
-                                        showSearch = true
-                                        proxy.scrollTo("playlistTop", anchor: .top)
-                                    }
-                                    searchFocused = true
+                                    revealSearch(proxy)
                                 } label: {
                                     Label("在歌单内查找", systemImage: "magnifyingglass")
                                 }
@@ -93,6 +112,15 @@ struct PlaylistDetailView: View {
                                 Label("更多", systemImage: "ellipsis")
                             }
                             .accessibilityIdentifier("likedSongsMenu")
+                        }
+                    } else if supportsPlaylistSearch && !isSearchActive {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button {
+                                revealSearch(proxy)
+                            } label: {
+                                Label("在歌单内查找", systemImage: "magnifyingglass")
+                            }
+                            .accessibilityIdentifier("playlistSearchButton")
                         }
                     }
                     #endif
@@ -179,7 +207,9 @@ struct PlaylistDetailView: View {
             onRemoved: { track in Task { await model.remove(track) } },
             recommendationContext: recommendationContext,
             onRecommendationReplaced: { model.replaceRecommendation($0, with: $1) },
-            layout: layout
+            layout: layout,
+            // A search result plays the whole playlist from that song.
+            queue: model.orderedTracks
         )
     }
 
@@ -201,39 +231,23 @@ struct PlaylistDetailView: View {
 
             #if os(iOS)
             if isSearchActive {
-                HStack(spacing: 4) {
-                    PlaylistSearchField(text: $model.filter, isFocused: $searchFocused)
-                    Button("取消") {
-                        model.filter = ""
-                        searchFocused = false
-                        withAnimation(AppAnimation.standard) { showSearch = false }
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 8)
+                ListSearchBar(text: $model.filter, isFocused: $searchFocused) {
+                    model.filter = ""
+                    searchFocused = false
+                    withAnimation(AppAnimation.standard) { showSearch = false }
                 }
-                .frame(height: 52)
                 .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
                 .padding(.top, 8)
                 .transition(.opacity)
             }
 
-            if supportsPlaylistSearch && !model.filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack {
-                    Text("找到 \(filteredTracks.count) 首匹配歌曲")
-                    if !isSearchActive {
-                        Spacer()
-                        Button("清空搜索") { model.filter = "" }
-                    }
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-
-                if filteredTracks.isEmpty && !model.isLoadingMore && model.errorMessage == nil {
-                    EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲",
-                                   subtitle: "试试其他歌名、歌手或专辑")
-                        .frame(minHeight: 180)
-                }
+            if supportsPlaylistSearch && TrackSearch.query(model.filter) != nil {
+                SongSearchSummary(
+                    count: filteredTracks.count,
+                    isSettled: !model.isLoadingMore && model.errorMessage == nil,
+                    onClear: isSearchActive ? nil : { model.filter = "" },
+                    horizontalPadding: isCompact ? 16 : Theme.Layout.contentInset
+                )
             }
             #endif
 
@@ -262,7 +276,7 @@ struct PlaylistDetailView: View {
                 Spacer()
                 ProgressView().controlSize(.small)
                 #if os(iOS)
-                if supportsPlaylistSearch {
+                if showsSearchLoadingNotes {
                     Text("正在加载歌单，搜索结果会继续更新…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -284,7 +298,7 @@ struct PlaylistDetailView: View {
         }
 
         #if os(iOS)
-        if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
+        if showsSearchLoadingNotes, model.tracks.count < detail.trackCount, let message = model.errorMessage {
             VStack(spacing: 8) {
                 Text("歌单未完整加载，搜索结果可能不完整")
                     .font(.subheadline)
@@ -529,18 +543,7 @@ struct PlaylistDetailView: View {
             #if os(macOS)
             Spacer()
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                TextField("搜索歌单内歌曲", text: $model.filter)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .frame(width: 130)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.primary.opacity(0.05), in: Capsule())
+            ListFilterField(placeholder: "搜索歌单内歌曲", text: $model.filter)
             #endif
         }
     }

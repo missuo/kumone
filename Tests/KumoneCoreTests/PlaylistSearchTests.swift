@@ -91,6 +91,30 @@ struct PlaylistSearchTests {
         #expect(model.filteredTracks.map(\.id) == [1])
     }
 
+    /// Large playlists arrive as one detail response plus 500-song pages; a
+    /// search opened before the tail arrives still finds songs on later pages.
+    @Test func searchCoversSongsLoadedAfterTheFirstPage() async throws {
+        let ids = Array(1...1_200)
+        let detail = try JSONDecoder().decode(MusicAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(
+            withJSONObject: ["playlist": ["id": 1, "name": "Big", "trackCount": ids.count,
+                                          "trackIds": ids.map { ["id": $0] },
+                                          "tracks": [["id": 1, "name": "Ordinary", "dt": 1]]]]))
+        var pages: [[Int]] = []
+        let model = PlaylistContent(playlistID: 1, snapshots: nil, accountScope: { "test" },
+                                    detailLoader: { _ in detail },
+                                    tracksLoader: { chunk in
+            pages.append(chunk)
+            return .init(songs: try chunk.map { try track(id: $0, name: $0 == 1_150 ? "夜曲" : "Ordinary") },
+                         privileges: [])
+        })
+        model.filter = "夜曲"
+        await model.load()
+
+        #expect(pages.map(\.count) == [500, 500, 199])
+        #expect(model.tracks.count == 1_200 && model.canDownloadAll)
+        #expect(model.filteredTracks.map(\.id) == [1_150])
+    }
+
     private func track(id: Int, name: String, artist: String = "Artist", album: String = "Album") throws -> Track {
         let data = try JSONSerialization.data(withJSONObject: [
             "id": id, "name": name,

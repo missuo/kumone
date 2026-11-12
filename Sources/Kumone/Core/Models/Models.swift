@@ -374,20 +374,40 @@ struct CloudSongItem: Decodable, Hashable, Identifiable {
     let songId: Int
     let songName: String?
     let artist: String?
+    let album: String?
+    /// The uploaded file's name, which often differs from the matched song.
+    let fileName: String?
     let fileSize: Int
     let simpleSong: Track?
 
     var id: Int { songId }
 
     private enum CodingKeys: String, CodingKey {
-        case songId, songName, artist, fileSize, simpleSong, privateCloud
+        case songId, songName, artist, album, fileName, fileSize, simpleSong, privateCloud
     }
 
     private struct PrivateCloud: Decodable {
         let songId: Int?
         let song: String?
         let artist: String?
+        let album: String?
+        let fileName: String?
         let fileSize: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case songId, song, artist, album, fileName, fileSize
+        }
+
+        // Field by field, so one unexpected shape does not discard the rest.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            songId = try? c.decode(Int.self, forKey: .songId)
+            song = try? c.decode(String.self, forKey: .song)
+            artist = try? c.decode(String.self, forKey: .artist)
+            album = try? c.decode(String.self, forKey: .album)
+            fileName = try? c.decode(String.self, forKey: .fileName)
+            fileSize = try? c.decode(Int.self, forKey: .fileSize)
+        }
     }
 
     init(from decoder: Decoder) throws {
@@ -399,7 +419,16 @@ struct CloudSongItem: Decodable, Hashable, Identifiable {
         songName = (try? c.decode(String.self, forKey: .songName))
             ?? nested?.song ?? simpleSong?.name
         artist = (try? c.decode(String.self, forKey: .artist)) ?? nested?.artist
+        album = (try? c.decode(String.self, forKey: .album)) ?? nested?.album
+        fileName = (try? c.decode(String.self, forKey: .fileName)) ?? nested?.fileName
         fileSize = (try? c.decode(Int.self, forKey: .fileSize)) ?? nested?.fileSize ?? 0
+    }
+
+    /// Whether the in-list search `query` matches this upload: the matched
+    /// song as playlists search it, plus the cloud's own metadata and file name.
+    func matches(_ query: String) -> Bool {
+        guard let simpleSong else { return false }
+        return TrackSearch.matches(simpleSong, query: query, extra: [songName, artist, album, fileName])
     }
 }
 

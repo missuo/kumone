@@ -5,13 +5,16 @@ import UIKit
 struct PlaylistSearchField: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    var placeholder = String(localized: "搜索歌单内歌曲")
+    var hint = String(localized: "按歌名、歌手或专辑搜索")
+    var identifier = "likedSongsSearch"
 
     func makeUIView(context: Context) -> UISearchBar {
         let bar = UISearchBar()
         bar.searchBarStyle = .minimal
-        bar.placeholder = String(localized: "搜索歌单内歌曲")
-        bar.searchTextField.accessibilityHint = String(localized: "按歌名、歌手或专辑搜索")
-        bar.searchTextField.accessibilityIdentifier = "likedSongsSearch"
+        bar.placeholder = placeholder
+        bar.searchTextField.accessibilityHint = hint
+        bar.searchTextField.accessibilityIdentifier = identifier
         bar.autocapitalizationType = .none
         bar.autocorrectionType = .no
         bar.delegate = context.coordinator
