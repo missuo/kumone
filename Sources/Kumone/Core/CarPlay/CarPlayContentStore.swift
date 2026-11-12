@@ -158,8 +158,7 @@ final class CarPlayContentStore {
 
     // MARK: - Recently played
 
-    /// Loads the all-time recently-played tracks. We unwrap `.song` on each
-    /// `PlayRecordItem` so callers get a plain `[Track]`.
+    /// Loads the account's 最近播放 list, newest first, as plain `[Track]`.
     func fetchRecentsTracks(loggedIn: Bool, force: Bool = false) async {
         guard loggedIn else { recentsTracks = []; recentsFetchedAt = .distantPast; return }
         if !force, Date().timeIntervalSince(recentsFetchedAt) < ttl { return }

@@ -2,9 +2,23 @@ import SwiftUI
 
 // MARK: - 最近播放
 
+/// 最近播放 lists songs by when they were last played, like the official
+/// client; the two ranking tabs are its 听歌排行, ordered by play count.
 struct RecentsView: View {
-    @State private var records: [PlayRecordItem] = []
-    @State private var week = false
+    private enum Mode: Hashable {
+        case recent, week, allTime
+    }
+
+    /// A row of either list: the song plus what its trailing column shows.
+    private struct Record: Hashable {
+        let song: Track
+        let detail: String?
+    }
+
+    @State private var records: [Record] = []
+    @State private var mode = Mode.recent
+    /// Which tab `records` holds, so a revisit refreshes in place.
+    @State private var loadedMode: Mode?
     @State private var isLoading = true
 
     @EnvironmentObject private var account: AccountStore
@@ -14,15 +28,17 @@ struct RecentsView: View {
         TrackListScrollView(trackIDs: records.map { $0.song.id }, style: .compact, spacing: 16) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Picker("", selection: $week) {
-                        Text("所有时间").tag(false)
-                        Text("最近一周").tag(true)
+                    Picker("", selection: $mode) {
+                        Text("最近播放").tag(Mode.recent)
+                        Text("本周排行").tag(Mode.week)
+                        Text("总排行").tag(Mode.allTime)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 200)
+                    // Gives way on a narrow phone rather than pushing 播放全部 out.
+                    .frame(maxWidth: 270)
 
-                    Spacer()
+                    Spacer(minLength: 12)
 
                     Button {
                         player.play(tracks: records.map(\.song), source: .none, context: .recents)
@@ -55,7 +71,7 @@ struct RecentsView: View {
             PlayerClearanceSpacer()
         }
         .navigationTitle("最近播放")
-        .task(id: week) {
+        .task(id: mode) {
             await load()
         }
     }
@@ -80,7 +96,7 @@ struct RecentsView: View {
             track: record.song,
             index: index + 1,
             style: .compact,
-            trailingText: String(localized: "\(record.playCount) 次")
+            trailingText: record.detail
         ) {
             player.play(tracks: records.map(\.song), source: .none, startAt: record.song,
                         context: .recents)
@@ -92,9 +108,31 @@ struct RecentsView: View {
             isLoading = false
             return
         }
+        // Switching tabs shows the spinner instead of the other tab's rows.
+        let requested = mode
+        if loadedMode != requested {
+            records = []
+            loadedMode = nil
+        }
         isLoading = records.isEmpty
-        records = (try? await MusicAPI.playRecords(uid: uid, week: week)) ?? []
+        let loaded: [Record]
+        switch requested {
+        case .recent:
+            let plays = (try? await MusicAPI.recentSongs()) ?? []
+            loaded = plays.map { Record(song: $0.song, detail: Self.relativeTime($0.playedAt)) }
+        case .week, .allTime:
+            let ranking = (try? await MusicAPI.playRecords(uid: uid, week: requested == .week)) ?? []
+            loaded = ranking.map { Record(song: $0.song, detail: String(localized: "\($0.playCount) 次")) }
+        }
+        guard !Task.isCancelled, requested == mode else { return }
+        records = loaded
+        loadedMode = requested
         isLoading = false
+    }
+
+    private static func relativeTime(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return min(date, Date()).formatted(.relative(presentation: .named))
     }
 }
 
