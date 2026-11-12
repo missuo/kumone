@@ -179,8 +179,8 @@
 /* Collections / recents / cloud */
 "还没有收藏专辑" = "No saved albums yet";
 "还没有关注歌手" = "No followed artists yet";
-"所有时间" = "All Time";
-"最近一周" = "Past Week";
+"本周排行" = "Top This Week";
+"总排行" = "Top All Time";
 "暂无播放记录" = "No listening history yet";
 "%lld 次" = "%lld plays";
 "云盘还没有歌曲" = "No songs in your cloud disk";

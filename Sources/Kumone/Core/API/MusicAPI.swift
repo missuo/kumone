@@ -199,6 +199,39 @@ enum MusicAPI {
         return (week ? resp.weekData : resp.allData) ?? []
     }
 
+    struct RecentSongsResponse: Decodable {
+        struct Body: Decodable {
+            let list: [RecentPlay]
+
+            private enum CodingKeys: String, CodingKey {
+                case list
+            }
+
+            /// Skips an entry that is not a song rather than losing the list.
+            private struct Entry: Decodable {
+                let play: RecentPlay?
+                init(from decoder: Decoder) throws { play = try? RecentPlay(from: decoder) }
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                list = ((try? c.decode([Entry].self, forKey: .list)) ?? []).compactMap(\.play)
+            }
+        }
+
+        let data: Body?
+    }
+
+    /// The official 最近播放 list: songs in the order they were last played,
+    /// on any device of the account. `/v1/play/record` (`playRecords`) is the
+    /// listening ranking instead, ordered by play count (#198).
+    static func recentSongs(limit: Int = 300, using client: MusicClient = .shared) async throws -> [RecentPlay] {
+        let data = try await client.eapi("/play-record/song/list", ["limit": limit])
+        let resp = try client.decoded(RecentSongsResponse.self, from: data)
+        var seen: Set<Int> = []
+        return (resp.data?.list ?? []).filter { $0.song.id > 0 && seen.insert($0.song.id).inserted }
+    }
+
     struct CloudResponse: Decodable {
         let data: [CloudSongItem]?
         let hasMore: Bool?

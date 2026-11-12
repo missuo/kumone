@@ -422,6 +422,31 @@ struct PlayRecordItem: Decodable, Hashable {
     }
 }
 
+/// One entry of the account's 最近播放 list (`/play-record/song/list`), which
+/// the service orders by when each song was last played, newest first.
+struct RecentPlay: Decodable, Hashable {
+    let song: Track
+    /// Nil when the service leaves `playTime` out.
+    let playedAt: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case data, playTime
+    }
+
+    init(song: Track, playedAt: Date?) {
+        self.song = song
+        self.playedAt = playedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        song = try c.decode(Track.self, forKey: .data)
+        // Milliseconds since 1970.
+        playedAt = (try? c.decode(Int64.self, forKey: .playTime))
+            .flatMap { $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0) / 1000) : nil }
+    }
+}
+
 // MARK: - Formatting helpers
 
 enum Formatters {

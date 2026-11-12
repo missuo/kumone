@@ -1559,8 +1559,8 @@ final class PlayerService: ObservableObject {
             let songs = try await MusicAPI.cloudSongs().data?.compactMap(\.simpleSong) ?? []
             return (songs, .cloud)
         case .recents:
-            guard let uid = AccountStore.shared.profile?.userId else { return nil }
-            return (try await MusicAPI.playRecords(uid: uid, week: false).map(\.song), .none)
+            guard AccountStore.shared.isLoggedIn else { return nil }
+            return (try await MusicAPI.recentSongs().map(\.song), .none)
         case .heartbeat:
             // Regenerated from a fresh seed, the same way the Home card does it.
             guard let liked = AccountStore.shared.likedSongsPlaylist,
