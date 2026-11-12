@@ -54,9 +54,16 @@ actor StorageUsageReader {
 
     func read(audioFiles: [AudioStorageFile], accountScope: String?) -> StorageUsageSnapshot {
         var snapshot = StorageUsageSnapshot()
-        if let values = try? volumeURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey]),
-           let total = values.volumeTotalCapacity, let available = values.volumeAvailableCapacity, total > 0 {
-            snapshot.device = .init(total: Int64(total), available: Int64(available))
+        // Purgeable space (offloadable caches the system frees on demand)
+        // counts as available, matching the free space the system's storage
+        // settings report; the raw free-space key alone overstates "used".
+        if let values = try? volumeURL.resourceValues(forKeys: [.volumeTotalCapacityKey,
+                                                                .volumeAvailableCapacityForImportantUsageKey,
+                                                                .volumeAvailableCapacityKey]),
+           let total = values.volumeTotalCapacity, total > 0,
+           let available = values.volumeAvailableCapacityForImportantUsage.flatMap({ $0 > 0 ? $0 : nil })
+               ?? values.volumeAvailableCapacity.map({ Int64($0) }) {
+            snapshot.device = .init(total: Int64(total), available: available)
         }
         let assets = Dictionary(audioFiles.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
         var visited: Set<String> = []
