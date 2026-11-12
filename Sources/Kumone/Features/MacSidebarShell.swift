@@ -61,8 +61,15 @@ enum SidebarMetrics {
         if #available(macOS 26.0, *) { return 16 }
         return 0
     }
+    /// Sequoia adds 10pt above source lists outside a system split view.
+    static var listTopPadding: CGFloat {
+        if #available(macOS 26.0, *) { return 0 }
+        return -10
+    }
     /// From the page's leading edge to its title.
     static let titleInset: CGFloat = 20
+    /// Align the back chevron with the system detail-column navigation.
+    static let navigationInset: CGFloat = 14
     /// From the toggle to the title, when the page runs under the toggle.
     static let titleGapAfterToggle: CGFloat = 14
 }
@@ -71,6 +78,7 @@ enum SidebarMetrics {
 /// over it, whose leading edge slides with `SidebarState`.
 struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
     @ObservedObject private var state = SidebarState.shared
+    let goBack: (() -> Void)?
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let detail: () -> Detail
     /// Laid over the page, the toolbar's band included; takes no hits.
@@ -88,16 +96,17 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
 
             // Where the split view put it: at the page's leading edge, or
             // after the toggle when the page runs under it.
-            PageTitleBand()
+            PageNavigationBand(goBack: goBack)
                 .padding(.leading, max(
-                    (state.isOpen ? SidebarMetrics.span : 0) + SidebarMetrics.titleInset,
+                    (state.isOpen ? SidebarMetrics.span : 0)
+                        + (goBack == nil ? SidebarMetrics.titleInset : SidebarMetrics.navigationInset),
                     state.toggleTrailingEdge + SidebarMetrics.titleGapAfterToggle
                 ))
         }
         // The page paints the toolbar's band itself (backdrop, tint, title),
         // so it slides with the page; the toolbar draws nothing of its own.
         .toolbarBackground(.hidden, for: .windowToolbar)
-        // The title is the page's own (`PageTitleBand`), so it can sit at
+        // The title is the page's own (`PageNavigationBand`), so it can sit at
         // the page's edge; the system one would stay beside the toggle.
         .toolbar(removing: .title)
     }
@@ -132,27 +141,49 @@ private struct BelowToolbarMask: View {
     }
 }
 
-/// The page's title, as the window would draw it, but at the page's leading
-/// edge in the toolbar's band, so it moves with the page.
-private struct PageTitleBand: View {
+/// Page navigation follows the detail's leading edge in the toolbar band.
+private struct PageNavigationBand: View {
+    let goBack: (() -> Void)?
     @ObservedObject private var title = PageTitle.shared
     @Environment(\.controlActiveState) private var controlActiveState
+    /// Pressed through `ToolbarBandClickTarget`, which the button's own
+    /// style never hears about.
+    @State private var isBandPressed = false
 
     var body: some View {
         GeometryReader { proxy in
             let band = proxy.safeAreaInsets.top
-            Text(verbatim: title.text)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(controlActiveState == .inactive ? .tertiary : .primary)
-                .lineLimit(1)
-                // Clear of the search field at the trailing end.
-                .padding(.trailing, 240)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: band)
-                .offset(y: -band)
+            HStack(spacing: 12) {
+                if let goBack {
+                    Button(action: goBack) {
+                        Label("返回", systemImage: "chevron.backward")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 24, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.interactiveRow)
+                    .opacity(isBandPressed ? 0.8 : 1)
+                    .background {
+                        if #available(macOS 26.0, *) {
+                            ToolbarBandClickTarget(action: goBack, isPressed: $isBandPressed)
+                        }
+                    }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .help("返回")
+                }
+                Text(verbatim: title.text)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(controlActiveState == .inactive ? .tertiary : .primary)
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            // Clear of the search field at the trailing end.
+            .padding(.trailing, 240)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: band)
+            .offset(y: -band)
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 
@@ -179,6 +210,7 @@ private struct SidebarPanel<Content: View>: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: SidebarMetrics.panelRadius, style: .continuous)
         content()
+            .padding(.top, SidebarMetrics.listTopPadding)
             .frame(width: Theme.Layout.sidebarWidth)
             .frame(maxHeight: .infinity)
             // The account footer paints its own material down to the panel's
@@ -234,6 +266,88 @@ private struct SidebarBackdrop: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
+/// macOS 26's window toolbar claims every click in its band, so a button the
+/// page draws there sees the pointer hover but never a click (Sequoia lets
+/// the click through). This catches the clicks over the button's own frame
+/// before the toolbar does; hover, VoiceOver and ⌘[ stay the button's.
+private struct ToolbarBandClickTarget: NSViewRepresentable {
+    let action: () -> Void
+    @Binding var isPressed: Bool
+
+    func makeNSView(context: Context) -> ClickTargetView { ClickTargetView() }
+
+    func updateNSView(_ view: ClickTargetView, context: Context) {
+        view.onClick = action
+        view.onPress = { pressed in
+            if isPressed != pressed { isPressed = pressed }
+        }
+    }
+
+    static func dismantleNSView(_ view: ClickTargetView, coordinator: ()) {
+        view.stopMonitoring()
+    }
+
+    final class ClickTargetView: NSView {
+        var onClick: () -> Void = {}
+        var onPress: (Bool) -> Void = { _ in }
+        private var monitor: Any?
+        private var isTracking = false
+
+        /// Never the target of a hit itself: the button below keeps hover.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+            ) { [weak self] event in
+                guard let self else { return event }
+                return self.handle(event)
+            }
+        }
+
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            if isTracking {
+                isTracking = false
+                onPress(false)
+            }
+        }
+
+        private func isInside(_ event: NSEvent) -> Bool {
+            guard let window, event.window === window, !isHiddenOrHasHiddenAncestor else { return false }
+            return bounds.contains(convert(event.locationInWindow, from: nil))
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            switch event.type {
+            case .leftMouseDown:
+                // A sheet over the window owns its clicks.
+                guard window?.attachedSheet == nil, isInside(event) else { return event }
+                isTracking = true
+                onPress(true)
+                return nil
+            case .leftMouseDragged:
+                guard isTracking else { return event }
+                onPress(isInside(event))
+                return nil
+            case .leftMouseUp:
+                guard isTracking else { return event }
+                isTracking = false
+                onPress(false)
+                // Released outside, like any button: nothing happens.
+                if isInside(event) { onClick() }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+}
+
 /// Shows and hides the sidebar from the start of the toolbar, beside the
 /// window buttons, where it stays whether the sidebar is open or not.
 struct SidebarToggleButton: View {
@@ -249,19 +363,6 @@ struct SidebarToggleButton: View {
             SidebarState.shared.setToggleTrailingEdge(x)
         }
         .help("显示或隐藏边栏 (⌃⌘S)")
-    }
-}
-
-/// Back to the previous page, in the toolbar after the sidebar toggle.
-struct BackButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label("返回", systemImage: "chevron.backward")
-        }
-        .keyboardShortcut("[", modifiers: .command)
-        .help("返回")
     }
 }
 
