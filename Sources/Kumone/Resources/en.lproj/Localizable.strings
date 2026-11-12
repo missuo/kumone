@@ -675,3 +675,19 @@
 "关闭随机播放" = "Turn Off Shuffle";
 "下载失败：%@" = "Download failed: %@";
 "下载失败（%@ %@），请检查网络或账号权限后重试" = "Download failed (%@ %@). Check your network or account access and try again";
+
+/* Song comments */
+"查看评论" = "View Comments";
+"热门评论" = "Top Comments";
+"最新评论" = "Latest Comments";
+"还没有评论" = "No comments yet";
+"%lld 条评论" = "%lld comments";
+"没有更多评论了" = "No more comments";
+"登录后可点赞评论" = "Sign in to like comments";
+"匿名用户" = "Anonymous";
+"回复 @%@：%@" = "Replying to @%@: %@";
+"回复 @%@" = "Replying to @%@";
+"点赞" = "Like";
+"取消点赞" = "Unlike";
+"无法识别这首歌曲" = "Unable to identify this song";
+"无法识别这条评论" = "Unable to identify this comment";

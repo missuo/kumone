@@ -384,6 +384,35 @@ enum MusicAPI {
         _ = try client.decoded(CodeOnly.self, from: data)
     }
 
+    // MARK: - Comments
+
+    /// The comment thread of a song.
+    static func songCommentThread(songID: Int) -> String { "R_SO_4_\(songID)" }
+
+    /// A page of a song's latest comments from `offset`, and on the first
+    /// page its hot comments too.
+    static func songComments(songID: Int, limit: Int = 20, offset: Int = 0,
+                             using client: MusicClient = .shared) async throws -> SongCommentsPage {
+        guard songID > 0 else {
+            throw MusicAPIError.business(code: 400, message: String(localized: "无法识别这首歌曲"))
+        }
+        let data = try await client.eapi("/v1/resource/comments/\(songCommentThread(songID: songID))",
+                                         ["limit": limit, "offset": offset])
+        return try client.decoded(SongCommentsPage.self, from: data)
+    }
+
+    /// Likes a comment for the signed-in listener, or takes the like back.
+    static func likeComment(threadID: String, commentID: Int, like: Bool,
+                            using client: MusicClient = .shared) async throws {
+        guard client.isLoggedIn else { throw MusicAPIError.needLogin }
+        guard commentID > 0 else {
+            throw MusicAPIError.business(code: 400, message: String(localized: "无法识别这条评论"))
+        }
+        let data = try await client.eapi(like ? "/v1/comment/like" : "/v1/comment/unlike",
+                                         ["threadId": threadID, "commentId": String(commentID)])
+        _ = try client.decoded(CodeOnly.self, from: data)
+    }
+
     struct PlaylistDetailResponse: Decodable {
         let playlist: PlaylistDetail
         let privileges: [TrackPrivilege]?
