@@ -526,6 +526,24 @@ enum MusicAPI {
         return try await eapi(SongURLResponse.self, "/song/enhance/player/url/v1", payload).data
     }
 
+    /// Whether a song URL request that failed is worth asking once more: a
+    /// timeout, a dropped connection, a server error or an unreadable answer.
+    /// Not a refusal (HTTP 4xx, such as the risk control's 400 with -460, or
+    /// a business code), which a second ask only adds to, nor a cancellation.
+    static func songURLWorthRetrying(after error: Error) -> Bool {
+        if error is CancellationError { return false }
+        switch error as? MusicAPIError {
+        case .http(let status): return status >= 500 || status < 0
+        case .decoding: return true
+        case .business, .needLogin, .notConfigured: return false
+        case nil: break
+        }
+        if let urlError = error as? URLError {
+            return [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(urlError.code)
+        }
+        return false
+    }
+
     /// Download eligibility is resolved independently of the playback URL.
     /// An injectable client lets the compatibility probe use an isolated cookie
     /// jar without reading or changing the listener's current login.

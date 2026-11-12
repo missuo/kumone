@@ -758,10 +758,15 @@ final class PlayerService: ObservableObject {
 
         if cacheEnabled {
             do {
+                // A copy from a third-party source is not played ahead of
+                // the service: it was cached when the service once refused
+                // the song, often for a moment, and would otherwise stand in
+                // for it from then on. It is still played below, once the
+                // service refuses again.
                 if let cached = try await AudioCache.shared.entry(
                     for: track.id,
                     requestedQuality: quality,
-                    allowsUnblock: allowsUnblock
+                    allowsUnblock: false
                 ) {
                     guard generation == resolveGeneration else { return }
                     let lease = await AudioCache.shared.retain(cached)
@@ -797,15 +802,29 @@ final class PlayerService: ObservableObject {
         }
 
         var data: SongURLData?
+        var requestError: Error?
         do {
-            data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
-            if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
-            }
+            data = try await Self.officialSongURL(for: track, quality: quality)
         } catch {
+            requestError = error
+        }
+        // A request that failed on its way, rather than one the service
+        // answered, is asked once more before third-party sources take the
+        // song: such failures are mostly over a second later.
+        if let error = requestError, MusicAPI.songURLWorthRetrying(after: error) {
+            try? await Task.sleep(for: .seconds(1))
+            guard generation == resolveGeneration else { return }
+            do {
+                data = try await Self.officialSongURL(for: track, quality: quality)
+                requestError = nil
+            } catch {
+                requestError = error
+            }
+        }
+        if let error = requestError {
             guard generation == resolveGeneration else { return }
             // A download covers a request that died on the network. Anything
-            // else keeps upstream's path: third-party sources, then the cache.
+            // else goes on below: a cached copy, then third-party sources.
             if ConnectivityFailure.matches(error) {
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
                     await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
@@ -826,6 +845,15 @@ final class PlayerService: ObservableObject {
         if let urlString = data?.url {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
+
+        // The service refused: a copy already cached, of the service's own
+        // at another quality or of a third-party source, plays before
+        // third-party sources are asked again.
+        if resolvedURL == nil, cacheEnabled,
+           await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) {
+            return
+        }
+        guard generation == resolveGeneration else { return }
 
         // The service refused — try third-party sources (unblock-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
@@ -852,6 +880,14 @@ final class PlayerService: ObservableObject {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
         _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
+    }
+
+    /// The service's URL for `track` at `quality`, or at standard when it
+    /// has none at that quality.
+    private static func officialSongURL(for track: Track, quality: String) async throws -> SongURLData? {
+        let data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
+        guard data?.url == nil, quality != AudioQuality.standard.rawValue else { return data }
+        return try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
     }
 
     private func resolveAndLoadUnblocked(
