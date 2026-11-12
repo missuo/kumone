@@ -43,6 +43,7 @@ struct TrackRow: View {
     // transient state and asynchronous completions to the song they belong to.
     @State private var hoveredTrackID: Int?
     @State private var addToPlaylistTrack: Track?
+    @State private var commentsTrack: Track?
     @State private var replacingRecommendationIDs: Set<Int> = []
     /// Only this track's download state, so another row's transfer cannot
     /// re-evaluate this body four times a second.
@@ -186,9 +187,13 @@ struct TrackRow: View {
         .sheet(item: $addToPlaylistTrack) { selectedTrack in
             AddToPlaylistSheet(track: selectedTrack)
         }
+        .sheet(item: $commentsTrack) { selectedTrack in
+            SongCommentsView(track: selectedTrack)
+        }
         .onChange(of: track.id) { _ in
             hoveredTrackID = nil
             addToPlaylistTrack = nil
+            commentsTrack = nil
         }
     }
 
@@ -386,6 +391,9 @@ struct TrackRow: View {
             .disabled(isReplacingRecommendation)
         }
         TrackBlacklistMenu(track: track)
+        SongCommentsMenuButton(track: track) {
+            commentsTrack = track
+        }
         Divider()
         if track.album.id > 0 {
             Button("查看专辑") {
