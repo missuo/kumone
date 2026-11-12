@@ -49,7 +49,41 @@ struct DailySongsView: View {
         }
     }
 
+    @ViewBuilder
     private var header: some View {
+        #if os(iOS)
+        plainHeader
+        #else
+        bannerHeader
+        #endif
+    }
+
+    /// On a phone the banner art took a third of the screen before the first
+    /// song; the page keeps its date, title and 播放全部 without it.
+    private var plainHeader: some View {
+        HStack(alignment: .bottom, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(dateString)
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundStyle(.secondary)
+                Text("每日推荐")
+                    .font(.system(size: 26, weight: .bold))
+                Text("根据你的音乐口味 · 每天 6:00 更新")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            playAllButton
+        }
+    }
+
+    private var bannerHeader: some View {
         ZStack(alignment: .bottomLeading) {
             CachedAsyncImage(url: tracks.first?.album.picUrl?.resizedImageURL(1024))
                 .frame(height: 220)
@@ -78,22 +112,27 @@ struct DailySongsView: View {
 
                 Spacer()
 
-                Button {
-                    player.play(tracks: tracks, source: .daily, context: .daily)
-                } label: {
-                    Label("播放全部", systemImage: "play.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 9)
-                        .background(Theme.accentGradient, in: Capsule())
-                        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
-                }
-                .buttonStyle(.pressable)
+                playAllButton
             }
             .padding(20)
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+    }
+
+    private var playAllButton: some View {
+        Button {
+            player.play(tracks: tracks, source: .daily, context: .daily)
+        } label: {
+            Label("播放全部", systemImage: "play.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 9)
+                .background(Theme.accentGradient, in: Capsule())
+                .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+        }
+        .buttonStyle(.pressable)
+        .disabled(tracks.isEmpty)
     }
 
     private var dateString: String {
