@@ -68,9 +68,20 @@ build_slice() { # [triple] — prints nothing; sets SLICE_BIN_PATH
 
 SLICE_BINARIES=()
 if [ -n "${ARCHES:-}" ]; then
+  # Xcode 27's default build system (Swift Build) gives every triple the same
+  # bin path, so the next slice overwrites this one: keep a copy of each
+  # slice's binary as it is built, and check it holds that architecture.
+  SLICE_DIR="$ROOT/.build/slices"
+  rm -rf "$SLICE_DIR"
+  mkdir -p "$SLICE_DIR"
   for arch in $ARCHES; do
     build_slice "$arch-apple-macosx"
-    SLICE_BINARIES+=("$SLICE_BIN_PATH/$APP_NAME")
+    cp "$SLICE_BIN_PATH/$APP_NAME" "$SLICE_DIR/$APP_NAME-$arch"
+    if [ "$(lipo -archs "$SLICE_DIR/$APP_NAME-$arch")" != "$arch" ]; then
+      echo "error: the $arch slice holds $(lipo -archs "$SLICE_DIR/$APP_NAME-$arch")" >&2
+      exit 1
+    fi
+    SLICE_BINARIES+=("$SLICE_DIR/$APP_NAME-$arch")
     # Resources and the metallib search below use the first slice's tree;
     # every slice carries the same resources.
     BIN_PATH="${BIN_PATH:-$SLICE_BIN_PATH}"
