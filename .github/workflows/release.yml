@@ -34,24 +34,11 @@ jobs:
           xcrun metal --version > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
           xcrun metal --version
 
-      # Compiled dependencies (mlx-swift's C++ above all) from the cache that
-      # build-cache.yml keeps warm on main: a tag can only restore caches saved
-      # on its own ref or the default branch. The key carries the compiler, so
-      # a runner image with a new Xcode starts clean instead of linking
-      # objects it cannot use. A miss only costs the old cold build.
-      - name: Compute build cache key
-        id: cachekey
-        run: |
-          SWIFT_ID="$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)"
-          echo "prefix=spm-release-$RUNNER_OS-$SWIFT_ID-" >> "$GITHUB_OUTPUT"
-          echo "key=spm-release-$RUNNER_OS-$SWIFT_ID-${{ hashFiles('Package.resolved', 'Package.swift', 'Scripts/build-app.sh') }}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore build cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .build
-          key: ${{ steps.cachekey.outputs.key }}
-          restore-keys: ${{ steps.cachekey.outputs.prefix }}
+      # No restored build cache: under Xcode 27's build system the compiled
+      # .build records the Metal compiler at a cryptex mount whose name differs
+      # on every runner (MetalToolchain-v27.2.<version>.<random>), so a cache warmed on
+      # another machine fails with "unable to spawn process …/metal". A clean
+      # build is slower but works on any runner.
 
       - name: Derive version
         run: |
