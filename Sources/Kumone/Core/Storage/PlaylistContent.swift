@@ -44,14 +44,12 @@ final class PlaylistContent: ObservableObject {
         return detail.trackIds.count == detail.trackCount && Set(tracks.map(\.id)) == Set(detail.trackIds.map(\.id))
     }
 
+    /// Songs matching `filter`, in the current sort order. `load` keeps
+    /// fetching every remaining page after the first, so the search covers
+    /// the whole playlist once loading finishes and updates as pages arrive.
     var filteredTracks: [Track] {
-        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return orderedTracks }
-        return orderedTracks.filter {
-            $0.name.localizedStandardContains(query)
-                || $0.artistNames.localizedStandardContains(query)
-                || $0.album.name.localizedStandardContains(query)
-        }
+        guard let query = TrackSearch.query(filter) else { return orderedTracks }
+        return orderedTracks.filter { TrackSearch.matches($0, query: query) }
     }
 
     func load(allowNetwork: Bool = true, summary: PlaylistSummary? = nil, background: Bool = false) async {

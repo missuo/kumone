@@ -614,6 +614,10 @@ struct TrackListView: View {
     var onRecommendationReplaced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
     var layout: Layout = .stack
+    /// What a row tap plays, starting at that row; defaults to `tracks`. A
+    /// search shows a subset but passes the whole list, so a result plays in
+    /// its place in the playlist rather than as a queue of matches.
+    var queue: [Track]?
 
     // Playback state belongs to TrackRow; the list only starts playback.
     private let player = PlayerService.shared
@@ -682,7 +686,7 @@ struct TrackListView: View {
     }
 
     private var playableTracks: [Track] {
-        tracks.filter { playability(of: $0) == .playable }
+        (queue ?? tracks).filter { playability(of: $0) == .playable }
     }
 
     private func playability(of track: Track) -> TrackPlayability {
