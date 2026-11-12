@@ -14,11 +14,25 @@ env:
 
 jobs:
   macos:
-    runs-on: macos-26
+    # Linked against the macOS 27.2 SDK, so the app gets the current window
+    # chrome (traffic lights, toolbar) on macOS 27 (#197). The xcode-27 image
+    # defaults to Xcode 27.1; DEVELOPER_DIR picks 27.2 for every step.
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history: build number = commit count
+
+      # Xcode 27's default build system compiles mlx's Metal kernels itself,
+      # and the runner image does not always ship the Metal toolchain.
+      - name: Select Xcode and ensure the Metal toolchain
+        run: |
+          xcodebuild -version
+          echo "macOS SDK $(xcrun --show-sdk-version)"
+          xcrun metal --version > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          xcrun metal --version
 
       # Compiled dependencies (mlx-swift's C++ above all) from the cache that
       # build-cache.yml keeps warm on main: a tag can only restore caches saved
@@ -148,8 +162,7 @@ jobs:
   ios:
     # Runs beside the macOS job instead of after it.
     # iPhone Duo inner display needs the iOS 27.1 SDK (Apple docs);
-    # GitHub's xcode-27 image defaults to Xcode 27.1. Keep the macOS
-    # release job on macos-26 — only the IPA needs the newer SDK.
+    # GitHub's xcode-27 image defaults to Xcode 27.1.
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4

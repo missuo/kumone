@@ -28,10 +28,22 @@ concurrency:
 
 jobs:
   warm:
-    runs-on: macos-26
+    # Same image and Xcode as release.yml's macOS job, so the cache matches.
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
+      # Xcode 27's default build system compiles mlx's Metal kernels itself,
+      # and the runner image does not always ship the Metal toolchain.
+      - name: Select Xcode and ensure the Metal toolchain
+        run: |
+          xcodebuild -version
+          echo "macOS SDK $(xcrun --show-sdk-version)"
+          xcrun metal --version > /dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          xcrun metal --version
 
       # Same key as release.yml.
       - name: Compute build cache key
