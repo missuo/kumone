@@ -28,7 +28,7 @@ struct TrackRow: View {
     /// Set when the row lives inside a user's own playlist (enables 删除).
     var removableFromPlaylistID: Int?
     var onRemoved: (() -> Void)?
-    var onRecommendationReduced: ((Track) -> Void)?
+    var onRecommendationReplaced: ((Track) -> Void)?
     let onPlay: () -> Void
 
     @EnvironmentObject private var player: PlayerService
@@ -43,14 +43,14 @@ struct TrackRow: View {
     // transient state and asynchronous completions to the song they belong to.
     @State private var hoveredTrackID: Int?
     @State private var addToPlaylistTrack: Track?
-    @State private var reducingRecommendationIDs: Set<Int> = []
+    @State private var replacingRecommendationIDs: Set<Int> = []
     /// Only this track's download state, so another row's transfer cannot
     /// re-evaluate this body four times a second.
     @ObservedObject private var downloadState: TrackDownloadState
 
     init(track: Track, index: Int, style: TrackRowStyle = .full, playability: TrackPlayability = .playable,
          trailingText: String? = nil, removableFromPlaylistID: Int? = nil, onRemoved: (() -> Void)? = nil,
-         onRecommendationReduced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
+         onRecommendationReplaced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
         self.track = track
         self.index = index
         self.style = style
@@ -58,14 +58,14 @@ struct TrackRow: View {
         self.trailingText = trailingText
         self.removableFromPlaylistID = removableFromPlaylistID
         self.onRemoved = onRemoved
-        self.onRecommendationReduced = onRecommendationReduced
+        self.onRecommendationReplaced = onRecommendationReplaced
         self.onPlay = onPlay
         _downloadState = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
     }
 
     private var isCurrent: Bool { player.currentTrack?.id == track.id }
     private var isHovering: Bool { hoveredTrackID == track.id }
-    private var isReducingRecommendation: Bool { reducingRecommendationIDs.contains(track.id) }
+    private var isReplacingRecommendation: Bool { replacingRecommendationIDs.contains(track.id) }
     private var isOffline: Bool { downloadState.isOffline }
     private var isPlayable: Bool { playability == .playable || isOffline }
     private var needsNetwork: Bool { downloadState.needsNetwork }
@@ -367,26 +367,25 @@ struct TrackRow: View {
                 }
             }
         }
-        #if os(macOS)
-        if !account.isLiked(track.id), let onRecommendationReduced {
-            Button(String(localized: "减少推荐"), role: .destructive) {
-                guard !isReducingRecommendation else { return }
+        if !account.isLiked(track.id), let onRecommendationReplaced {
+            Button(String(localized: "不感兴趣")) {
+                guard !isReplacingRecommendation else { return }
                 let trackID = track.id
-                reducingRecommendationIDs.insert(trackID)
+                replacingRecommendationIDs.insert(trackID)
                 Task {
-                    defer { reducingRecommendationIDs.remove(trackID) }
+                    defer { replacingRecommendationIDs.remove(trackID) }
                     do {
                         let replacement = try await MusicAPI.dislikeRecommendedSong(id: track.id)
-                        onRecommendationReduced(replacement)
+                        onRecommendationReplaced(replacement)
                         ToastCenter.shared.show(String(localized: "已减少推荐"))
                     } catch {
                         ToastCenter.shared.show(error.localizedDescription)
                     }
                 }
             }
-            .disabled(isReducingRecommendation)
+            .disabled(isReplacingRecommendation)
         }
-        #endif
+        TrackBlacklistMenu(track: track)
         Divider()
         if track.album.id > 0 {
             Button("查看专辑") {
@@ -612,7 +611,7 @@ struct TrackListView: View {
     var removableFromPlaylistID: Int?
     var onRemoved: ((Track) -> Void)?
     var recommendationContext: RecommendationContext?
-    var onRecommendationReduced: ((Track, Track) -> Void)?
+    var onRecommendationReplaced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
     var layout: Layout = .stack
 
@@ -642,7 +641,7 @@ struct TrackListView: View {
 
     private func row(at index: Int) -> some View {
         let track = tracks[index]
-        let recommendationHandler = onRecommendationReduced
+        let recommendationHandler = onRecommendationReplaced
         let row = TrackRow(
             track: track,
             index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
@@ -650,7 +649,7 @@ struct TrackListView: View {
             playability: playability(of: track),
             removableFromPlaylistID: removableFromPlaylistID,
             onRemoved: { onRemoved?(track) },
-            onRecommendationReduced: recommendationContext == nil || recommendationHandler == nil
+            onRecommendationReplaced: recommendationContext == nil || recommendationHandler == nil
                 ? nil
                 : { replacement in recommendationHandler?(track, replacement) }
         ) {

@@ -32,7 +32,7 @@ struct DailySongsView: View {
                 source: .daily,
                 context: .daily,
                 recommendationContext: .daily,
-                onRecommendationReduced: { rejected, replacement in
+                onRecommendationReplaced: { rejected, replacement in
                     tracks.replaceRecommendation(rejected, with: replacement)
                 },
                 layout: layout
