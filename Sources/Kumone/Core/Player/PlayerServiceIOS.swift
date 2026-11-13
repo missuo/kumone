@@ -832,10 +832,11 @@ final class PlayerService: ObservableObject {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
 
-        // The service refused: a copy already cached, of the service's own
-        // at another quality or of a third-party source, plays before
-        // third-party sources are asked again.
-        if resolvedURL == nil, cacheEnabled,
+        // The service refused, or offers only a trial: a copy already cached,
+        // of the service's own at another quality or of a third-party source,
+        // plays before third-party sources are asked again. Trials are never
+        // cached, so a cached copy of a trial song is the whole song.
+        if resolvedURL == nil || data?.freeTrialInfo != nil, cacheEnabled,
            await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) {
             return
         }
