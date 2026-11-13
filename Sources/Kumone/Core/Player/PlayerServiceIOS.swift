@@ -758,10 +758,15 @@ final class PlayerService: ObservableObject {
 
         if cacheEnabled {
             do {
+                // A copy from a third-party source is not played ahead of
+                // the service: it was cached when the service once refused
+                // the song, often for a moment, and would otherwise stand in
+                // for it from then on. It is still played below, once the
+                // service refuses again.
                 if let cached = try await AudioCache.shared.entry(
                     for: track.id,
                     requestedQuality: quality,
-                    allowsUnblock: allowsUnblock
+                    allowsUnblock: false
                 ) {
                     guard generation == resolveGeneration else { return }
                     let lease = await AudioCache.shared.retain(cached)
@@ -805,7 +810,7 @@ final class PlayerService: ObservableObject {
         } catch {
             guard generation == resolveGeneration else { return }
             // A download covers a request that died on the network. Anything
-            // else keeps upstream's path: third-party sources, then the cache.
+            // else goes on below: a cached copy, then third-party sources.
             if ConnectivityFailure.matches(error) {
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
                     await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
@@ -827,21 +832,24 @@ final class PlayerService: ObservableObject {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
 
+        // The service refused, or offers only a trial: a copy already cached,
+        // of the service's own at another quality or of a third-party source,
+        // plays before third-party sources are asked again. Trials are never
+        // cached, so a cached copy of a trial song is the whole song.
+        if resolvedURL == nil || data?.freeTrialInfo != nil, cacheEnabled,
+           await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) {
+            return
+        }
+        guard generation == resolveGeneration else { return }
+
         // The service refused — try third-party sources (unblock-style).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
             if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
         guard generation == resolveGeneration else { return }
 
+        // The cache was already searched above, before third-party sources.
         guard let url = resolvedURL else {
-            if cacheEnabled, await loadFallbackCache(
-                for: track,
-                generation: generation,
-                allowsUnblock: allowsUnblock,
-                resumeAt: resumeAt
-            ) {
-                return
-            }
             handleUnplayable(track)
             return
         }
