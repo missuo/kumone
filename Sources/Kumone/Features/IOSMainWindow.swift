@@ -125,17 +125,25 @@ public struct IOSMainWindow: View {
             if #available(iOS 18.0, *) {
                 zoomNowPlayingRoot
             } else {
-                legacyPresentationRoot
+                // iOS 16/17 used to slide the page up in place, inside a
+                // ZStack over the tabs. On iOS 17 that transition could stop
+                // part way, leaving the page stuck short of the top (#213), so
+                // these systems use the system cover too. Without the zoom
+                // there is no system swipe to close it, so the page keeps its
+                // own pull-down; what it uncovers is the cover's backdrop.
+                systemNowPlayingRoot(usesSystemInteractiveDismissal: false)
             }
         } else {
-            systemNowPlayingRoot
+            systemNowPlayingRoot(usesSystemInteractiveDismissal: true)
         }
     }
 
-    private var systemNowPlayingRoot: some View {
+    private func systemNowPlayingRoot(usesSystemInteractiveDismissal: Bool) -> some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation
+                systemNowPlayingPresentation(
+                    usesSystemInteractiveDismissal: usesSystemInteractiveDismissal
+                )
             }
     }
 
@@ -143,7 +151,7 @@ public struct IOSMainWindow: View {
     private var zoomNowPlayingRoot: some View {
         appContent
             .fullScreenCover(isPresented: $player.showNowPlaying) {
-                systemNowPlayingPresentation
+                systemNowPlayingPresentation(usesSystemInteractiveDismissal: true)
                     .navigationTransition(
                         .zoom(
                             sourceID: NowPlayingTransitionID.surface,
@@ -154,42 +162,13 @@ public struct IOSMainWindow: View {
     }
 
     @ViewBuilder
-    private var systemNowPlayingPresentation: some View {
+    private func systemNowPlayingPresentation(usesSystemInteractiveDismissal: Bool) -> some View {
         if #available(iOS 16.4, *) {
-            nowPlayingPresentation(
-                usesSystemInteractiveDismissal: true,
-                dismissAnimation: nil
-            )
-            .presentationBackground(.clear)
+            nowPlayingPresentation(usesSystemInteractiveDismissal: usesSystemInteractiveDismissal)
+                .presentationBackground(.clear)
         } else {
-            nowPlayingPresentation(
-                usesSystemInteractiveDismissal: true,
-                dismissAnimation: nil
-            )
+            nowPlayingPresentation(usesSystemInteractiveDismissal: usesSystemInteractiveDismissal)
         }
-    }
-
-    private var legacyPresentationRoot: some View {
-        ZStack {
-            appContent
-
-            if player.showNowPlaying {
-                // Present full-screen with a bottom slide-up. A previous version
-                // used `matchedGeometryEffect(.frame, isSource: false)` here to
-                // zoom out of the mini player, but that copies the *source*
-                // (mini-bar) frame onto this view — shrinking the whole
-                // now-playing page to bar size, so on iOS 16/17 nothing
-                // full-screen appeared (#28). The slide-up matches the
-                // pull-down-to-dismiss gesture; iOS 18+ still gets the zoom.
-                nowPlayingPresentation(
-                    usesSystemInteractiveDismissal: false,
-                    dismissAnimation: NowPlayingPresentationMetrics.presentationAnimation
-                )
-                .transition(.move(edge: .bottom))
-                .zIndex(1)
-            }
-        }
-        .animation(NowPlayingPresentationMetrics.presentationAnimation, value: player.showNowPlaying)
     }
 
     @ViewBuilder
@@ -210,15 +189,14 @@ public struct IOSMainWindow: View {
         }
     }
 
-    private func nowPlayingPresentation(
-        usesSystemInteractiveDismissal: Bool,
-        dismissAnimation: Animation?
-    ) -> some View {
+    private func nowPlayingPresentation(usesSystemInteractiveDismissal: Bool) -> some View {
+        // The cover animates its own way out; a SwiftUI animation would only
+        // be layered on top of it.
         IOSNowPlayingPresentation(
             isPresented: $player.showNowPlaying,
             mode: settings.nowPlayingMode,
             usesSystemInteractiveDismissal: usesSystemInteractiveDismissal,
-            dismissAnimation: dismissAnimation
+            dismissAnimation: nil
         ) {
             NowPlayingView(onOpenDestination: openDestination)
                 .environmentObject(player)
@@ -227,11 +205,9 @@ public struct IOSMainWindow: View {
         }
         .modifier(NowPlayingLoginPresenter())
         // A fullScreenCover sits above the root toast overlay, so re-host the
-        // same ToastCenter on the page while it is presented that way (#182).
-        // The legacy in-place page (iOS 16/17) is already under the root
-        // overlay; a second toast there would draw on top of the first.
+        // same ToastCenter on the page (#182).
         .overlay(alignment: .top) {
-            if usesSystemInteractiveDismissal, let toast = toasts.current {
+            if let toast = toasts.current {
                 ToastView(toast: toast)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -476,8 +452,8 @@ private extension View {
                 in: namespace
             )
         } else {
-            // Pre-18 presents full-screen with a slide transition (see
-            // legacyPresentationRoot); no matched-geometry pairing needed.
+            // Pre-18 slides the full-screen cover up; there is no zoom to
+            // pair with.
             self
         }
     }
@@ -637,13 +613,7 @@ struct IOSMiniPlayerBar: View {
     }
 
     private func showNowPlaying() {
-        if #available(iOS 18.0, *) {
-            player.showNowPlaying = true
-        } else {
-            withAnimation(NowPlayingPresentationMetrics.presentationAnimation) {
-                player.showNowPlaying = true
-            }
-        }
+        player.showNowPlaying = true
     }
 }
 
