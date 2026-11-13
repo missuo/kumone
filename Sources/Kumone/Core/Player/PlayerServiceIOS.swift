@@ -868,14 +868,6 @@ final class PlayerService: ObservableObject {
         _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
     }
 
-    /// The service's URL for `track` at `quality`, or at standard when it
-    /// has none at that quality.
-    private static func officialSongURL(for track: Track, quality: String) async throws -> SongURLData? {
-        let data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
-        guard data?.url == nil, quality != AudioQuality.standard.rawValue else { return data }
-        return try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
-    }
-
     private func resolveAndLoadUnblocked(
         _ track: Track,
         generation: Int,
