@@ -802,26 +802,12 @@ final class PlayerService: ObservableObject {
         }
 
         var data: SongURLData?
-        var requestError: Error?
         do {
-            data = try await Self.officialSongURL(for: track, quality: quality)
-        } catch {
-            requestError = error
-        }
-        // A request that failed on its way, rather than one the service
-        // answered, is asked once more before third-party sources take the
-        // song: such failures are mostly over a second later.
-        if let error = requestError, MusicAPI.songURLWorthRetrying(after: error) {
-            try? await Task.sleep(for: .seconds(1))
-            guard generation == resolveGeneration else { return }
-            do {
-                data = try await Self.officialSongURL(for: track, quality: quality)
-                requestError = nil
-            } catch {
-                requestError = error
+            data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
+            if data?.url == nil, quality != AudioQuality.standard.rawValue {
+                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
             }
-        }
-        if let error = requestError {
+        } catch {
             guard generation == resolveGeneration else { return }
             // A download covers a request that died on the network. Anything
             // else goes on below: a cached copy, then third-party sources.

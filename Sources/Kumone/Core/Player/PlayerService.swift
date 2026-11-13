@@ -8,6 +8,7 @@
 import Combine
 import AVFoundation
 import Foundation
+import OSLog
 
 enum RepeatMode: String, CaseIterable {
     case off, all, one
@@ -305,6 +306,10 @@ final class PlayerService: ObservableObject {
     /// arrive in either order (streamed first play, cache hit, hand-over).
     private var currentLyricLRC: String?
     private var consecutiveFailures = 0
+    /// Why the last playback URL request failed, when it failed in transit
+    /// or the service refused it, rather than answering with no URL.
+    private var lastResolveFailure: String?
+    private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
     private var scrobbled = false
     private var startScrobbled = false
 
@@ -1060,11 +1065,22 @@ final class PlayerService: ObservableObject {
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
         let quality = SettingsManager.shared.audioQuality.rawValue
+        lastResolveFailure = nil
         guard !Task.isCancelled else { return nil }
-        var data = try? await MusicAPI.songURL(ids: [track.id], level: quality).first
-        guard !Task.isCancelled else { return nil }
-        if data?.url == nil, quality != AudioQuality.standard.rawValue {
-            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+        var data: SongURLData?
+        do {
+            data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
+            guard !Task.isCancelled else { return nil }
+            if data?.url == nil, quality != AudioQuality.standard.rawValue {
+                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
+            }
+        } catch {
+            // Kept for the 无法播放 toast: a request that failed is not the
+            // same as a song the service refuses, and saying which helps.
+            if !(error is CancellationError) {
+                lastResolveFailure = error.localizedDescription
+                Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
+            }
         }
         guard !Task.isCancelled else { return nil }
         var url: URL?
@@ -1124,9 +1140,9 @@ final class PlayerService: ObservableObject {
 
         guard let resolved else {
             consecutiveFailures += 1
-            let reason = track.playability(privilege: nil,
-                                           isLoggedIn: AccountStore.shared.isLoggedIn,
-                                           vipType: AccountStore.shared.vipType).reason
+            let reason = lastResolveFailure ?? track.playability(privilege: nil,
+                                                                 isLoggedIn: AccountStore.shared.isLoggedIn,
+                                                                 vipType: AccountStore.shared.vipType).reason
             ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(reason.map { "：\($0)" } ?? "")"))
             guard isPlaying else { return }
             if consecutiveFailures < 5 {

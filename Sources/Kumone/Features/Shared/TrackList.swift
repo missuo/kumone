@@ -43,6 +43,7 @@ struct TrackRow: View {
     // transient state and asynchronous completions to the song they belong to.
     @State private var hoveredTrackID: Int?
     @State private var addToPlaylistTrack: Track?
+    @State private var commentsTrack: Track?
     @State private var replacingRecommendationIDs: Set<Int> = []
     /// Only this track's download state, so another row's transfer cannot
     /// re-evaluate this body four times a second.
@@ -186,9 +187,13 @@ struct TrackRow: View {
         .sheet(item: $addToPlaylistTrack) { selectedTrack in
             AddToPlaylistSheet(track: selectedTrack)
         }
+        .sheet(item: $commentsTrack) { selectedTrack in
+            SongCommentsView(track: selectedTrack)
+        }
         .onChange(of: track.id) { _ in
             hoveredTrackID = nil
             addToPlaylistTrack = nil
+            commentsTrack = nil
         }
     }
 
@@ -386,6 +391,9 @@ struct TrackRow: View {
             .disabled(isReplacingRecommendation)
         }
         TrackBlacklistMenu(track: track)
+        SongCommentsMenuButton(track: track) {
+            commentsTrack = track
+        }
         Divider()
         if track.album.id > 0 {
             Button("查看专辑") {
@@ -614,6 +622,10 @@ struct TrackListView: View {
     var onRecommendationReplaced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
     var layout: Layout = .stack
+    /// What a row tap plays, starting at that row; defaults to `tracks`. A
+    /// search shows a subset but passes the whole list, so a result plays in
+    /// its place in the playlist rather than as a queue of matches.
+    var queue: [Track]?
 
     // Playback state belongs to TrackRow; the list only starts playback.
     private let player = PlayerService.shared
@@ -682,7 +694,7 @@ struct TrackListView: View {
     }
 
     private var playableTracks: [Track] {
-        tracks.filter { playability(of: $0) == .playable }
+        (queue ?? tracks).filter { playability(of: $0) == .playable }
     }
 
     private func playability(of track: Track) -> TrackPlayability {

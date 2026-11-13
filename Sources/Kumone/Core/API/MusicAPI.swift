@@ -384,6 +384,35 @@ enum MusicAPI {
         _ = try client.decoded(CodeOnly.self, from: data)
     }
 
+    // MARK: - Comments
+
+    /// The comment thread of a song.
+    static func songCommentThread(songID: Int) -> String { "R_SO_4_\(songID)" }
+
+    /// A page of a song's latest comments from `offset`, and on the first
+    /// page its hot comments too.
+    static func songComments(songID: Int, limit: Int = 20, offset: Int = 0,
+                             using client: MusicClient = .shared) async throws -> SongCommentsPage {
+        guard songID > 0 else {
+            throw MusicAPIError.business(code: 400, message: String(localized: "无法识别这首歌曲"))
+        }
+        let data = try await client.eapi("/v1/resource/comments/\(songCommentThread(songID: songID))",
+                                         ["limit": limit, "offset": offset])
+        return try client.decoded(SongCommentsPage.self, from: data)
+    }
+
+    /// Likes a comment for the signed-in listener, or takes the like back.
+    static func likeComment(threadID: String, commentID: Int, like: Bool,
+                            using client: MusicClient = .shared) async throws {
+        guard client.isLoggedIn else { throw MusicAPIError.needLogin }
+        guard commentID > 0 else {
+            throw MusicAPIError.business(code: 400, message: String(localized: "无法识别这条评论"))
+        }
+        let data = try await client.eapi(like ? "/v1/comment/like" : "/v1/comment/unlike",
+                                         ["threadId": threadID, "commentId": String(commentID)])
+        _ = try client.decoded(CodeOnly.self, from: data)
+    }
+
     struct PlaylistDetailResponse: Decodable {
         let playlist: PlaylistDetail
         let privileges: [TrackPrivilege]?
@@ -519,11 +548,28 @@ enum MusicAPI {
         let data: [SongURLData]
     }
 
-    static func songURL(ids: [Int], level: String) async throws -> [SongURLData] {
+    static func songURL(ids: [Int], level: String, using client: MusicClient = .shared) async throws -> [SongURLData] {
         let idString = "[" + ids.map(String.init).joined(separator: ",") + "]"
         var payload: [String: Any] = ["ids": idString, "level": level, "encodeType": "flac"]
         if level == "sky" { payload["immerseType"] = "c51" }
-        return try await eapi(SongURLResponse.self, "/song/enhance/player/url/v1", payload).data
+        let data = try await client.eapi("/song/enhance/player/url/v1", payload)
+        return try client.decoded(SongURLResponse.self, from: data).data
+    }
+
+    /// `songURL`, asked once more after a moment when the request dies in
+    /// transit. The first request after the app sat idle often lands on a
+    /// pooled connection the server already closed; URLSession retries a GET
+    /// on its own but not this POST, so the first song played failed with
+    /// 无法播放 while a second try a moment later worked (#210). Reading a
+    /// playback URL changes nothing, so asking twice is safe.
+    static func songURLRetrying(ids: [Int], level: String, using client: MusicClient = .shared,
+                                retryDelay: Duration = .milliseconds(400)) async throws -> [SongURLData] {
+        do {
+            return try await songURL(ids: ids, level: level, using: client)
+        } catch where TransientRequestFailure.matches(error) {
+            try await Task.sleep(for: retryDelay)
+            return try await songURL(ids: ids, level: level, using: client)
+        }
     }
 
     /// Whether a song URL request that failed is worth asking once more: a

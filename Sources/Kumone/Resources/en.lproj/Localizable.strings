@@ -416,6 +416,15 @@
 "正在加载歌单，搜索结果会继续更新…" = "Loading playlist — search results will keep updating…";
 "歌单未完整加载，搜索结果可能不完整" = "Playlist loading is incomplete; search results may be incomplete";
 
+/* Cloud disk search */
+"在云盘内查找" = "Search in Cloud Disk";
+"搜索云盘歌曲" = "Search in cloud disk";
+"按歌名、歌手、专辑或文件名搜索" = "Search by song, artist, album, or file name";
+"试试其他歌名、歌手、专辑或文件名" = "Try another song, artist, album, or file name";
+"正在加载云盘…" = "Loading cloud disk…";
+"正在加载云盘，搜索结果会继续更新…" = "Loading cloud disk — search results will keep updating…";
+"云盘未完整加载，搜索结果可能不完整" = "Cloud disk loading is incomplete; search results may be incomplete";
+
 // Downloads
 "下载任务" = "Download Queue";
 "已下载" = "Downloaded";
@@ -666,3 +675,19 @@
 "关闭随机播放" = "Turn Off Shuffle";
 "下载失败：%@" = "Download failed: %@";
 "下载失败（%@ %@），请检查网络或账号权限后重试" = "Download failed (%@ %@). Check your network or account access and try again";
+
+/* Song comments */
+"查看评论" = "View Comments";
+"热门评论" = "Top Comments";
+"最新评论" = "Latest Comments";
+"还没有评论" = "No comments yet";
+"%lld 条评论" = "%lld comments";
+"没有更多评论了" = "No more comments";
+"登录后可点赞评论" = "Sign in to like comments";
+"匿名用户" = "Anonymous";
+"回复 @%@：%@" = "Replying to @%@: %@";
+"回复 @%@" = "Replying to @%@";
+"点赞" = "Like";
+"取消点赞" = "Unlike";
+"无法识别这首歌曲" = "Unable to identify this song";
+"无法识别这条评论" = "Unable to identify this comment";

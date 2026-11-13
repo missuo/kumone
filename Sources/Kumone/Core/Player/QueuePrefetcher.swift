@@ -212,7 +212,7 @@ final class QueuePrefetcher {
     /// The service's own file at the chosen quality. Trials and songs it refuses
     /// are left to playback, which knows how to fall back.
     static func resolveSongURL(track: Track, quality: String) async throws -> QueuePrefetchSource? {
-        guard let data = try await MusicAPI.songURL(ids: [track.id], level: quality).first,
+        guard let data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first,
               data.freeTrialInfo == nil, let string = data.url,
               let url = URL(string: string.replacingOccurrences(of: "http://", with: "https://")) else { return nil }
         return .init(url: url, servedQuality: data.level, byteCount: Int64(max(data.size, 0)), fileExtension: data.type)
