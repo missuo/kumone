@@ -548,11 +548,28 @@ enum MusicAPI {
         let data: [SongURLData]
     }
 
-    static func songURL(ids: [Int], level: String) async throws -> [SongURLData] {
+    static func songURL(ids: [Int], level: String, using client: MusicClient = .shared) async throws -> [SongURLData] {
         let idString = "[" + ids.map(String.init).joined(separator: ",") + "]"
         var payload: [String: Any] = ["ids": idString, "level": level, "encodeType": "flac"]
         if level == "sky" { payload["immerseType"] = "c51" }
-        return try await eapi(SongURLResponse.self, "/song/enhance/player/url/v1", payload).data
+        let data = try await client.eapi("/song/enhance/player/url/v1", payload)
+        return try client.decoded(SongURLResponse.self, from: data).data
+    }
+
+    /// `songURL`, asked once more after a moment when the request dies in
+    /// transit. The first request after the app sat idle often lands on a
+    /// pooled connection the server already closed; URLSession retries a GET
+    /// on its own but not this POST, so the first song played failed with
+    /// 无法播放 while a second try a moment later worked (#210). Reading a
+    /// playback URL changes nothing, so asking twice is safe.
+    static func songURLRetrying(ids: [Int], level: String, using client: MusicClient = .shared,
+                                retryDelay: Duration = .milliseconds(400)) async throws -> [SongURLData] {
+        do {
+            return try await songURL(ids: ids, level: level, using: client)
+        } catch where TransientRequestFailure.matches(error) {
+            try await Task.sleep(for: retryDelay)
+            return try await songURL(ids: ids, level: level, using: client)
+        }
     }
 
     /// Download eligibility is resolved independently of the playback URL.

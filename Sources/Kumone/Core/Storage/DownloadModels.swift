@@ -146,6 +146,24 @@ actor DownloadCatalogStore {
 
 /// URLSession failures that mean the network is unusable right now, as
 /// opposed to a server that answered and refused.
+/// A request that failed in transit and is worth sending again: the
+/// connection dropped or timed out, or the server had a moment (HTTP 5xx).
+/// Being offline is not one; there is nothing to retry until it returns.
+enum TransientRequestFailure {
+    static func matches(_ error: Error) -> Bool {
+        if case MusicAPIError.http(let status) = error { return (500..<600).contains(status) }
+        var value = error as NSError
+        for _ in 0..<4 {
+            if value.domain == NSURLErrorDomain,
+               [NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut, NSURLErrorCannotConnectToHost,
+                NSURLErrorSecureConnectionFailed].contains(value.code) { return true }
+            guard let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError else { break }
+            value = underlying
+        }
+        return false
+    }
+}
+
 enum ConnectivityFailure {
     static func matches(_ error: Error) -> Bool {
         var value = error as NSError

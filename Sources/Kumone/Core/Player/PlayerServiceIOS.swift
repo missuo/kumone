@@ -798,9 +798,9 @@ final class PlayerService: ObservableObject {
 
         var data: SongURLData?
         do {
-            data = try await MusicAPI.songURL(ids: [track.id], level: quality).first
+            data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
             if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
+                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
             }
         } catch {
             guard generation == resolveGeneration else { return }
