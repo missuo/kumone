@@ -26,7 +26,6 @@ struct SongCommentsView: View {
     let track: Track
 
     @StateObject private var content: SongCommentsContent
-    @EnvironmentObject private var account: AccountStore
     @ObservedObject private var toasts = ToastCenter.shared
     @Environment(\.dismiss) private var dismiss
     #if os(iOS)
@@ -76,8 +75,6 @@ struct SongCommentsView: View {
         #endif
     }
 
-    private var canLike: Bool { account.authenticatedAccountID != nil }
-
     // MARK: Header
 
     private var header: some View {
@@ -123,6 +120,24 @@ struct SongCommentsView: View {
     }
 
     // MARK: States
+
+    private var phaseContent: some View {
+        SongCommentsList(content: content)
+    }
+}
+
+/// One song's comments with their loading, error and empty states: hot ones,
+/// then the latest a page at a time. Shared by the comments sheet and the
+/// iPhone now-playing page.
+struct SongCommentsList: View {
+    @ObservedObject var content: SongCommentsContent
+    @EnvironmentObject private var account: AccountStore
+
+    private var canLike: Bool { account.authenticatedAccountID != nil }
+
+    var body: some View {
+        phaseContent
+    }
 
     @ViewBuilder
     private var phaseContent: some View {
