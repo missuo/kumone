@@ -847,15 +847,8 @@ final class PlayerService: ObservableObject {
         }
         guard generation == resolveGeneration else { return }
 
+        // The cache was already searched above, before third-party sources.
         guard let url = resolvedURL else {
-            if cacheEnabled, await loadFallbackCache(
-                for: track,
-                generation: generation,
-                allowsUnblock: allowsUnblock,
-                resumeAt: resumeAt
-            ) {
-                return
-            }
             handleUnplayable(track)
             return
         }
