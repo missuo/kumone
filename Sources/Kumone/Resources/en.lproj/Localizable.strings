@@ -679,6 +679,16 @@
 
 /* Song comments */
 "查看评论" = "View Comments";
+"分享评论" = "Share Comment";
+"复制评论" = "Copy Comment";
+"评论已复制" = "Comment copied";
+"分享" = "Share";
+"已保存" = "Saved";
+"拷贝图片" = "Copy Image";
+"已拷贝" = "Copied";
+"评论卡片：%@" = "Comment card: %@";
+"%@ 的评论" = "Comment on %@";
+"没有相册权限，请在系统设置中允许 Kumone 添加照片" = "Kumone can’t add photos. Allow it in Settings.";
 "热门评论" = "Top Comments";
 "最新评论" = "Latest Comments";
 "还没有评论" = "No comments yet";

@@ -19,6 +19,9 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
 
     @EnvironmentObject private var player: PlayerService
     @State private var page = Page.lyrics
+    /// Presented from here, outside the pager: a sheet raised from inside
+    /// one of its pages closed again a moment later, when the pages refreshed.
+    @State private var sharedComment: SharedComment?
 
     init(isShown: Bool, horizontalInset: CGFloat, @ViewBuilder lyrics: () -> Lyrics) {
         self.isShown = isShown
@@ -33,7 +36,9 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
                     .padding(.horizontal, horizontalInset)
                     .tag(Page.lyrics)
                 // The list keeps a 16pt margin of its own.
-                NowPlayingCommentsPage(track: track, isActive: isShown && page == .comments)
+                NowPlayingCommentsPage(track: track, isActive: isShown && page == .comments) { comment in
+                    sharedComment = SharedComment(track: track, comment: comment)
+                }
                     .id(track.id)
                     .padding(.horizontal, max(horizontalInset - 16, 0))
                     .tag(Page.comments)
@@ -42,6 +47,9 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
             .padding(.horizontal, -horizontalInset)
             .overlay(alignment: .bottom) {
                 pageIndicator
+            }
+            .sheet(item: $sharedComment) { shared in
+                CommentShareSheet(track: shared.track, comment: shared.comment)
             }
             .onChange(of: isShown) { shown in
                 guard !shown, page != .lyrics else { return }
@@ -71,25 +79,32 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
 
 /// The current song's comments on the now-playing page. They load the
 /// first time the page is turned to, not with every song that plays.
+private struct SharedComment: Identifiable {
+    let track: Track
+    let comment: SongComment
+    var id: Int { comment.id }
+}
+
 private struct NowPlayingCommentsPage: View {
     let track: Track
     let isActive: Bool
+    let onShare: (SongComment) -> Void
 
     @StateObject private var content: SongCommentsContent
 
-    init(track: Track, isActive: Bool) {
+    init(track: Track, isActive: Bool, onShare: @escaping (SongComment) -> Void) {
         self.track = track
         self.isActive = isActive
+        self.onShare = onShare
         _content = StateObject(wrappedValue: SongCommentsContent(songID: track.id))
     }
 
     var body: some View {
-        SongCommentsList(content: content)
+        SongCommentsList(track: track, content: content, onShare: onShare)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 12)
             .mask(edgeMask)
             .environment(\.colorScheme, .dark)
-            .tint(.white)
             .accessibilityIdentifier("nowPlayingComments")
             .onAppear { load(if: needsLoad) }
             // Watching the page and the phase together also restarts a load

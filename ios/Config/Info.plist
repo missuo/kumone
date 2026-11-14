@@ -30,6 +30,8 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>用于把分享的评论卡片保存到相册。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
