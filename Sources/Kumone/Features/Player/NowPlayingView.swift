@@ -25,6 +25,8 @@ struct NowPlayingView: View {
     @State private var isUserScrolling = false
     @State private var showLyricsOnMobile = false
     @State private var showQueueOnMobile = false
+    /// Lyrics or comments in the regular page's right column (macOS, iPad).
+    @State private var regularColumnPage = RegularColumnPage.lyrics
     #if os(iOS)
     @State private var showSoundEffects = false
     /// Held here rather than by the controls so the panel can sit above the
@@ -293,12 +295,12 @@ struct NowPlayingView: View {
         // `.infinity` across an ultra-wide display (iPad landscape, ~1368pt)
         // left the left column's content floating in an oversized half and a
         // wide blank gutter on the right (#62).
-        let maxBandWidth: CGFloat = hasLyricsColumn ? 1040 : 560
+        let maxBandWidth: CGFloat = hasRegularRightColumn ? 1040 : 560
         return HStack(spacing: 0) {
             leftColumn(artworkSize: artworkSize)
                 .frame(maxWidth: .infinity)
-            if hasLyricsColumn {
-                lyricsColumn
+            if hasRegularRightColumn {
+                regularRightColumn
                     .frame(maxWidth: .infinity)
             }
         }
@@ -1296,6 +1298,50 @@ struct NowPlayingView: View {
     @ViewBuilder
     private var lyricsColumn: some View {
         lyricsScroll(topInset: 200, bottomInset: 240, horizontalPadding: 24)
+    }
+
+    // MARK: - Regular right column
+
+    /// The song's comments sit beside its lyrics, one switch away, so a song
+    /// without lyrics still has a right column when it has comments.
+    private var hasRegularRightColumn: Bool {
+        hasLyricsColumn || commentsTrack != nil
+    }
+
+    private var commentsTrack: Track? {
+        guard let track = player.currentTrack,
+              SongCommentsMenuButton.isAvailable(for: track) else { return nil }
+        return track
+    }
+
+    private var regularRightColumn: some View {
+        ZStack(alignment: .top) {
+            Group {
+                if regularColumnPage == .comments, let track = commentsTrack {
+                    RegularCommentsPanel(track: track)
+                        .id(track.id)
+                        .padding(.top, 52)
+                        .transition(.opacity)
+                } else if hasLyricsColumn {
+                    lyricsColumn
+                        .transition(.opacity)
+                } else {
+                    Text("暂无歌词")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if commentsTrack != nil {
+                RegularColumnSwitch(selection: $regularColumnPage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: regularColumnPage)
     }
 
     /// The scrolling lyric list shared by the regular page and the
