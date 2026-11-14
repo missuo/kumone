@@ -7,6 +7,30 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.37 - 2026-11-14
+
+![分享评论 · Share a comment](https://raw.githubusercontent.com/missuo/kumone/v0.3.37/docs/releases/0.3.37-comment-share.png)
+
+### Added
+
+- **Comments**: long-press a comment (right-click on macOS) to share it as a picture — the comment and who wrote it, with the song's title, artist and cover, over the cover's colours — then share it or save it to Photos (copy it on macOS). Copy Comment copies its text.
+
+### Fixed
+
+- **iOS 17**: tapping the mini player no longer freezes the app with the now-playing page never appearing; the cause has been found and fixed. Swiping from the lyrics to the comments is back on iOS 16/17 (#213).
+- **Now playing**: on iPhone, the volume panel now closes when you tap anywhere else on the page, not only the speaker button again.
+
+---
+
+### 新增
+
+- **评论**：长按一条评论（macOS 上右键）即可把它分享成一张图片：评论内容和评论者，配上歌名、歌手和专辑封面，底色取自封面；可以直接分享或保存到相册（macOS 上为拷贝图片）。「复制评论」可复制评论文字。
+
+### 修复
+
+- **iOS 17**：点击迷你播放条后应用卡死、播放页一直出不来的问题已找到原因并修复；iOS 16/17 上也恢复了歌词左滑查看评论（#213）。
+- **播放页**：iPhone 上打开音量面板后，点页面其他任意位置即可关闭，不必再点一次喇叭按钮。
+
 ## 0.3.36 - 2026-11-14
 
 ### Fixed

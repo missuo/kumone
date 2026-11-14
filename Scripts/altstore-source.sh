@@ -75,7 +75,10 @@ NOTES_JSON="$(
       return out
     }
     BEGIN { printf "\"" }
-    { printf "%s%s", (NR > 1 ? "\\n" : ""), esc($0) }
+    # AltStore shows plain text; a screenshot line would read as its markup.
+    /^!\[.*\]\(.*\)[[:space:]]*$/ { next }
+    !n && /^[[:space:]]*$/ { next }
+    { printf "%s%s", (n++ ? "\\n" : ""), esc($0) }
     END { printf "\"" }
   ' "$NOTES"
 )"

@@ -50,6 +50,14 @@ printf '%s\n' "$SECTION" | awk '
     }
     return s
   }
+  # A screenshot on a line of its own: ![alt](url)
+  /^!\[.*\]\(.*\)[[:space:]]*$/ {
+    closelist()
+    line = $0; sub(/[[:space:]]*$/, "", line)
+    cut = index(line, "](")
+    printf "<p><img src=\"%s\" alt=\"%s\" style=\"max-width:100%%\"></p>\n", escape(substr(line, cut + 2, length(line) - cut - 2)), escape(substr(line, 3, cut - 3))
+    next
+  }
   /^### / { closelist(); printf "<h3>%s</h3>\n", inline(substr($0, 5)); next }
   /^---[[:space:]]*$/ { closelist(); print "<hr>"; next }
   /^- /   { if (!inlist) { print "<ul>"; inlist = 1 } printf "<li>%s</li>\n", inline(substr($0, 3)); next }
