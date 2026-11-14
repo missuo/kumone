@@ -11,9 +11,12 @@
 
 ![分享评论 · Share a comment](https://raw.githubusercontent.com/missuo/kumone/v0.3.37/docs/releases/0.3.37-comment-share.png)
 
+![macOS 播放页评论 · Comments on the macOS now-playing page](https://raw.githubusercontent.com/missuo/kumone/v0.3.37/docs/releases/0.3.37-macos-comments.png)
+
 ### Added
 
 - **Comments**: long-press a comment (right-click on macOS) to share it as a picture — the comment and who wrote it, with the song's title, artist and cover, over the cover's colours — then share it or save it to Photos (copy it on macOS). Copy Comment copies its text.
+- **Comments**: on macOS (and iPad), a Lyrics | Comments switch above the now-playing lyrics shows the playing song's comments in their place; songs without lyrics but with comments now get the column too.
 
 ### Fixed
 
@@ -25,6 +28,7 @@
 ### 新增
 
 - **评论**：长按一条评论（macOS 上右键）即可把它分享成一张图片：评论内容和评论者，配上歌名、歌手和专辑封面，底色取自封面；可以直接分享或保存到相册（macOS 上为拷贝图片）。「复制评论」可复制评论文字。
+- **评论**：macOS（以及 iPad）播放页的歌词上方新增「歌词 | 评论」切换，可在歌词的位置查看正在播放歌曲的评论；没有歌词但有评论的歌曲也会显示这一栏。
 
 ### 修复
 
