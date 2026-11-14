@@ -286,6 +286,7 @@
 "已经是最后一首了" = "Already the last song";
 "已使用第三方音源：%@" = "Playing from third-party source: %@";
 "《%@》无法播放%@" = "“%@” can’t be played%@";
+"网易云未给出播放地址（%lld）" = "NetEase gave no playback URL (%lld)";
 "VIP 歌曲，当前为试听片段" = "VIP song — playing a trial clip";
 "酷我音乐" = "Kuwo Music";
 "酷狗音乐" = "Kugou Music";
