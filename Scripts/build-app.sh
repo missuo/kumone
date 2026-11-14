@@ -12,16 +12,11 @@ cd "$ROOT"
 CONF="${1:-debug}"
 APP_NAME="Kumone"
 BUNDLE_ID="sb.moe.kumone"
-# Version resolution: environment > version.env > git tag / CHANGELOG.md > defaults.
+# Version resolution: environment > version.env > defaults.
 ENV_MARKETING_VERSION="${MARKETING_VERSION:-}"
 ENV_BUILD_NUMBER="${BUILD_NUMBER:-}"
-DEFAULT_MARKETING_VERSION="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || true)"
-if [ -z "$DEFAULT_MARKETING_VERSION" ] && [ -f "$ROOT/CHANGELOG.md" ]; then
-  DEFAULT_MARKETING_VERSION="$(sed -n 's/^## \([0-9][0-9.]*\).*/\1/p' "$ROOT/CHANGELOG.md" | head -n1)"
-fi
-DEFAULT_BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || true)"
-MARKETING_VERSION="${DEFAULT_MARKETING_VERSION:-0.1.0}"
-BUILD_NUMBER="${DEFAULT_BUILD_NUMBER:-1}"
+MARKETING_VERSION="0.1.0"
+BUILD_NUMBER="1"
 [ -f "$ROOT/version.env" ] && source "$ROOT/version.env"
 [ -n "$ENV_MARKETING_VERSION" ] && MARKETING_VERSION="$ENV_MARKETING_VERSION"
 [ -n "$ENV_BUILD_NUMBER" ] && BUILD_NUMBER="$ENV_BUILD_NUMBER"
