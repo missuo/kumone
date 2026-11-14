@@ -71,6 +71,28 @@ struct AudioCacheTests {
         #expect(allowed?.metadata.source == .unblock("Kuwo"))
     }
 
+    @Test func kuwoPlaceholderClipIsDroppedFromTheCache() async throws {
+        let (cache, directory) = makeCache()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let placeholderSize = Int(KuwoAudioSourceProvider.placeholderByteCount)
+
+        try await write(trackID: 3, requestedQuality: "exhigh", servedQuality: nil,
+                        source: .unblock("酷我音乐"), byteCount: placeholderSize, into: cache)
+        try await write(trackID: 4, requestedQuality: "exhigh", servedQuality: nil,
+                        source: .origin, byteCount: placeholderSize, into: cache)
+
+        #expect(try await cache.fallbackEntry(for: 3, allowsUnblock: true) == nil)
+        #expect(try await cache.cachedTrackIDs(allowsUnblock: true) == [4])
+        #expect(try await cache.fallbackEntry(for: 4, allowsUnblock: true) != nil)
+    }
+
+    @Test func kuwoPlaceholderLinkIsRecognised() {
+        #expect(KuwoAudioSourceProvider.isPlaceholder(URL(string:
+            "https://kw-bj.kuwo.cn/d95c6e/6af82d4a/nf/resource/n1/69/32/588957081.mp3")!))
+        #expect(!KuwoAudioSourceProvider.isPlaceholder(URL(string:
+            "https://kw-lv.kuwo.cn/85a435/6af82d42/resource/30106/trackmedia/M500001RklfW32eAAv.mp3")!))
+    }
+
     @Test func cacheUsageDeletesPartialFilesLeftByAnEarlierRun() async throws {
         let (cache, directory) = makeCache()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -276,6 +298,7 @@ struct AudioCacheTests {
         requestedQuality: String,
         servedQuality: String?,
         source: AudioCacheSource,
+        byteCount: Int = 1_024,
         into cache: AudioCache
     ) async throws {
         let session = try await cache.beginWrite(
@@ -286,7 +309,7 @@ struct AudioCacheTests {
             fileExtension: "mp3",
             maximumSizeMB: AudioCache.defaultMaximumSizeMB
         )
-        let data = Data(repeating: UInt8(trackID), count: 1_024)
+        let data = Data(repeating: UInt8(trackID), count: byteCount)
         try data.write(to: session.partialFileURL)
         let result = try await cache.commitAndRetain(
             session,

@@ -55,9 +55,22 @@ struct KuwoAudioSourceProvider: AudioSourceProvider {
               let range = text.range(of: #"http[^\s$"]+"#, options: .regularExpression),
               let url = URL(string: String(text[range]))
         else { throw AudioSourceProviderError.invalidURL }
+        // A song Kuwo won't serve still gets a link: an 11-second clip
+        // telling the listener to use Kuwo Music, played as the song (#212).
+        guard !Self.isPlaceholder(url) else { return nil }
 
         return ResolvedAudioSource(id: id, displayName: displayName, url: url)
     }
+
+    /// The clip lives under `/nf/resource/`; real songs are served from
+    /// `/resource/` without the prefix.
+    static func isPlaceholder(_ url: URL) -> Bool {
+        url.path.contains("/nf/resource/")
+    }
+
+    /// The size of that clip, `nf/resource/n1/69/32/588957081.mp3`, to
+    /// recognise copies cached before it was turned away.
+    static let placeholderByteCount: Int64 = 181_521
 
     private struct Song {
         let rid: String

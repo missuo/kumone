@@ -371,6 +371,14 @@ actor AudioCache {
             print("Audio cache removed an incomplete file for track \(trackID).")
             return nil
         }
+        // The source is stored by its display name, which follows the app
+        // language, so the clip is known by its size alone.
+        if metadata.source.requiresUnblockEnabled,
+           metadata.byteCount == KuwoAudioSourceProvider.placeholderByteCount {
+            try removeEntry(entry)
+            print("Audio cache removed Kuwo's placeholder clip for track \(trackID).")
+            return nil
+        }
         return entry
     }
 
