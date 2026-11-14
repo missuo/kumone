@@ -3,11 +3,7 @@ import SwiftUI
 #if os(iOS)
 /// The iPhone now-playing lyrics with the song's comments one page to their
 /// right: swipe left for the comments, right for the lyrics again. Songs
-/// without a public thread (cloud uploads) show the lyrics alone, and so
-/// does iOS 16/17, where the comments stay in the song's menu: once the
-/// pager shipped, opening the page froze the app on iOS 17 (#213). The
-/// paged `TabView` is the likely cause; no iOS 17 runtime was at hand to
-/// confirm it.
+/// without a public thread (cloud uploads) show the lyrics alone.
 struct NowPlayingLyricsPager<Lyrics: View>: View {
     private enum Page: Hashable {
         case lyrics, comments
@@ -31,7 +27,7 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
     }
 
     var body: some View {
-        if Self.isSupported, let track = player.currentTrack, SongCommentsMenuButton.isAvailable(for: track) {
+        if let track = player.currentTrack, SongCommentsMenuButton.isAvailable(for: track) {
             TabView(selection: $page) {
                 lyrics
                     .padding(.horizontal, horizontalInset)
@@ -56,11 +52,6 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
         } else {
             lyrics
         }
-    }
-
-    private static var isSupported: Bool {
-        if #available(iOS 18.0, *) { return true }
-        return false
     }
 
     private var pageIndicator: some View {

@@ -163,7 +163,11 @@ public struct IOSMainWindow: View {
 
     @ViewBuilder
     private func systemNowPlayingPresentation(usesSystemInteractiveDismissal: Bool) -> some View {
-        if #available(iOS 16.4, *) {
+        // A clear cover background sends iOS 17 into an endless layout pass
+        // over the page: the cover never comes up and the app freezes at
+        // full CPU (#213, reproduced on the iOS 17.5 simulator). Earlier
+        // systems keep the cover's own background.
+        if #available(iOS 18.0, *) {
             nowPlayingPresentation(usesSystemInteractiveDismissal: usesSystemInteractiveDismissal)
                 .presentationBackground(.clear)
         } else {
