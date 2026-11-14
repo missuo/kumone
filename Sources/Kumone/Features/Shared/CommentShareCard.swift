@@ -42,6 +42,10 @@ struct CommentShareCard: View {
         .padding(.top, 30)
         .padding(.bottom, 22)
         .frame(width: Self.width, alignment: .leading)
+        // The text makes the height fractional; the picture's last pixel row then
+        // sat outside the background and came out as a white line. A whole number of
+        // points leaves no partly covered row at any render scale.
+        .wholePointHeight()
         .background(backdrop)
         .environment(\.colorScheme, .dark)
     }
@@ -354,6 +358,25 @@ struct CommentShareSheet: View {
         #else
         image = renderer.nsImage
         #endif
+    }
+}
+
+/// Rounds its content's height up to a whole number of points, top-aligned.
+private struct WholePointHeight: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let size = content.sizeThatFits(proposal)
+        return CGSize(width: size.width, height: size.height.rounded(.up))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
+}
+
+private extension View {
+    func wholePointHeight() -> some View {
+        WholePointHeight { self }
     }
 }
 
