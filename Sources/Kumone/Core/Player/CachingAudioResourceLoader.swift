@@ -135,6 +135,7 @@ final class CachingAudioResourceLoader: NSObject {
     private var fileHandleClosed = false
     private var redirectsToRemoteAsset = false
     private var cancelled = false
+    private var onCacheCommitted: (@Sendable (URL) -> Void)?
 
     private final class PendingRequest {
         let loadingRequest: AVAssetResourceLoadingRequest
@@ -220,7 +221,8 @@ final class CachingAudioResourceLoader: NSObject {
         source: AudioCacheSource,
         maximumCacheSizeMB: Int,
         cache: AudioCache = .shared,
-        sessionConfiguration: URLSessionConfiguration = .default
+        sessionConfiguration: URLSessionConfiguration = .default,
+        onCacheCommitted: (@Sendable (URL) -> Void)? = nil
     ) throws {
         self.remoteURL = remoteURL
         self.trackID = trackID
@@ -229,6 +231,7 @@ final class CachingAudioResourceLoader: NSObject {
         self.source = source
         self.maximumCacheSizeMB = maximumCacheSizeMB
         self.cache = cache
+        self.onCacheCommitted = onCacheCommitted
 
         var components = URLComponents(url: remoteURL, resolvingAgainstBaseURL: false)
         components?.scheme = "kumone-cache"
@@ -285,6 +288,7 @@ final class CachingAudioResourceLoader: NSObject {
     private func cancelOnDelegateQueue() {
         guard !cancelled else { return }
         cancelled = true
+        onCacheCommitted = nil
         let cancellationError = CancellationError()
         for pending in pendingRequests.values {
             pending.loadingRequest.finishLoading(with: cancellationError)
@@ -958,7 +962,7 @@ final class CachingAudioResourceLoader: NSObject {
                     byteCount: expectedContentLength,
                     contentType: contentType
                 ) {
-                case .retained(_, let leaseID):
+                case .retained(let entry, let leaseID):
                     delegateQueue.addOperation { [weak self] in
                         guard let self, !self.cancelled else {
                             Task {
@@ -971,6 +975,9 @@ final class CachingAudioResourceLoader: NSObject {
                             return
                         }
                         self.cacheLeaseID = leaseID
+                        let onCacheCommitted = self.onCacheCommitted
+                        self.onCacheCommitted = nil
+                        onCacheCommitted?(entry.fileURL)
                     }
                 case .deferredDiscard, .rejectedForCurrentLimit:
                     delegateQueue.addOperation { [weak self] in

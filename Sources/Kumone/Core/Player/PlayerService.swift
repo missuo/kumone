@@ -7,6 +7,7 @@
 #if os(macOS)
 import Combine
 import AVFoundation
+import CoreAudio
 import Foundation
 import OSLog
 
@@ -168,6 +169,7 @@ final class PlayerService: ObservableObject {
     @Published var volume: Float = 1 {
         didSet {
             engine.outputVolume = volume
+            avPlayer.volume = volume
             UserDefaults.standard.set(volume, forKey: "player.volume")
         }
     }
@@ -200,7 +202,27 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Engine
 
+    /// When AutoMix is disabled on macOS, playback falls back to `AVPlayer`
+    /// so macOS system default AirPods routing supports Spatial Audio.
+    var usesAVPlayerBackend: Bool {
+        !SettingsManager.shared.automixEnabled
+    }
+
+    private var isCurrentSourceLoaded: Bool {
+        usesAVPlayerBackend ? avItemLoaded : deckLoaded
+    }
+
     private let engine = PlaybackEngine()
+    private let avPlayer = AVPlayer()
+    private var avItemLoaded = false
+    private var avEndObserver: NSObjectProtocol?
+    private var avItemStatusObservation: NSKeyValueObservation?
+    private var avTimeControlObservation: NSKeyValueObservation?
+    private var audioResourceLoader: CachingAudioResourceLoader?
+    private var pendingAudioResourceLoader: CachingAudioResourceLoader?
+    private var avItemRetryGeneration: Int?
+    private var currentOutputDeviceID: AudioDeviceID?
+    private var lastObservedAutomixEnabled = SettingsManager.shared.automixEnabled
     /// The deck currently carrying the audible track; hand-overs flip it.
     private var activeDeck: Deck = .a
     /// The active deck has a source loaded (file or progressive stream).
@@ -222,6 +244,11 @@ final class PlayerService: ObservableObject {
     /// Falls back to `progress` whenever no deck is carrying a source, so a
     /// paused or unloaded player still reports where the playhead sits.
     var livePlaybackTime: TimeInterval {
+        if usesAVPlayerBackend {
+            guard avItemLoaded else { return progress }
+            let t = avPlayer.currentTime().seconds
+            return (t.isFinite && t >= 0) ? t : progress
+        }
         guard deckLoaded else { return progress }
         let t = engine.position(of: activeDeck)
         return t.isFinite ? t : progress
@@ -235,6 +262,8 @@ final class PlayerService: ObservableObject {
         resolveGeneration += 1
         sourceTask?.cancel()
         sourceTask = nil
+        pendingAudioResourceLoader?.cancel()
+        pendingAudioResourceLoader = nil
         lyricsTask?.cancel()
         lyricsTask = nil
         currentAnalysisTask?.cancel()
@@ -348,6 +377,12 @@ final class PlayerService: ObservableObject {
         }
         volume = UserDefaults.standard.object(forKey: "player.volume") as? Float ?? 0.8
         engine.outputVolume = volume
+        avPlayer.volume = volume
+        avPlayer.actionAtItemEnd = .pause
+        setupAVPlayerTimeControlObservation()
+        if usesAVPlayerBackend {
+            engine.suspendForExternalPlayer()
+        }
         // The persisted overrides are restored before anything plays, so the
         // recorder is armed for the first seam of the session rather than the
         // first one after somebody opens the panel.
@@ -384,9 +419,14 @@ final class PlayerService: ObservableObject {
         // the controller owns the device list and the user's choice, and this
         // is the only place it can reach the engine. Restores the persisted
         // device as a side effect.
-        let engine = engine
-        AudioOutputController.shared.attach { deviceID in
-            engine.setOutputDevice(deviceID)
+        AudioOutputController.shared.attach { [weak self] deviceID in
+            guard let self else { return }
+            self.currentOutputDeviceID = deviceID
+            if self.usesAVPlayerBackend {
+                self.applyAVPlayerOutputDevice()
+            } else {
+                self.engine.setOutputDevice(deviceID)
+            }
         }
 
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -401,9 +441,18 @@ final class PlayerService: ObservableObject {
                 // with the mode off it is one optional test, and with it on
                 // there is no second timer to own.
                 self.updateAutoMixPick()
-                guard self.isPlaying, self.deckLoaded, !self.isScrubbing else { return }
-                let seconds = self.engine.position(of: self.activeDeck)
+                guard self.isPlaying, self.isCurrentSourceLoaded, !self.isScrubbing else { return }
+                let seconds = self.livePlaybackTime
                 guard seconds.isFinite else { return }
+                if self.usesAVPlayerBackend,
+                   let itemDuration = self.avPlayer.currentItem?.duration.seconds,
+                   itemDuration.isFinite, itemDuration > 0,
+                   abs(itemDuration - self.duration) > 0.5 {
+                    self.duration = itemDuration
+                    if let track = self.currentTrack {
+                        NowPlayingManager.shared.updateMetadata(for: track, duration: itemDuration)
+                    }
+                }
                 self.updateGaplessPrefetch(at: seconds)
 
                 // Lyrics need this cadence to stay in sync; the cursor itself
@@ -444,6 +493,7 @@ final class PlayerService: ObservableObject {
         }
         restoreState()
         let settings = SettingsManager.shared
+        lastObservedAutomixEnabled = settings.automixEnabled
         autoMixSettingsObservation = settings.$automixEnabled
             .combineLatest(settings.$automixOrderEnabled)
             .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
@@ -451,6 +501,11 @@ final class PlayerService: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                let automixChanged = settings.automixEnabled != self.lastObservedAutomixEnabled
+                if automixChanged {
+                    self.lastObservedAutomixEnabled = settings.automixEnabled
+                    self.handleBackendModeChange(automixEnabled: settings.automixEnabled)
+                }
                 self.reconcileQueueOrderAvailability()
                 if settings.automixEnabled, self.currentAnalysis == nil,
                    let key = self.currentCacheKey, let file = self.currentLocalURL {
@@ -516,10 +571,20 @@ final class PlayerService: ObservableObject {
         if isPlaying {
             pause()
             return
-        } else if !deckLoaded {
-            // Restored session: re-resolve the source.
+        } else if !isCurrentSourceLoaded {
+            // Restored session or backend switch while paused: re-resolve the source.
             startPlaying(track, resumeAt: progress)
             return
+        } else if usesAVPlayerBackend {
+            if duration > 0, progress >= max(0, duration - 0.1) {
+                progress = 0
+                updateLyricsCursor(at: 0)
+                avPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+            applyAVPlayerOutputDevice()
+            avPlayer.play()
+            isPlaying = true
+            scrobbleStartIfNeeded(track)
         } else if enginePaused {
             engine.resume()
             enginePaused = false
@@ -535,8 +600,12 @@ final class PlayerService: ObservableObject {
     }
 
     func pause() {
-        engine.pause()
-        enginePaused = true
+        if usesAVPlayerBackend {
+            avPlayer.pause()
+        } else {
+            engine.pause()
+            enginePaused = true
+        }
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
@@ -621,6 +690,30 @@ final class PlayerService: ObservableObject {
         // turned a comfortable `trigger=settled` into a `trigger=late` that lost
         // the race to its own splice. `reconcileParkedPrerender` decides after
         // the re-arm, on the signature, and drops it if the seam really moved.
+        if usesAVPlayerBackend {
+            let generation = resolveGeneration
+            progress = seconds
+            updateLyricsCursor(at: seconds)
+            NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
+            if !Self.gaplessPrefetchReady(position: seconds, duration: duration) {
+                schedulePrefetch()
+            } else {
+                updateGaplessPrefetch(at: seconds)
+            }
+            let target = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+            avPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.usesAVPlayerBackend, generation == self.resolveGeneration else {
+                        completion?()
+                        return
+                    }
+                    NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
+                    self.persistState()
+                    completion?()
+                }
+            }
+            return
+        }
         let wasArmed = transitionArmed
         if wasArmed { disarmTransition(keepingPrerender: true) }
         progress = seconds
@@ -923,7 +1016,18 @@ final class PlayerService: ObservableObject {
 
         if repeatMode == .one, !isFMMode {
             scrobbled = false
-            if hasLocalFile {
+            if usesAVPlayerBackend, avItemLoaded {
+                progress = 0
+                updateLyricsCursor(at: 0)
+                avPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                    guard finished else { return }
+                    Task { @MainActor [weak self] in
+                        guard let self, self.usesAVPlayerBackend, self.isPlaying else { return }
+                        self.avPlayer.play()
+                    }
+                }
+                NowPlayingManager.shared.updateElapsed(0, rate: 1)
+            } else if !usesAVPlayerBackend, hasLocalFile {
                 progress = 0
                 engine.play(deck: activeDeck, from: 0)
                 isPlaying = true
@@ -1008,6 +1112,8 @@ final class PlayerService: ObservableObject {
         // `deckLoaded` is precisely the fact that stops it, and it was simply
         // never cleared here.
         deckLoaded = false
+        avItemLoaded = false
+        avItemRetryGeneration = nil
         // A new track is a new decision round for the queue-order mode: the
         // escalation restarts from nothing admitted, on top of the (now
         // richer) pool of everything analyzed so far.
@@ -1165,7 +1271,9 @@ final class PlayerService: ObservableObject {
             + "wanted=\(SettingsManager.shared.audioQuality.rawValue) "
             + (resolved.unblockSource.map { "unblock=\($0) " } ?? "")
             + (resolved.isTrial ? "trial " : ""))
-        scheduleAudioUnitReadback()
+        if !usesAVPlayerBackend {
+            scheduleAudioUnitReadback()
+        }
         unblockSource = resolved.unblockSource
         if let source = resolved.unblockSource {
             ToastCenter.shared.show(String(localized: "已使用第三方音源：\(source)"))
@@ -1178,6 +1286,55 @@ final class PlayerService: ObservableObject {
         let key = resolved.key
         currentCacheKey = resolved.isTrial ? nil : key
         currentRemoteURL = resolved.url
+
+        if usesAVPlayerBackend {
+            disarmTransition()
+            engine.stop(deck: activeDeck)
+            deckFiles[activeDeck] = nil
+            deckLoaded = false
+
+            if !resolved.isTrial {
+                var local = await EngineAudioCache.shared.cachedFileURL(for: key)
+                if local == nil, await EngineAudioCache.shared.downloadConsumerCount(for: key) > 0 {
+                    isBuffering = true
+                    local = try? await EngineAudioCache.shared.waitForDownload(for: key)
+                    guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else { return }
+                    isBuffering = false
+                }
+                guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else { return }
+                if let local {
+                    hasLocalFile = true
+                    currentLocalURL = local
+                    persistCurrentLyricsSidecar()
+                    _ = await installAVPlayerAsset(
+                        AVURLAsset(url: local),
+                        for: track,
+                        generation: generation,
+                        durationMS: resolved.durationMS,
+                        remoteURL: nil,
+                        key: key,
+                        resumeAt: resumeAt
+                    )
+                    guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else { return }
+                    schedulePrefetch()
+                    return
+                }
+            }
+
+            isBuffering = true
+            await loadAVPlayerRemoteURL(
+                track,
+                url: resolved.url,
+                key: key,
+                isTrial: resolved.isTrial,
+                durationMS: resolved.durationMS,
+                generation: generation,
+                resumeAt: resumeAt
+            )
+            guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else { return }
+            schedulePrefetch()
+            return
+        }
 
         // Progressive streams cannot seek before their bytes arrive. A received
         // checkpoint therefore loads a complete file through the existing cache.
@@ -1419,7 +1576,7 @@ final class PlayerService: ObservableObject {
         if !autoMix {
             currentAnalysisTask?.cancel()
             currentAnalysisTask = nil
-            if deckLoaded, sleepTimer.state != .endOfCurrentTrack,
+            if isCurrentSourceLoaded, sleepTimer.state != .endOfCurrentTrack,
                Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration),
                let target {
                 // Queue edits and a completed stream mirror can leave the next
@@ -1438,15 +1595,17 @@ final class PlayerService: ObservableObject {
             // A styled seam may still be settling when AutoMix goes off, so
             // leave the tail clock to retry instead of forgetting the next
             // boundary.
-            guard engine.discardPreparedDeck(activeDeck.other) else {
-                gaplessPrefetchDeferred = true
-                return
+            if !usesAVPlayerBackend {
+                guard engine.discardPreparedDeck(activeDeck.other) else {
+                    gaplessPrefetchDeferred = true
+                    return
+                }
             }
             disarmTransition()
             deckFiles[activeDeck.other] = nil
             prefetchedNext = nil
             AutoMixDebugModel.shared.clearNext()
-            guard deckLoaded, sleepTimer.state != .endOfCurrentTrack else { return }
+            guard isCurrentSourceLoaded, sleepTimer.state != .endOfCurrentTrack else { return }
             guard isPlaying,
                   Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else {
                 gaplessPrefetchDeferred = true
@@ -1455,7 +1614,7 @@ final class PlayerService: ObservableObject {
         }
         // Restoring a paused session or resolving a new source does not yet
         // create a playback context worth downloading the next track for.
-        guard deckLoaded else { return }
+        guard isCurrentSourceLoaded else { return }
         // AutoMix order decides *which* track is next, and until it has there
         // is nothing to prefetch: committing to the list's answer now would
         // download the wrong song and arm it before the choice was made.
@@ -1480,7 +1639,9 @@ final class PlayerService: ObservableObject {
             // The target or preparation mode changed. A light gapless deck
             // needs analysis/trim when AutoMix is enabled, but an already
             // committed hand-over must finish with its original metadata.
-            guard engine.discardPreparedDeck(activeDeck.other) else { return }
+            if !usesAVPlayerBackend {
+                guard engine.discardPreparedDeck(activeDeck.other) else { return }
+            }
             disarmTransition()
             deckFiles[activeDeck.other] = nil
         }
@@ -1490,7 +1651,7 @@ final class PlayerService: ObservableObject {
             return
         }
         AutoMixDebugModel.shared.setNextTitle(target.name, stage: .resolving)
-        if target.id == currentTrack?.id, deckLoaded, !hasLocalFile {
+        if target.id == currentTrack?.id, isCurrentSourceLoaded, !hasLocalFile {
             AutoMixDebugModel.shared.setNextStage(
                 .deferred("same track still streaming into the cache"))
             // The next track IS the one still streaming into the cache
@@ -1560,7 +1721,7 @@ final class PlayerService: ObservableObject {
     }
 
     private func armTransitionIfReady() {
-        guard !transitionArmed, let next = prefetchedNext else { return }
+        guard !usesAVPlayerBackend, !transitionArmed, let next = prefetchedNext else { return }
         if !SettingsManager.shared.automixEnabled {
             guard Self.gaplessPrefetchReady(position: livePlaybackTime, duration: duration) else { return }
         }
@@ -2777,8 +2938,9 @@ final class PlayerService: ObservableObject {
     /// audio queue and is not reported, so this is what the *orchestrator*
     /// believes — which is also what the plan/pre-render groups are keyed to.
     private func debugPhaseLabel() -> String {
-        guard deckLoaded else { return currentTrack == nil ? "idle" : "no source" }
+        guard isCurrentSourceLoaded else { return currentTrack == nil ? "idle" : "no source" }
         var phase = isBuffering ? "buffering" : (isPlaying ? "playing" : "paused")
+        if usesAVPlayerBackend { phase += " · AVPlayer" }
         if transitionArmed { phase += " · handover armed" }
         return phase
     }
@@ -3112,6 +3274,33 @@ final class PlayerService: ObservableObject {
         servedQuality = lease?.descriptor.identity.quality
         currentCacheKey = nil
         currentRemoteURL = nil
+        if usesAVPlayerBackend {
+            deckLoaded = false
+            engine.stop(deck: activeDeck)
+            deckFiles[activeDeck] = nil
+            hasLocalFile = true
+            currentLocalURL = lease == nil ? url : nil
+            isBuffering = false
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.resolveGeneration, self.usesAVPlayerBackend else {
+                    if let lease {
+                        Task { try? await OfflineStore.shared.release(lease) }
+                    }
+                    return
+                }
+                let result = await self.installAVPlayerAsset(
+                    AVURLAsset(url: url),
+                    for: track,
+                    generation: generation,
+                    durationMS: nil,
+                    offlineLease: lease,
+                    resumeAt: position
+                )
+                guard case .loaded = result else { return }
+                self.schedulePrefetch()
+            }
+            return
+        }
         engine.stop(deck: activeDeck)
         deckFiles[activeDeck] = nil
         guard let fileDuration = try? engine.loadFile(at: url, on: activeDeck, trimDB: 0) else {
@@ -3145,8 +3334,426 @@ final class PlayerService: ObservableObject {
         engine.stop(deck: activeDeck)
         deckFiles[activeDeck] = nil
         deckLoaded = false
+        teardownAVPlayerPlayback()
         hasLocalFile = false
         currentLocalURL = nil
+    }
+
+    // MARK: - AVPlayer Backend (macOS Spatial Audio)
+
+    private enum AVPlayerLoadResult {
+        case loaded
+        case superseded
+    }
+
+    private func applyAVPlayerOutputDevice() {
+        switch AudioOutputController.shared.selection {
+        case .systemDefault:
+            // Keeping `audioOutputDeviceUniqueID == nil` lets macOS route
+            // AVPlayer through the default AirPods endpoint with Spatial Audio.
+            avPlayer.audioOutputDeviceUniqueID = nil
+        case .device(let uid):
+            avPlayer.audioOutputDeviceUniqueID = uid
+        }
+    }
+
+    private func setupAVPlayerTimeControlObservation() {
+        avTimeControlObservation = avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            let status = player.timeControlStatus
+            Task { @MainActor [weak self] in
+                guard let self, self.usesAVPlayerBackend else { return }
+                self.isBuffering = status == .waitingToPlayAtSpecifiedRate
+            }
+        }
+    }
+
+    private func handleBackendModeChange(automixEnabled: Bool) {
+        let track = currentTrack
+        let wasPlaying = isPlaying
+        let capturedLease = offlinePlaybackLease
+        offlinePlaybackLease = nil
+
+        if automixEnabled {
+            let avTime = avPlayer.currentTime().seconds
+            let resumeTime = max(0, (avItemLoaded && avTime.isFinite && avTime >= 0) ? avTime : progress)
+            invalidateTrackPreparation()
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
+            prefetchedNext = nil
+            gaplessPrefetchDeferred = false
+            teardownAVPlayerPlayback()
+            let targetDeviceID = AudioOutputController.shared.selection == .systemDefault
+                ? nil
+                : currentOutputDeviceID
+            engine.setOutputDevice(targetDeviceID)
+
+            if let track, wasPlaying {
+                let clampedResume = duration > 1 ? min(resumeTime, duration - 1) : resumeTime
+                startPlaying(track, localLease: capturedLease, resumeAt: clampedResume)
+            } else {
+                if let capturedLease {
+                    Task { try? await OfflineStore.shared.release(capturedLease) }
+                }
+                progress = resumeTime
+                isPlaying = false
+                isBuffering = false
+                deckLoaded = false
+                hasLocalFile = false
+                currentLocalURL = nil
+                AudioSpectrum.shared.reset()
+                NowPlayingManager.shared.updateElapsed(resumeTime, rate: 0)
+            }
+        } else {
+            let engineTime = deckLoaded ? engine.position(of: activeDeck) : progress
+            let resumeTime = max(0, engineTime.isFinite ? engineTime : progress)
+            invalidateTrackPreparation()
+            disarmTransition()
+            prefetchTask?.work.cancel()
+            prefetchTask = nil
+            prefetchedNext = nil
+            gaplessPrefetchDeferred = false
+            deckFiles.removeAll()
+            deckLoaded = false
+            enginePaused = false
+            engine.suspendForExternalPlayer()
+            applyAVPlayerOutputDevice()
+
+            if let track, wasPlaying {
+                let clampedResume = duration > 1 ? min(resumeTime, duration - 1) : resumeTime
+                startPlaying(track, localLease: capturedLease, resumeAt: clampedResume)
+            } else {
+                if let capturedLease {
+                    Task { try? await OfflineStore.shared.release(capturedLease) }
+                }
+                progress = resumeTime
+                isPlaying = false
+                isBuffering = false
+                avItemLoaded = false
+                hasLocalFile = false
+                currentLocalURL = nil
+                AudioSpectrum.shared.reset()
+                NowPlayingManager.shared.updateElapsed(resumeTime, rate: 0)
+            }
+        }
+    }
+
+    private func teardownAVPlayerPlayback() {
+        avItemStatusObservation?.invalidate()
+        avItemStatusObservation = nil
+        if let observer = avEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            avEndObserver = nil
+        }
+        avPlayer.pause()
+        avPlayer.replaceCurrentItem(with: nil)
+        avItemLoaded = false
+        releaseAVPlayerResources()
+    }
+
+    private func cancelResourceLoaderAndPrune(_ loader: CachingAudioResourceLoader?) {
+        guard let loader else { return }
+        loader.cancel()
+        // Keep macOS cached audio unified under EngineAudioCache rather than
+        // leaving duplicate files inside AudioCache after playback ends.
+        Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            try? await AudioCache.shared.enforce(maximumSizeMB: 0)
+        }
+    }
+
+    private func releaseAVPlayerResources() {
+        let resourceLoader = audioResourceLoader
+        audioResourceLoader = nil
+        cancelResourceLoaderAndPrune(resourceLoader)
+    }
+
+    private func loadAudioTrack(from asset: AVURLAsset, timeout: TimeInterval) async -> AVAssetTrack? {
+        await withTaskGroup(of: AVAssetTrack?.self) { group in
+            group.addTask {
+                try? await asset.loadTracks(withMediaType: .audio).first
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private func loadAVPlayerRemoteURL(
+        _ track: Track,
+        url: URL,
+        key: EngineAudioCache.Key,
+        isTrial: Bool,
+        durationMS: Int?,
+        generation: Int,
+        resumeAt: TimeInterval
+    ) async {
+        let remote = CDNHost.preferred(for: url)
+        var asset = AVURLAsset(url: remote)
+        var resourceLoader: CachingAudioResourceLoader?
+
+        if !isTrial, SettingsManager.shared.enableAudioCache {
+            let cacheLimitMB = max(500, await SettingsManager.shared.effectiveAudioCacheSizeMB())
+            guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else { return }
+            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .origin
+            do {
+                let loader = try CachingAudioResourceLoader(
+                    remoteURL: remote,
+                    trackID: track.id,
+                    requestedQuality: SettingsManager.shared.audioQuality.rawValue,
+                    servedQuality: servedQuality,
+                    source: source,
+                    maximumCacheSizeMB: cacheLimitMB,
+                    onCacheCommitted: { [weak self] committedURL in
+                        Task { @MainActor [weak self] in
+                            await self?.handleAVPlayerCacheCommitted(
+                                from: committedURL,
+                                key: key,
+                                generation: generation
+                            )
+                        }
+                    }
+                )
+                guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else {
+                    loader.cancel()
+                    return
+                }
+                let cachedAsset = AVURLAsset(url: loader.assetURL)
+                loader.attach(to: cachedAsset)
+                pendingAudioResourceLoader = loader
+                resourceLoader = loader
+                asset = cachedAsset
+            } catch {
+                print("AVPlayer audio source will stream without caching: \(error)")
+            }
+        }
+
+        _ = await installAVPlayerAsset(
+            asset,
+            for: track,
+            generation: generation,
+            durationMS: durationMS,
+            remoteURL: remote,
+            key: key,
+            resourceLoader: resourceLoader,
+            resumeAt: resumeAt
+        )
+    }
+
+    private func installAVPlayerAsset(
+        _ asset: AVURLAsset,
+        for track: Track,
+        generation: Int,
+        durationMS: Int?,
+        remoteURL: URL? = nil,
+        key: EngineAudioCache.Key? = nil,
+        resourceLoader: CachingAudioResourceLoader? = nil,
+        offlineLease: OfflinePlaybackLease? = nil,
+        resumeAt: TimeInterval = 0
+    ) async -> AVPlayerLoadResult {
+        let assetTrack = await loadAudioTrack(from: asset, timeout: 2)
+        guard !Task.isCancelled,
+              generation == resolveGeneration,
+              usesAVPlayerBackend,
+              resourceLoader.map({ pendingAudioResourceLoader === $0 }) ?? true else {
+            resourceLoader?.cancel()
+            if let offlineLease {
+                Task { try? await OfflineStore.shared.release(offlineLease) }
+            }
+            return .superseded
+        }
+
+        let item = AVPlayerItem(asset: asset)
+        if let assetTrack,
+           let mix = AudioSpectrum.shared.makeAudioMix(for: assetTrack) {
+            item.audioMix = mix
+        } else {
+            AudioSpectrum.shared.markUntappable()
+        }
+
+        avItemStatusObservation?.invalidate()
+        avItemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            let status = item.status
+            let error = item.error
+            Task { @MainActor [weak self] in
+                guard let self, self.usesAVPlayerBackend, generation == self.resolveGeneration else { return }
+                switch status {
+                case .readyToPlay:
+                    self.consecutiveFailures = 0
+                    self.isBuffering = false
+                case .failed:
+                    self.handleAVPlayerItemFailure(
+                        track: track,
+                        generation: generation,
+                        remoteURL: remoteURL,
+                        key: key,
+                        durationMS: durationMS,
+                        error: error
+                    )
+                default:
+                    break
+                }
+            }
+        }
+
+        if let observer = avEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        avEndObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.usesAVPlayerBackend, generation == self.resolveGeneration else { return }
+                self.handleItemEnded()
+            }
+        }
+
+        let previousResourceLoader = audioResourceLoader
+        let previousOfflineLease = offlinePlaybackLease
+        if resourceLoader != nil {
+            pendingAudioResourceLoader = nil
+        }
+        audioResourceLoader = resourceLoader
+        offlinePlaybackLease = offlineLease
+
+        applyAVPlayerOutputDevice()
+        avPlayer.replaceCurrentItem(with: item)
+        cancelResourceLoaderAndPrune(previousResourceLoader)
+        if let previousOfflineLease {
+            Task { try? await OfflineStore.shared.release(previousOfflineLease) }
+        }
+
+        if resumeAt > 0 {
+            let length = durationMS.map { TimeInterval($0) / 1000 } ?? duration
+            let targetSeconds = length > 0.1 ? min(resumeAt, length - 0.1) : resumeAt
+            let time = CMTime(seconds: max(0, targetSeconds), preferredTimescale: 600)
+            _ = await avPlayer.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+            guard !Task.isCancelled, generation == resolveGeneration, usesAVPlayerBackend else {
+                return .superseded
+            }
+        }
+
+        avItemLoaded = true
+        if !isPlaying {
+            isBuffering = false
+        }
+        if let durationMS, durationMS > 0 {
+            duration = TimeInterval(durationMS) / 1000
+            NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
+        } else {
+            let itemDuration = item.duration.seconds
+            if itemDuration.isFinite, itemDuration > 0 {
+                duration = itemDuration
+                NowPlayingManager.shared.updateMetadata(for: track, duration: itemDuration)
+            }
+        }
+        if isPlaying {
+            avPlayer.play()
+            scrobbleStartIfNeeded(track)
+        }
+        return .loaded
+    }
+
+    private func handleAVPlayerCacheCommitted(
+        from entryURL: URL,
+        key: EngineAudioCache.Key,
+        generation: Int
+    ) async {
+        guard let imported = await EngineAudioCache.shared.importFile(from: entryURL, for: key) else { return }
+        guard generation == resolveGeneration else { return }
+        hasLocalFile = true
+        currentLocalURL = imported
+        persistCurrentLyricsSidecar(audio: imported)
+        schedulePrefetch()
+    }
+
+    private func handleAVPlayerItemFailure(
+        track: Track,
+        generation: Int,
+        remoteURL: URL?,
+        key: EngineAudioCache.Key?,
+        durationMS: Int?,
+        error: Error?
+    ) {
+        guard generation == resolveGeneration,
+              currentTrack?.id == track.id,
+              usesAVPlayerBackend else { return }
+
+        teardownAVPlayerPlayback()
+        isBuffering = false
+
+        guard avItemRetryGeneration != generation else {
+            let connectivity = error.map(ConnectivityFailure.matches) ?? false
+            if connectivity {
+                Task { @MainActor [weak self] in
+                    guard let self, generation == self.resolveGeneration, self.usesAVPlayerBackend else { return }
+                    if let lease = await self.acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
+                        self.playLocalFile(lease.url, lease: lease, for: track, generation: generation)
+                        return
+                    }
+                    if let cached = await EngineAudioCache.shared.cachedFileURL(trackID: track.id) {
+                        self.playLocalFile(cached, lease: nil, for: track, generation: generation)
+                        return
+                    }
+                    self.handleAVPlayerUnplayable(track, reason: error?.localizedDescription)
+                }
+                return
+            }
+            handleAVPlayerUnplayable(track, reason: error?.localizedDescription)
+            return
+        }
+
+        avItemRetryGeneration = generation
+        let twin = remoteURL.flatMap { url in
+            error.flatMap { CDNHost.failover(from: url, after: $0) }
+        }
+        AudioSpectrum.shared.beginPreparing()
+        let resumeAt = progress > 1 ? progress : 0
+        Task { @MainActor [weak self] in
+            guard let self, generation == self.resolveGeneration, self.usesAVPlayerBackend else { return }
+            if let twin {
+                let fallbackKey = key ?? self.currentCacheKey ?? EngineAudioCache.Key(
+                    trackID: track.id,
+                    level: self.servedQuality ?? SettingsManager.shared.audioQuality.rawValue,
+                    source: self.unblockSource.map { "unblock:\($0)" } ?? Upstream.tag,
+                    fileExtension: twin.pathExtension.isEmpty ? "mp3" : twin.pathExtension.lowercased()
+                )
+                await self.loadAVPlayerRemoteURL(
+                    track,
+                    url: twin,
+                    key: fallbackKey,
+                    isTrial: self.isTrial,
+                    durationMS: durationMS,
+                    generation: generation,
+                    resumeAt: resumeAt
+                )
+            } else {
+                await self.resolveAndLoad(track, generation: generation, resumeAt: resumeAt)
+            }
+        }
+    }
+
+    private func handleAVPlayerUnplayable(_ track: Track, reason: String?) {
+        consecutiveFailures += 1
+        let messageReason = lastResolveFailure
+            ?? reason
+            ?? track.playability(
+                privilege: nil,
+                isLoggedIn: AccountStore.shared.isLoggedIn,
+                vipType: AccountStore.shared.vipType
+            ).reason
+        ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(messageReason.map { "：\($0)" } ?? "")"))
+        guard isPlaying else { return }
+        if consecutiveFailures < 5 {
+            advanceToNext(userInitiated: false)
+        } else {
+            isPlaying = false
+        }
     }
 
     private func releaseOfflineLease() {

@@ -378,7 +378,7 @@
 "全局快捷键未能启用" = "Global shortcuts could not be enabled";
 
 /* AutoMix settings (macOS) */
-"让歌曲丝滑衔接，让听感更流畅" = "Seamless transitions for smoother listening";
+"让歌曲丝滑衔接，让听感更流畅。关闭时使用系统 AVPlayer 播放，支持 AirPods 空间音频。" = "Seamless transitions for smoother listening. When off, playback uses the system AVPlayer and supports AirPods Spatial Audio.";
 "自动过渡" = "Automatic Transitions";
 "智能顺序" = "Smart Order";
 "按歌曲契合度排序，会增加网络用量。" = "Orders songs for a better match; uses more data.";
