@@ -3,7 +3,11 @@ import SwiftUI
 #if os(iOS)
 /// The iPhone now-playing lyrics with the song's comments one page to their
 /// right: swipe left for the comments, right for the lyrics again. Songs
-/// without a public thread (cloud uploads) show the lyrics alone.
+/// without a public thread (cloud uploads) show the lyrics alone, and so
+/// does iOS 16/17, where the comments stay in the song's menu: once the
+/// pager shipped, opening the page froze the app on iOS 17 (#213). The
+/// paged `TabView` is the likely cause; no iOS 17 runtime was at hand to
+/// confirm it.
 struct NowPlayingLyricsPager<Lyrics: View>: View {
     private enum Page: Hashable {
         case lyrics, comments
@@ -27,7 +31,7 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
     }
 
     var body: some View {
-        if let track = player.currentTrack, SongCommentsMenuButton.isAvailable(for: track) {
+        if Self.isSupported, let track = player.currentTrack, SongCommentsMenuButton.isAvailable(for: track) {
             TabView(selection: $page) {
                 lyrics
                     .padding(.horizontal, horizontalInset)
@@ -52,6 +56,11 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
         } else {
             lyrics
         }
+    }
+
+    private static var isSupported: Bool {
+        if #available(iOS 18.0, *) { return true }
+        return false
     }
 
     private var pageIndicator: some View {
@@ -91,14 +100,19 @@ private struct NowPlayingCommentsPage: View {
             .environment(\.colorScheme, .dark)
             .tint(.white)
             .accessibilityIdentifier("nowPlayingComments")
-            .onAppear(perform: loadIfNeeded)
-            .onChange(of: isActive) { _ in loadIfNeeded() }
+            .onAppear { load(if: needsLoad) }
+            // Watching the page and the phase together also restarts a load
+            // that ended back at idle, as a cancelled one does, rather than
+            // leaving the spinner up until the page is turned again (#214).
+            .onChange(of: needsLoad) { load(if: $0) }
     }
+
+    private var needsLoad: Bool { isActive && content.phase == .idle }
 
     /// Unstructured so that turning back to the lyrics mid-load doesn't
     /// cancel it into an error.
-    private func loadIfNeeded() {
-        guard isActive, content.phase == .idle else { return }
+    private func load(if needed: Bool) {
+        guard needed else { return }
         Task { await content.loadFirstPage() }
     }
 
