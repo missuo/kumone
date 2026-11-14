@@ -7,6 +7,24 @@
 `---` 分隔，随后是完整的**中文**部分（`### 新增` / `### 修复` / `### 改进`）。英文块与中文块
 的条目一一对应、顺序一致。（0.3.19 起采用此双语分块格式；更早的版本沿用旧的中英交替格式。）
 
+## 0.3.36 - 2026-11-14
+
+### Fixed
+
+- **Third-party sources**: for songs Kuwo won't serve, its 11-second clip suggesting Kuwo Music is no longer played as the song; the next source is tried instead, and copies of the clip already in the cache are removed (#212).
+- **iOS 16/17**: opening the now-playing page from the mini player no longer freezes the app on iOS 17. These systems show the lyrics alone; the song's comments stay in its More menu (#213).
+- **Comments**: the comments beside the iPhone lyrics no longer keep spinning after a load is interrupted; they load again on their own (#214).
+- **iOS**: "Unable to play" now says why — the request that failed, or the code the service answered with when it gave no playback address (#209).
+
+---
+
+### 修复
+
+- **第三方音源**：酷我不给播放的歌，它返回的「建议去酷我音乐收听」的 11 秒提示音不再被当成歌曲播放，会改为尝试下一个音源，已经缓存的这段提示音也会被清掉（#212）。
+- **iOS 16/17**：在 iOS 17 上从迷你播放条打开播放页不会再卡死。这两个系统上播放页只显示歌词，评论仍可在歌曲的「更多」菜单中查看（#213）。
+- **评论**：iPhone 歌词旁的评论在加载被打断后不会再一直转圈，会自动重新加载（#214）。
+- **iOS**：「无法播放」提示现在会写明原因：请求失败的原因，或网易云没给播放地址时返回的代码（#209）。
+
 ## 0.3.35 - 2026-11-13
 
 ### Added
