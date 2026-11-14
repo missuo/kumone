@@ -3903,6 +3903,12 @@ final class PlayerService: ObservableObject {
                 try session.validate()
                 applyPlaybackSession(session)
                 NowPlayingManager.shared.updateMetadata(for: session.currentTrack, duration: duration)
+                // Nothing plays until the user resumes, so load the lyrics
+                // now or the now-playing page waits on them until then.
+                let generation = resolveGeneration
+                lyricsTask = Task {
+                    await loadLyrics(for: session.currentTrack, generation: generation)
+                }
             } catch { ToastCenter.shared.show(error.localizedDescription) }
             return
         }
