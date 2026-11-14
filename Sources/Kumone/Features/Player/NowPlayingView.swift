@@ -27,6 +27,9 @@ struct NowPlayingView: View {
     @State private var showQueueOnMobile = false
     #if os(iOS)
     @State private var showSoundEffects = false
+    /// Held here rather than by the controls so the panel can sit above the
+    /// whole page, with a catcher that closes it on a tap anywhere else.
+    @State private var showsVolumeControl = false
     #endif
 
     var body: some View {
@@ -53,6 +56,11 @@ struct NowPlayingView: View {
             // Pin to the screen width so an intrinsically-wide child can never
             // stretch the ZStack and push the corner overlays off-screen.
             .frame(width: geo.size.width)
+            #if os(iOS)
+            .overlayPreferenceValue(CompactVolumeButtonAnchorKey.self) { anchor in
+                volumeLayer(buttonAnchor: anchor)
+            }
+            #endif
             #if os(macOS)
             .overlay(alignment: .topTrailing) {
                 // Toward the top-trailing corner, level with the window
@@ -750,11 +758,49 @@ struct NowPlayingView: View {
         }
     }
 
+    /// The volume panel, above the button that opened it, over a clear
+    /// catcher that covers the page: a tap anywhere else only closes it.
+    @ViewBuilder
+    private func volumeLayer(buttonAnchor: Anchor<CGRect>?) -> some View {
+        if let buttonAnchor {
+            GeometryReader { proxy in
+                let button = proxy[buttonAnchor]
+                ZStack(alignment: .topLeading) {
+                    if showsVolumeControl {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .ignoresSafeArea()
+                            .onTapGesture(perform: closeVolumeControl)
+                            .accessibilityHidden(true)
+                    }
+
+                    Color.clear
+                        .frame(width: button.width, height: button.height)
+                        .overlay(alignment: .bottom) {
+                            if showsVolumeControl {
+                                CompactVolumePopover()
+                                    .offset(y: -button.height)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
+                            }
+                        }
+                        .position(x: button.midX, y: button.midY)
+                }
+            }
+        }
+    }
+
+    private func closeVolumeControl() {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            showsVolumeControl = false
+        }
+    }
+
     private var immersiveControls: some View {
         VStack(spacing: 17) {
             NowPlayingScrubber()
             CompactTransportControls()
             CompactSecondaryControls(
+                showsVolumeControl: $showsVolumeControl,
                 showsLyrics: showLyricsOnMobile,
                 showsQueue: showQueueOnMobile,
                 onToggleLyrics: toggleImmersiveLyrics,
@@ -1902,9 +1948,17 @@ private struct CompactVolumePopover: View {
     }
 }
 
+private struct CompactVolumeButtonAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
 private struct CompactSecondaryControls: View {
     @EnvironmentObject private var player: PlayerService
-    @State private var showsVolumeControl = false
+    @Binding var showsVolumeControl: Bool
     let showsLyrics: Bool
     let showsQueue: Bool
     let onToggleLyrics: () -> Void
@@ -1938,14 +1992,9 @@ private struct CompactSecondaryControls: View {
                     showsVolumeControl.toggle()
                 }
             }
-            .overlay(alignment: .bottom) {
-                if showsVolumeControl {
-                    CompactVolumePopover()
-                        .offset(y: -44)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-                        .zIndex(1)
-                }
-            }
+            // The panel itself is drawn by the page (`volumeLayer`), above
+            // everything else, from this button's frame.
+            .anchorPreference(key: CompactVolumeButtonAnchorKey.self, value: .bounds) { $0 }
 
             secondaryButton(
                 icon: "list.bullet",
