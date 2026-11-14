@@ -7,7 +7,7 @@ struct AutoMixSettingsSection: View {
     var body: some View {
         Section("AutoMix") {
             Toggle("AutoMix", isOn: $settings.automixEnabled)
-            Text("让歌曲丝滑衔接，让听感更流畅")
+            Text("让歌曲丝滑衔接，让听感更流畅。关闭时使用系统 AVPlayer 播放，支持 AirPods 空间音频。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if settings.automixEnabled {
