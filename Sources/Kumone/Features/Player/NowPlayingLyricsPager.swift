@@ -3,7 +3,8 @@ import SwiftUI
 #if os(iOS)
 /// The iPhone now-playing lyrics with the song's comments one page to their
 /// right: swipe left for the comments, right for the lyrics again. Songs
-/// without a public thread (cloud uploads) show the lyrics alone.
+/// without a public thread (cloud uploads), or with the swipe turned off in
+/// settings (#225), show the lyrics alone.
 struct NowPlayingLyricsPager<Lyrics: View>: View {
     private enum Page: Hashable {
         case lyrics, comments
@@ -18,6 +19,7 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
     private let lyrics: Lyrics
 
     @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var settings: SettingsManager
     @State private var page = Page.lyrics
     /// Presented from here, outside the pager: a sheet raised from inside
     /// one of its pages closed again a moment later, when the pages refreshed.
@@ -30,7 +32,9 @@ struct NowPlayingLyricsPager<Lyrics: View>: View {
     }
 
     var body: some View {
-        if let track = player.currentTrack, SongCommentsMenuButton.isAvailable(for: track) {
+        if settings.swipeToComments,
+           let track = player.currentTrack,
+           SongCommentsMenuButton.isAvailable(for: track) {
             TabView(selection: $page) {
                 lyrics
                     .padding(.horizontal, horizontalInset)
