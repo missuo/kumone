@@ -239,6 +239,8 @@
 "iPhone 横放或 iPad 打开播放页时使用；竖屏仍按上面的「播放页模式」" = "Used when the player opens in iPhone landscape or on iPad; portrait keeps the mode above";
 "显示歌词翻译" = "Show Lyrics Translation";
 "点击封面打开专辑" = "Click Artwork to Open Album";
+"左滑歌词查看评论" = "Swipe Left from Lyrics for Comments";
+"关闭后仍可在播放页菜单中「查看评论」" = "When off, View Comments is still in the now-playing menu";
 "逐字歌词（卡拉OK）" = "Word-by-Word Lyrics (Karaoke)";
 "日文歌词读音" = "Japanese Lyrics Reading";
 "关闭" = "Off";
