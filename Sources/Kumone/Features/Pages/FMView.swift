@@ -38,11 +38,18 @@ struct FMView: View {
         ZStack {
             Platform.windowBackgroundColor
             if let cover = track?.album.picUrl?.resizedImageURL(384) {
-                CachedAsyncImage(url: cover)
-                    .scaledToFill()
-                    .blur(radius: 80)
-                    .opacity(colorScheme == .dark ? 0.45 : 0.3)
-                    .saturation(1.4)
+                // Filled over the page without sizing it: a square cover
+                // filling a wide page is taller than the window, and that
+                // height pushed the macOS sidebar up past its top (#227).
+                Color.clear
+                    .overlay {
+                        CachedAsyncImage(url: cover)
+                            .scaledToFill()
+                            .blur(radius: 80)
+                            .opacity(colorScheme == .dark ? 0.45 : 0.3)
+                            .saturation(1.4)
+                    }
+                    .clipped()
             }
             LinearGradient(
                 colors: [.clear, Platform.windowBackgroundColor.opacity(0.6)],
