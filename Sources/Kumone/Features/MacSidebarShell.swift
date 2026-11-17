@@ -54,9 +54,10 @@ enum SidebarMetrics {
         if #available(macOS 26.0, *) { return 8 }
         return 0
     }
-    /// From the window's leading edge to the page's while the sidebar is
-    /// open: the page starts right at the panel's trailing edge.
-    static var span: CGFloat { Theme.Layout.sidebarWidth + inset }
+    /// From the window's leading edge to the page's while the sidebar is open.
+    /// The extra `inset` is the gutter between the floating glass panel and
+    /// the page, so the page does not cover it (#229).
+    static var span: CGFloat { Theme.Layout.sidebarWidth + 2 * inset }
     static var panelRadius: CGFloat {
         if #available(macOS 26.0, *) { return 16 }
         return 0
@@ -92,13 +93,15 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
             SidebarPanel(isOpen: state.isOpen, isSliding: state.isSliding, content: sidebar)
 
             page
-                .padding(.leading, state.isOpen ? SidebarMetrics.span : 0)
+                .padding(.leading, state.isOpen ? SidebarMetrics.span : SidebarMetrics.inset)
+                .padding(.trailing, SidebarMetrics.inset)
+                .padding(.bottom, SidebarMetrics.inset)
 
             // Where the split view put it: at the page's leading edge, or
             // after the toggle when the page runs under it.
             PageNavigationBand(goBack: goBack)
                 .padding(.leading, max(
-                    (state.isOpen ? SidebarMetrics.span : 0)
+                    (state.isOpen ? SidebarMetrics.span : SidebarMetrics.inset)
                         + (goBack == nil ? SidebarMetrics.titleInset : SidebarMetrics.navigationInset),
                     state.toggleTrailingEdge + SidebarMetrics.titleGapAfterToggle
                 ))
@@ -127,6 +130,13 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
         }
+        // Bottom corners follow the floating panel, matching the sidebar; the
+        // top still runs under the toolbar.
+        .clipShape(UnevenRoundedRectangle(
+            bottomLeadingRadius: SidebarMetrics.panelRadius,
+            bottomTrailingRadius: SidebarMetrics.panelRadius,
+            style: .continuous
+        ))
     }
 }
 
