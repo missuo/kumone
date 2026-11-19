@@ -34,6 +34,19 @@ let cltTestingLinkerSettings: [LinkerSetting] = cltHasTesting
     ])]
     : []
 
+// A test bundle links every library it exercises, so `KumoneCoreTests` inherits
+// KumoneCore's Sparkle dependency and dyld seeks `@rpath/Sparkle.framework`.
+// SwiftPM puts the framework in the build directory itself but gives test
+// bundles an rpath only to `PackageFrameworks/`, so the bundle died in dlopen
+// before a single test ran. One rpath up from Contents/MacOS reaches the
+// products directory; `@loader_path` keeps it relative to wherever the build
+// landed. Only the test targets need this — the app gets its own rpath from
+// `Scripts/build-app.sh`, and `KumoneLauncher` declares one for the bundled
+// framework.
+let testBundleFrameworkRPath: [LinkerSetting] = [
+    .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@loader_path/../../../"])
+]
+
 let package = Package(
     name: "Kumone",
     defaultLocalization: "zh-Hans",
@@ -139,7 +152,7 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v5),
             ] + cltTestingSwiftSettings,
-            linkerSettings: cltTestingLinkerSettings
+            linkerSettings: cltTestingLinkerSettings + testBundleFrameworkRPath
         ),
         .testTarget(
             name: "KumoneCoreTests",
@@ -153,7 +166,7 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v5),
             ] + cltTestingSwiftSettings,
-            linkerSettings: cltTestingLinkerSettings
+            linkerSettings: cltTestingLinkerSettings + testBundleFrameworkRPath
         ),
     ]
 )
