@@ -19,9 +19,13 @@ final class DesktopLyricsController {
 
     func show() {
         if window == nil {
-            let window = KeylessWindow(
-                contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true
+            let window = KeylessPanel(
+                contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered, defer: true
             )
+            // Panels hide whenever the app deactivates by default, but the
+            // lyrics are mostly read while Kumone is in the background.
+            window.hidesOnDeactivate = false
             window.backgroundColor = .clear
             window.isOpaque = false
             window.hasShadow = false
@@ -69,8 +73,11 @@ final class DesktopLyricsController {
     }
 }
 
-/// A borderless window that never steals focus.
-private final class KeylessWindow: NSWindow {
+/// A borderless panel that never steals focus. Being nonactivating, a click
+/// or drag on the lyrics reaches the box without activating Kumone, so moving
+/// them can't bring a minimized or hidden main window (and whatever page it
+/// was showing) back to the front (#187).
+private final class KeylessPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
