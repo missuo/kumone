@@ -54,9 +54,10 @@ enum SidebarMetrics {
         if #available(macOS 26.0, *) { return 8 }
         return 0
     }
-    /// From the window's leading edge to the page's while the sidebar is
-    /// open: the page starts right at the panel's trailing edge.
-    static var span: CGFloat { Theme.Layout.sidebarWidth + inset }
+    /// From the window's leading edge to the page's while the sidebar is open.
+    /// The extra `inset` is the gutter between the floating glass panel and
+    /// the page, so the page does not cover it (#229).
+    static var span: CGFloat { Theme.Layout.sidebarWidth + 2 * inset }
     static var panelRadius: CGFloat {
         if #available(macOS 26.0, *) { return 16 }
         return 0
