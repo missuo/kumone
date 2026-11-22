@@ -44,10 +44,6 @@ struct PlayerChromeModifier: ViewModifier {
         content
             .overlay(alignment: .bottomTrailing) {
                 MainColumnPlayerBar(geometry: geometry)
-                    #if os(macOS)
-                    .padding(.trailing, SidebarMetrics.inset)
-                    .padding(.bottom, SidebarMetrics.inset)
-                    #endif
             }
             .overlay(alignment: .trailing) {
                 rightPanel
@@ -67,13 +63,8 @@ struct PlayerChromeModifier: ViewModifier {
                 }
             }
             .padding(.top, 12)
-            #if os(macOS)
-            .padding(.bottom, Theme.Layout.playerChromeClearance + 10 + SidebarMetrics.inset)
-            .padding(.trailing, 16 + SidebarMetrics.inset)
-            #else
             .padding(.bottom, Theme.Layout.playerChromeClearance + 10)
             .padding(.trailing, 16)
-            #endif
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }

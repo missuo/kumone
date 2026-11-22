@@ -93,15 +93,13 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
             SidebarPanel(isOpen: state.isOpen, isSliding: state.isSliding, content: sidebar)
 
             page
-                .padding(.leading, state.isOpen ? SidebarMetrics.span : SidebarMetrics.inset)
-                .padding(.trailing, SidebarMetrics.inset)
-                .padding(.bottom, SidebarMetrics.inset)
+                .padding(.leading, state.isOpen ? SidebarMetrics.span : 0)
 
             // Where the split view put it: at the page's leading edge, or
             // after the toggle when the page runs under it.
             PageNavigationBand(goBack: goBack)
                 .padding(.leading, max(
-                    (state.isOpen ? SidebarMetrics.span : SidebarMetrics.inset)
+                    (state.isOpen ? SidebarMetrics.span : 0)
                         + (goBack == nil ? SidebarMetrics.titleInset : SidebarMetrics.navigationInset),
                     state.toggleTrailingEdge + SidebarMetrics.titleGapAfterToggle
                 ))
@@ -130,13 +128,6 @@ struct MacSidebarShell<Sidebar: View, Detail: View, Tint: View>: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
         }
-        // Bottom corners follow the floating panel, matching the sidebar; the
-        // top still runs under the toolbar.
-        .clipShape(UnevenRoundedRectangle(
-            bottomLeadingRadius: SidebarMetrics.panelRadius,
-            bottomTrailingRadius: SidebarMetrics.panelRadius,
-            style: .continuous
-        ))
     }
 }
 
