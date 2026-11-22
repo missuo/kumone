@@ -122,6 +122,7 @@ final class SettingsManager: ObservableObject {
         static let nowPlayingMode = "settings.nowPlayingMode"
         static let landscapeNowPlayingStyle = "settings.landscapeNowPlayingStyle"
         static let openAlbumOnArtworkClick = "settings.openAlbumOnArtworkClick"
+        static let swipeToComments = "settings.swipeToComments"
         static let showTranslation = "settings.showLyricsTranslation"
         static let showRomaji = "settings.showLyricsRomaji"  // migrated to `annotation`
         static let annotation = "settings.lyricsAnnotation"
@@ -213,6 +214,13 @@ final class SettingsManager: ObservableObject {
 
     @Published var openAlbumOnArtworkClick: Bool {
         didSet { UserDefaults.standard.set(openAlbumOnArtworkClick, forKey: Keys.openAlbumOnArtworkClick) }
+    }
+
+    /// On iPhone, swipe left from the now-playing lyrics to the song's
+    /// comments. Off keeps the lyrics alone; 查看评论 in the menu still
+    /// opens them (#225).
+    @Published var swipeToComments: Bool {
+        didSet { UserDefaults.standard.set(swipeToComments, forKey: Keys.swipeToComments) }
     }
 
     @Published var showLyricsTranslation: Bool {
@@ -442,6 +450,7 @@ final class SettingsManager: ObservableObject {
         landscapeNowPlayingStyle = defaults.string(forKey: Keys.landscapeNowPlayingStyle)
             .flatMap(LandscapeNowPlayingStyle.init) ?? .classic
         openAlbumOnArtworkClick = defaults.object(forKey: Keys.openAlbumOnArtworkClick) as? Bool ?? true
+        swipeToComments = defaults.object(forKey: Keys.swipeToComments) as? Bool ?? true
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         // Carry over the old on/off romaji toggle for anyone who had it on.
         lyricsAnnotation = defaults.string(forKey: Keys.annotation).flatMap(LyricsAnnotation.init)
