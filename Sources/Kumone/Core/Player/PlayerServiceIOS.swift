@@ -708,6 +708,13 @@ final class PlayerService: ObservableObject {
         pendingAudioResourceLoader?.cancel()
         pendingAudioResourceLoader = nil
         scrobbleIfNeeded(completed: false)
+        // Silence the outgoing song now rather than when the next one is
+        // ready: resolving its URL can take seconds, and meanwhile the old
+        // item would keep playing under the new song's title and lyrics.
+        if engine.currentItem != nil {
+            engine.replaceCurrentItem(with: nil)
+            releaseCurrentPlaybackResources()
+        }
         currentTrack = track
         playbackAccountID = AccountStore.shared.profile?.userId
         progress = resumeAt
