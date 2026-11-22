@@ -774,6 +774,10 @@ struct AddToPlaylistSheet: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.interactiveRow)
+                            // The sheet hands first responder to this row on
+                            // open, and macOS 27 draws its blue focus ring
+                            // there before a key has been pressed (#97).
+                            .noFocusRing()
                             .disabled(isBusy)
                         }
                     }

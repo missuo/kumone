@@ -52,7 +52,12 @@ struct PlayerBar: View {
             // follows the title however wide the bar is.
             .layoutPriority(1)
             if let track = player.currentTrack {
-                LikeButton(trackID: track.id)
+                // One cluster, so the two glyphs stay together wherever the
+                // title ends — 2pt apart, not the section's 10pt.
+                HStack(spacing: 2) {
+                    LikeButton(trackID: track.id)
+                    AddToPlaylistButton(track: track)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -351,6 +356,34 @@ struct LikeButton: View {
             Task { await account.toggleLike(trackID: trackID) }
         }
         .help(liked ? String(localized: "取消喜欢") : String(localized: "喜欢"))
+    }
+}
+
+// MARK: - Add to playlist button
+
+/// The bar's counterpart to the row menu's 收藏到歌单…: same sheet, same
+/// result, one click away from whatever is playing.
+///
+/// Self-contained like `LikeButton`: it keeps the song it was tapped for, so
+/// the sheet can't retarget when playback moves on under it.
+struct AddToPlaylistButton: View {
+    let track: Track
+    var size: CGFloat = 13
+    var showsActiveBackground = true
+
+    @State private var sheetTrack: Track?
+
+    var body: some View {
+        PlayerIconButton(
+            icon: "rectangle.stack.badge.plus", size: size,
+            showsActiveBackground: showsActiveBackground
+        ) {
+            sheetTrack = track
+        }
+        .help("收藏到歌单…")
+        .sheet(item: $sheetTrack) { selected in
+            AddToPlaylistSheet(track: selected)
+        }
     }
 }
 
