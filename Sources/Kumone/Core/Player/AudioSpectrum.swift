@@ -2,9 +2,7 @@ import Accelerate
 import AVFoundation
 import Combine
 import Foundation
-#if os(iOS)
 import MediaToolbox
-#endif
 
 /// Real-time band levels pulled out of the playing audio.
 ///
@@ -101,8 +99,9 @@ final class AudioSpectrum: ObservableObject {
     func markTapped() {
         tapState = .tapped
     }
-    #else
-    /// Builds the audio mix that feeds this analyzer.
+    #endif
+
+    /// Builds the audio mix that feeds this analyzer for AVPlayer-backed playback.
     ///
     /// - Returns: `nil` when the track can't be tapped, in which case the caller
     ///   should play the item as-is and let the UI fall back.
@@ -115,7 +114,6 @@ final class AudioSpectrum: ObservableObject {
         tapState = .tapped
         return mix
     }
-    #endif
 
     /// Call as soon as a track is chosen — before its URL is resolved — so the
     /// bars hold still instead of falling back while the answer is unknown.
@@ -293,7 +291,8 @@ private final class SpectrumStore: @unchecked Sendable {
             || interleaved != isInterleaved else { return }
         adopt(format: format)
     }
-    #else
+    #endif
+
     func makeTap() -> MTAudioProcessingTap? {
         // The tap holds an unmanaged +1 reference; `finalize` gives it back.
         let retained = Unmanaged.passRetained(self)
@@ -336,7 +335,6 @@ private final class SpectrumStore: @unchecked Sendable {
         }
         return tap
     }
-    #endif
 
     private func adopt(format: AudioStreamBasicDescription) {
         sampleRate = format.mSampleRate > 0 ? format.mSampleRate : 44_100

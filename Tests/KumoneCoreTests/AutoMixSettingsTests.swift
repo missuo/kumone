@@ -88,4 +88,23 @@ import Testing
         #expect(PlayerService.nextQueueOrder(after: .autoMix,
                                              autoMixAvailable: false) == .listed)
     }
+
+    #if os(macOS)
+    // MARK: - Playback backend selection
+
+    @Test func disablingAutoMixSelectsAVPlayerBackend() {
+        let settings = SettingsManager.shared
+        let original = settings.automixEnabled
+        defer { settings.automixEnabled = original }
+
+        settings.automixEnabled = false
+        #expect(PlayerService.shared.usesAVPlayerBackend)
+
+        settings.automixEnabled = true
+        #expect(!PlayerService.shared.usesAVPlayerBackend)
+
+        settings.automixEnabled = false
+        #expect(PlayerService.shared.usesAVPlayerBackend)
+    }
+    #endif
 }

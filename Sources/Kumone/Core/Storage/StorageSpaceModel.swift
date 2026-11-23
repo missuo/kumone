@@ -66,6 +66,7 @@ final class StorageSpaceModel: ObservableObject {
             case .musicCache:
                 #if os(macOS)
                 await EngineAudioCache.shared.removeAll()
+                try? await AudioCache.shared.clear()
                 #else
                 try await AudioCache.shared.clear()
                 #endif

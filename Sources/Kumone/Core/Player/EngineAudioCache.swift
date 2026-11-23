@@ -117,6 +117,37 @@ actor EngineAudioCache {
         return final
     }
 
+    /// Copies a completed external cache file into the engine cache and runs
+    /// LRU eviction so AVPlayer-streamed tracks share the macOS audio cache.
+    @discardableResult
+    func importFile(from sourceURL: URL, for key: Key) -> URL? {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else { return nil }
+        ensureDirectory()
+        let final = fileURL(for: key)
+        if Self.identity(sourceURL) == Self.identity(final) {
+            try? FileManager.default.setAttributes(
+                [.modificationDate: Date()],
+                ofItemAtPath: final.path
+            )
+            evictIfNeeded(sparing: final)
+            return final
+        }
+        do {
+            if FileManager.default.fileExists(atPath: final.path) {
+                try FileManager.default.removeItem(at: final)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: final)
+            try? FileManager.default.setAttributes(
+                [.modificationDate: Date()],
+                ofItemAtPath: final.path
+            )
+            evictIfNeeded(sparing: final)
+            return final
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Download
 
     /// Downloads the full file (prefetch path). Concurrent calls for the same

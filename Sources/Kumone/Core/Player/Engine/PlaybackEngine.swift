@@ -1130,6 +1130,28 @@ final class PlaybackEngine: @unchecked Sendable {
         }
     }
 
+    /// Stops all decks and halts `AVAudioEngine` so `AVPlayer` can own the
+    /// macOS output route (required for AirPods Spatial Audio when AutoMix is off).
+    func suspendForExternalPlayer() {
+        queue.async {
+            self.pauseDrain?.cancel()
+            self.pauseDrain = nil
+            self.cancelTransitionLocked()
+            for state in self.deckStates.values {
+                self.resetDeckLocked(state)
+            }
+            self.parkSegmentLocked()
+            self.isPaused = false
+            if self.engine.isRunning {
+                self.engine.pause()
+            }
+            self.engine.stop()
+            #if os(macOS)
+            self.removeOverloadListenerLocked()
+            #endif
+        }
+    }
+
     // MARK: - Transitions
 
     /// Pre-arm a transition: the `to` deck must already be loaded via
