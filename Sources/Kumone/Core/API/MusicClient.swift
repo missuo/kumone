@@ -39,11 +39,13 @@ final class MusicClient: @unchecked Sendable {
     private static let webUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
-    // The desktop client the eapi requests speak as.
-    private static let eapiUserAgent = "\(Upstream.clientName) 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
+    // The desktop client the eapi requests speak as. The UA has to agree with
+    // the `os=pc`, Windows header below: an iPhone UA with those header fields
+    // makes /song/enhance/player/url/v1 answer -460 检测到您的网络环境存在风险.
     private static let eapiAppVersion = "3.1.17.204416"
     private static let eapiOSVersion = "Microsoft-Windows-10-Professional-build-19045-64bit"
     private static let eapiChannel = Upstream.tag
+    private static let eapiUserAgent = "\(Upstream.clientName)/\(eapiAppVersion) (Windows 10; zh_CN)"
 
     /// The device ID the eapi header carries, made once and kept beside the
     /// cookies: the service trusts a device it has seen before, and a constant
